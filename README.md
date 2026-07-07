@@ -58,19 +58,37 @@ Lightweight, fast, and secure — manage your servers, sites, SSL, and deploymen
 
 ## Installation
 
-### Panel Server
+### Linux (amd64)
 
 ```bash
-# Download
 curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel-linux-amd64 -o sigardapanel
 chmod +x sigardapanel
 sudo mv sigardapanel /usr/local/bin/
+```
 
-# Setup
+### macOS (Intel)
+
+```bash
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel-darwin-amd64 -o sigardapanel
+chmod +x sigardapanel
+sudo mv sigardapanel /usr/local/bin/
+```
+
+### macOS (Apple Silicon)
+
+```bash
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel-darwin-arm64 -o sigardapanel
+chmod +x sigardapanel
+sudo mv sigardapanel /usr/local/bin/
+```
+
+### Setup
+
+```bash
 sigardapanel init
 ```
 
-Or use the installer:
+Or use the installer (Linux only):
 
 ```bash
 PANEL_DOMAIN=panel.yourdomain.com bash <(curl -sSL https://raw.githubusercontent.com/bayurstarcool/SigardaPanel/main/deploy/install-panel.sh)
