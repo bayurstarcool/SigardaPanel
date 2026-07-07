@@ -15,7 +15,9 @@ Instructions for AI agents working on the **SigardaPanel** repository.
 
 This is a **binary-only** distribution repository. It contains:
 
-- `sigardapanel` — compiled agent binary (23MB)
+- `sigardapanel` — compiled binary (Linux amd64, 25MB)
+- `sigardapanel-darwin-amd64` — macOS Intel binary (25MB)
+- `sigardapanel-darwin-arm64` — macOS Apple Silicon binary (24MB)
 - `deploy/` — installer scripts
 - `docs/` — documentation
 - `README.md` — project overview
@@ -28,7 +30,7 @@ This is a **binary-only** distribution repository. It contains:
 Full source code for panel API, dashboard, job worker, CLI, and agent:
 
 - `internal/apihttp/` — Panel API handlers
-- `internal/backendserver/` — API server runner
+- `internal/backendserver/` — API server runner (serves embedded dashboard)
 - `internal/cli/` — CLI helpers
 - `internal/commands/` — CLI commands
 - `internal/jobs/` — Job worker and scheduler
@@ -47,7 +49,7 @@ Full source code for panel API, dashboard, job worker, CLI, and agent:
 - `internal/dbserver/` — Database server management
 - `internal/audit/` — Audit logging
 - `internal/executor/` — Shell command executor
-- `web/` — SvelteKit dashboard
+- `web/` — SvelteKit dashboard (embedded in binary)
 - `cmd/sigardapanel/` — Full CLI entry point
 - `build.sh` — Enterprise build script
 
@@ -57,9 +59,28 @@ Full source code for panel API, dashboard, job worker, CLI, and agent:
 
 | Service | Port | Description |
 |---------|------|-------------|
+| API | `:7700` | Panel API server + Dashboard |
 | Agent | `:7790` | Agent HTTP server |
-| API | `:7700` | Panel API server (Enterprise) |
-| Dashboard | `:7780` | Vite dev server (Enterprise) |
+
+### Commands
+
+```bash
+sigardapanel api        # Run API server + Dashboard
+sigardapanel agent      # Run agent service
+sigardapanel dev        # Run API + agent locally
+sigardapanel init       # Initialize configuration
+sigardapanel login      # Authenticate CLI
+sigardapanel logout     # Revoke token
+sigardapanel server     # Manage servers
+sigardapanel site       # Manage sites
+sigardapanel ssl        # Manage SSL certificates
+sigardapanel job        # Manage jobs
+sigardapanel backup     # Manage backups
+sigardapanel db         # Manage databases
+sigardapanel user       # Manage users
+sigardapanel doctor     # Diagnostics
+sigardapanel version    # Show version
+```
 
 ### Database
 
@@ -114,24 +135,25 @@ Full source code for panel API, dashboard, job worker, CLI, and agent:
 
 ## Build
 
-### Agent Binary (Public)
-
-```bash
-cd /root/SigardaPanel
-go build -o sigardapanel ./cmd/sigardapanel
-```
-
-### Enterprise Binary
+### Enterprise Binary (includes dashboard)
 
 ```bash
 cd /root/SigardaPanel-Enterprise
-./build.sh /root/SigardaPanel
+./build.sh
+```
+
+### Cross-compile for macOS
+
+```bash
+cd /root/SigardaPanel-Enterprise
+GOOS=darwin GOARCH=amd64 go build -o sigardapanel-darwin-amd64 ./cmd/sigardapanel
+GOOS=darwin GOARCH=arm64 go build -o sigardapanel-darwin-arm64 ./cmd/sigardapanel
 ```
 
 ## Deployment
 
-- Target: Ubuntu/Debian
-- Systemd for services
+- Target: Ubuntu/Debian, macOS
+- Systemd for services (Linux)
 - SSL: Let's Encrypt via certbot
 - Never run `rm -rf` without guards
 - Validate config before service reload
