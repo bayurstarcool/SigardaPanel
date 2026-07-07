@@ -83,7 +83,7 @@ PANEL_DOMAIN=panel.yourdomain.com bash <(curl -sSL https://raw.githubusercontent
 sigardapanel server add
 
 # On target VPS
-curl -sSL http://panel.yourdomain.com:8090/api/v1/agents/install?token=YOUR_TOKEN | bash
+curl -sSL http://panel.yourdomain.com:7700/api/v1/agents/install?token=YOUR_TOKEN | bash
 ```
 
 ## Usage
@@ -144,8 +144,8 @@ sigardapanel version
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SIGARDAPANEL_API_ADDR` | `:8080` | API server address |
-| `SIGARDAPANEL_AGENT_ADDR` | `:9090` | Agent address |
+| `SIGARDAPANEL_API_ADDR` | `:7700` | API server address |
+| `SIGARDAPANEL_AGENT_ADDR` | `:7790` | Agent address |
 | `SIGARDAPANEL_AGENT_TOKEN` | - | Agent auth token |
 | `SIGARDAPANEL_DB_PATH` | `./sigardapanel.db` | Database path |
 

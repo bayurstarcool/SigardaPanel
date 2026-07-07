@@ -57,9 +57,9 @@ Full source code for panel API, dashboard, job worker, CLI, and agent:
 
 | Service | Port | Description |
 |---------|------|-------------|
-| Agent | `:9090` | Agent HTTP server |
-| API | `:8090` | Panel API server (Enterprise) |
-| Dashboard | `:4000` | Vite dev server (Enterprise) |
+| Agent | `:7790` | Agent HTTP server |
+| API | `:7700` | Panel API server (Enterprise) |
+| Dashboard | `:7780` | Vite dev server (Enterprise) |
 
 ### Database
 

@@ -24,7 +24,7 @@ sigardapanel init --api-url https://panel.yourdomain.com
 
 ```bash
 export SIGARDAPANEL_DB_PATH=/opt/sigardapanel/data/sigardapanel.db
-export SIGARDAPANEL_API_ADDR=:8090
+export SIGARDAPANEL_API_ADDR=:7700
 
 sigardapanel api
 ```
@@ -32,7 +32,7 @@ sigardapanel api
 **Agent (Target VPS):**
 
 ```bash
-export SIGARDAPANEL_AGENT_ADDR=:9090
+export SIGARDAPANEL_AGENT_ADDR=:7790
 export SIGARDAPANEL_AGENT_TOKEN=your_token
 
 sigardapanel agent
@@ -49,7 +49,7 @@ PANEL_DOMAIN=panel.yourdomain.com bash <(curl -sSL https://raw.githubusercontent
 ### Agent
 
 ```bash
-curl -sSL http://panel.yourdomain.com:8090/api/v1/agents/install?token=YOUR_TOKEN | bash
+curl -sSL http://panel.yourdomain.com:7700/api/v1/agents/install?token=YOUR_TOKEN | bash
 ```
 
 Or manual:
@@ -62,10 +62,10 @@ bash install-agent.sh --panel-url http://panel.yourdomain.com --token YOUR_TOKEN
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SIGARDAPANEL_API_ADDR` | `:8090` | API server address |
-| `SIGARDAPANEL_AGENT_ADDR` | `:9090` | Agent address |
+| `SIGARDAPANEL_API_ADDR` | `:7700` | API server address |
+| `SIGARDAPANEL_AGENT_ADDR` | `:7790` | Agent address |
 | `SIGARDAPANEL_DB_PATH` | `sigardapanel.db` | Database file path |
-| `SIGARDAPANEL_API_URL` | `http://localhost:8090` | Panel API URL |
+| `SIGARDAPANEL_API_URL` | `http://localhost:7700` | Panel API URL |
 | `SIGARDAPANEL_TOKEN` | - | API token from login |
 | `SIGARDAPANEL_AGENT_TOKEN` | - | Agent authentication token |
 | `SIGARDAPANEL_OUTPUT` | `json` | Output format: `json`, `table`, `yaml` |
@@ -95,19 +95,19 @@ sudo systemctl enable sigardapanel-agent
 sigardapanel doctor
 
 # Check API health
-curl http://localhost:8090/api/v1/health
+curl http://localhost:7700/api/v1/health
 
 # Check agent health
-curl http://localhost:9090/health
+curl http://localhost:7790/health
 ```
 
 ## Port Reference
 
 | Service | Default Port | Description |
 |---------|--------------|-------------|
-| API | `:8090` | Panel API server |
-| Agent | `:9090` | Agent service |
-| Web UI | `:3000` | Dashboard (Enterprise) |
+| API | `:7700` | Panel API server |
+| Agent | `:7790` | Agent service |
+| Web UI | `:7780` | Dashboard (Enterprise) |
 
 ## Troubleshooting
 
