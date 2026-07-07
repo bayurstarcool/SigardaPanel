@@ -3,7 +3,7 @@ set -euo pipefail
 
 ADMIN_USER="${SIGARDAPANEL_ADMIN_USER:-admin}"
 ADMIN_EMAIL="${SIGARDAPANEL_ADMIN_EMAIL:-admin@localhost}"
-AGENT_URL="${SIGARDAPANEL_AGENT_URL:-http://127.0.0.1:9090}"
+AGENT_URL="${SIGARDAPANEL_AGENT_URL:-http://127.0.0.1:7790}"
 AGENT_TOKEN="${SIGARDAPANEL_AGENT_TOKEN:-}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sigardapanel"
@@ -23,7 +23,7 @@ usage() {
     echo "Environment variables:"
     echo "  SIGARDAPANEL_ADMIN_USER   Admin username (default: admin)"
     echo "  SIGARDAPANEL_ADMIN_EMAIL  Admin email (default: admin@localhost)"
-    echo "  SIGARDAPANEL_AGENT_URL    Agent URL for worker (default: http://127.0.0.1:9090)"
+    echo "  SIGARDAPANEL_AGENT_URL    Agent URL for worker (default: http://127.0.0.1:7790)"
     echo "  SIGARDAPANEL_AGENT_TOKEN  Bearer token shared with agent"
     echo "  PANEL_DOMAIN              Panel public domain (required)"
     echo "  SIGARDAPANEL_DATA_DIR     Data directory (default: /var/lib/sigardapanel)"
