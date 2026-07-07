@@ -2,7 +2,7 @@
 import json, subprocess, sys, os
 
 REPO = "bayurstarcool/SigardaPanel"
-TAG = "v0.1.3"
+TAG = "v0.1.4"
 
 token = input("Paste PAT: ").strip()
 
