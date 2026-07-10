@@ -1,159 +1,88 @@
-# Agent Instructions
+# SigardaPanel — VPS Management Panel
 
-Instructions for AI agents working on the **SigardaPanel** repository.
+Panel manajemen VPS open-source. Satu binary untuk panel server + agent.
 
-## Language & Style
+## Quick Install
 
-- Use English for all documentation and code comments
-- Keep responses concise and technical
-- Do not add large features without confirmation
-- Do not commit or create branches unless explicitly asked
-
-## Repository
-
-### Public — this repo (`github.com/bayurstarcool/SigardaPanel`)
-
-This is a **binary-only** distribution repository. It contains:
-
-- `sigardapanel` — compiled binary (Linux amd64, 25MB)
-- `sigardapanel-darwin-amd64` — macOS Intel binary (25MB)
-- `sigardapanel-darwin-arm64` — macOS Apple Silicon binary (24MB)
-- `deploy/` — installer scripts
-- `docs/` — documentation
-- `README.md` — project overview
-- `LICENSE` — MIT License
-
-**No source code** — all Go source lives in the Enterprise repo.
-
-### Private — Enterprise repo (`github.com/bayurstarcool/SigardaPanel-Enterprise`)
-
-Full source code for panel API, dashboard, job worker, CLI, and agent:
-
-- `internal/apihttp/` — Panel API handlers
-- `internal/backendserver/` — API server runner (serves embedded dashboard)
-- `internal/cli/` — CLI helpers
-- `internal/commands/` — CLI commands
-- `internal/jobs/` — Job worker and scheduler
-- `internal/agenthttp/` — Agent task handlers
-- `internal/agentserver/` — Agent HTTP server
-- `internal/agentclient/` — Agent client
-- `internal/auth/` — Authentication and RBAC
-- `internal/store/` — SQLite data store
-- `internal/nginx/` — Nginx configuration templates
-- `internal/db/` — Database layer
-- `internal/config/` — Configuration management
-- `internal/migrations/` — Database migrations
-- `internal/cloudflare/` — Cloudflare DNS API
-- `internal/notify/` — Notification system
-- `internal/features/` — Feature flags
-- `internal/dbserver/` — Database server management
-- `internal/audit/` — Audit logging
-- `internal/executor/` — Shell command executor
-- `web/` — SvelteKit dashboard (embedded in binary)
-- `cmd/sigardapanel/` — Full CLI entry point
-- `build.sh` — Enterprise build script
-
-## Runtime Contracts
-
-### Ports
-
-| Service | Port | Description |
-|---------|------|-------------|
-| API | `:7700` | Panel API server + Dashboard |
-| Agent | `:7790` | Agent HTTP server |
-
-### Commands
+### Panel Server (first-time setup)
 
 ```bash
-sigardapanel api        # Run API server + Dashboard
-sigardapanel agent      # Run agent service
-sigardapanel dev        # Run API + agent locally
-sigardapanel init       # Initialize configuration
-sigardapanel login      # Authenticate CLI
-sigardapanel logout     # Revoke token
-sigardapanel server     # Manage servers
-sigardapanel site       # Manage sites
-sigardapanel ssl        # Manage SSL certificates
-sigardapanel job        # Manage jobs
-sigardapanel backup     # Manage backups
-sigardapanel db         # Manage databases
-sigardapanel user       # Manage users
-sigardapanel doctor     # Diagnostics
-sigardapanel version    # Show version
+# 1. Download binary
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/download/v0.4.0/sigardapanel -o /usr/local/bin/sigardapanel
+chmod +x /usr/local/bin/sigardapanel
+
+# 2. Run setup wizard
+sigardapanel install
 ```
 
-### Database
+Wizard akan:
+1. Siapkan database
+2. Buat admin user (interactive)
+3. Tampilkan cara start panel & agent
 
-- **Path:** `/root/sigardapanel-data/sigardapanel.db`
-- **Engine:** SQLite with WAL mode
-- **ENV:** `SIGARDAPANEL_DB_PATH`
-
-### Agent Authentication
-
-- Bearer token: `Authorization: Bearer <agent_token>`
-- Token generated per server (32-byte hex)
-- Agent validates token before executing tasks
-
-### Filesystem
-
-- Site root: `/home/<system_user>/htdocs/<domain>`
-- **Never** use `/var/www/`
-- Logs: `/var/log/nginx/<domain>.access.log`
-
-### Nginx
-
-- Config path: `/etc/nginx/sites-enabled/<domain>.conf`
-- Markers: `# BEGIN SIGARDAPANEL MANAGED BLOCK` / `# END SIGARDAPANEL MANAGED BLOCK`
-- Validate with `nginx -t` before reload
-
-## Security
-
-### Trust Boundary
-
-- Browser/CLI → Not trusted without valid token
-- Backend → Policy authority
-- Agent → Limited executor per server
-- Database → Source of truth
-
-### Auth
-
-- Roles: `super_admin` > `admin` > `user`
-- Check roles: `auth.HasRole(userRole, requiredRole)`
-- Never use `==` for role comparison
-
-### File Operations
-
-- All file operations scoped to site root
-- Validate paths with `safePath()`
-- No global file manager endpoints
-
-### Secrets
-
-- Never store in plaintext
-- Mask in UI and CLI output
-- Encrypt at rest when possible
-
-## Build
-
-### Enterprise Binary (includes dashboard)
+### Start Panel
 
 ```bash
-cd /root/SigardaPanel-Enterprise
-./build.sh
+# Dev mode (API + Agent lokal)
+sigardapanel dev
+
+# Atau terpisah
+sigardapanel api      # API server :8080
+sigardapanel agent     # Agent service :9090
+
+# Frontend (SvelteKit)
+cd web && npx vite dev --host 0.0.0.0 --port 4000
 ```
 
-### Cross-compile for macOS
+### Add Agent on Another VPS
 
 ```bash
-cd /root/SigardaPanel-Enterprise
-GOOS=darwin GOARCH=amd64 go build -o sigardapanel-darwin-amd64 ./cmd/sigardapanel
-GOOS=darwin GOARCH=arm64 go build -o sigardapanel-darwin-arm64 ./cmd/sigardapanel
+# 1. Download binary
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/download/v0.4.0/sigardapanel -o /usr/local/bin/sigardapanel
+chmod +x /usr/local/bin/sigardapanel
+
+# 2. Add server in panel UI → copy agent token
+
+# 3. Start agent
+SIGARDAPANEL_AGENT_TOKEN=<token> sigardapanel agent
 ```
 
-## Deployment
+## Services
 
-- Target: Ubuntu/Debian, macOS
-- Systemd for services (Linux)
-- SSL: Let's Encrypt via certbot
-- Never run `rm -rf` without guards
-- Validate config before service reload
+| Service  | Port | Desc |
+|----------|------|------|
+| API      | 8080 | Panel REST API |
+| Agent    | 9090 | Agent per VPS |
+| Frontend | 4000 | Web dashboard |
+
+## Login
+
+Default: `admin` / (password from wizard)
+
+## CLI Commands
+
+```
+sigardapanel install    Setup wizard (recommended for new installs)
+sigardapanel init       Create admin user
+sigardapanel dev        Run API + agent locally
+sigardapanel api        Run API server
+sigardapanel agent      Run agent service
+sigardapanel login      Save API token
+sigardapanel server     Manage servers
+sigardapanel site       Manage sites
+```
+
+## GitHub Releases
+
+https://github.com/bayurstarcool/SigardaPanel/releases
+
+Latest: v0.4.0 — includes setup wizard, metrics, server auto-promotion
+
+## ENV
+
+| Variable | Default | Desc |
+|----------|---------|------|
+| SIGARDAPANEL_API_ADDR | :8080 | API listen |
+| SIGARDAPANEL_AGENT_ADDR | :9090 | Agent listen |
+| SIGARDAPANEL_DB_PATH | sigardapanel.db | DB path |
+| SIGARDAPANEL_AGENT_TOKEN | - | Agent auth |
