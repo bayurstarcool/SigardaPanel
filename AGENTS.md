@@ -22,9 +22,9 @@ Agent (:7710) per VPS
 
 | Service  | Port  | Description                          |
 |----------|-------|--------------------------------------|
-| API      | 8080  | Panel API server                     |
-| Frontend | 4001  | SvelteKit web dashboard              |
-| Agent    | 9090  | Agent HTTP server (per VPS)          |
+| API      | 7700  | Panel API server                     |
+| Frontend | 7720  | SvelteKit web dashboard              |
+| Agent    | 7710  | Agent HTTP server (per VPS)          |
 
 ## Quick Start (Dev Mode)
 
@@ -33,7 +33,7 @@ cd SigardaPanel-Enterprise
 ./sigardapanel dev
 ```
 
-Frontend: `cd web && npx vite dev --host 0.0.0.0 --port 4000`
+Frontend: `cd web && npx vite dev --host 0.0.0.0 --port 7720`
 
 ## Default Credentials
 

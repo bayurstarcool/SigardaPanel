@@ -57,7 +57,7 @@ npm install
 npm run dev
 ```
 
-Frontend runs on port 4000 (dev) or 4001 (production).
+Frontend runs on port 7720.
 
 ## Agent Installation on VPS
 
@@ -120,14 +120,14 @@ server {
 ## Troubleshooting
 
 ### Agent not connecting
-- Check port 9090 is open
+- Check port 7710 is open
 - Verify SIGARDAPANEL_AGENT_TOKEN matches
 - Check agent logs
 
 ### Frontend blank page
 - Hard refresh (Ctrl+Shift+R)
 - Check browser console for errors
-- Verify API is running on port 8080
+- Verify API is running on port 7700
 
 ### Database locked
 - Stop all services
