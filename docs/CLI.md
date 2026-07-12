@@ -158,8 +158,8 @@ sigardapanel user delete <id>
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| SIGARDAPANEL_API_ADDR | :8080 | API listen address |
-| SIGARDAPANEL_AGENT_ADDR | :9090 | Agent listen address |
+| SIGARDAPANEL_API_ADDR | :7700 | API listen address |
+| SIGARDAPANEL_AGENT_ADDR | :7710 | Agent listen address |
 | SIGARDAPANEL_API_URL | - | API base URL |
 | SIGARDAPANEL_TOKEN | - | API token |
 | SIGARDAPANEL_OUTPUT | table | Output format (table|json|yaml) |

@@ -5,7 +5,7 @@ set -euo pipefail
 # ║  SigardaPanel Agent Installer                           ║
 # ║                                                         ║
 # ║  One-line install:                                      ║
-# ║    curl -sSL http://panel:7700/api/v1/agents/install    ║
+# ║    curl -sSL http://panel:8090/api/v1/agents/install    ║
 # ║      ?token=YOUR_REGISTRATION_TOKEN | bash              ║
 # ║                                                         ║
 # ║  Manual install:                                        ║
@@ -28,7 +28,7 @@ usage() {
     echo "  $0 --panel-url URL --token AGENT_TOKEN  (legacy: requires manual server creation)"
     echo ""
     echo "Options:"
-    echo "  --panel-url URL                Panel API URL (e.g., http://panel.example.com:7700)"
+    echo "  --panel-url URL                Panel API URL (e.g., http://panel.example.com:8090)"
     echo "  --registration-token TOKEN     One-time registration token (auto-registers server)"
     echo "  --token TOKEN                  Agent token (legacy mode, requires manual server creation)"
     echo "  --install-dir DIR              Install directory (default: /usr/local/bin)"

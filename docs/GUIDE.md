@@ -37,8 +37,8 @@ This will:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| SIGARDAPANEL_API_ADDR | :8080 | API listen address |
-| SIGARDAPANEL_AGENT_ADDR | :9090 | Agent listen address |
+| SIGARDAPANEL_API_ADDR | :7700 | API listen address |
+| SIGARDAPANEL_AGENT_ADDR | :7710 | Agent listen address |
 | SIGARDAPANEL_DB_PATH | sigardapanel.db | Database path |
 | SIGARDAPANEL_AGENT_TOKEN | - | Agent auth token |
 
@@ -104,13 +104,13 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;
 
     location /api/v1/ {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:7700;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
 
     location / {
-        proxy_pass http://127.0.0.1:4001;
+        proxy_pass http://127.0.0.1:7720;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }

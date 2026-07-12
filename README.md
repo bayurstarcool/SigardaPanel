@@ -146,7 +146,7 @@ sigardapanel
 ┌──────────────────────────────────────────────────┐
 │               Panel Server                       │
 │  ┌──────────────┐    ┌──────────────────┐        │
-│  │  API (:8080) │    │  Frontend (:4001)│        │
+│  │  API (:7700) │    │  Frontend (:7720)│        │
 │  │  (Go/Echo)   │    │  (SvelteKit)     │        │
 │  └──────┬───────┘    └────────┬─────────┘        │
 │         │                     │                   │
@@ -156,7 +156,7 @@ sigardapanel
 └──────────────────────┬───────────────────────────┘
                        │
         ┌──────────────▼──────────────┐
-        │   Agent (:9090) per VPS     │
+        │   Agent (:7710) per VPS     │
         │  • Site management          │
         │  • SSL certificates         │
         │  • Docker management        │
@@ -218,8 +218,8 @@ CGO_ENABLED=0 go build -o sigardapanel ./cmd/sigardapanel
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| SIGARDAPANEL_API_ADDR | :8080 | API listen address |
-| SIGARDAPANEL_AGENT_ADDR | :9090 | Agent listen address |
+| SIGARDAPANEL_API_ADDR | :7700 | API listen address |
+| SIGARDAPANEL_AGENT_ADDR | :7710 | Agent listen address |
 | SIGARDAPANEL_DB_PATH | sigardapanel.db | Database path |
 | SIGARDAPANEL_AGENT_TOKEN | - | Agent auth token |
 

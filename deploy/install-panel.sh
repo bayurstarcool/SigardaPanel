@@ -11,8 +11,8 @@ DATA_DIR="${SIGARDAPANEL_DATA_DIR:-/var/lib/sigardapanel}"
 LOG_DIR="/var/log/sigardapanel"
 BACKUP_DIR="/var/backups/sigardapanel"
 PANEL_DOMAIN="${PANEL_DOMAIN:-}"
-SERVICE_NAME="sigardapanel"
-DOWNLOAD_URL="https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel"
+SERVICE_NAME="sigardapanel-panel"
+DOWNLOAD_URL="https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel-linux-amd64"
 NGINX_CONF="/etc/nginx/sites-available/sigardapanel"
 
 usage() {
@@ -21,10 +21,11 @@ usage() {
     echo "Usage: PANEL_DOMAIN=panel.example.com ./install-panel.sh [--install-dir DIR]"
     echo ""
     echo "Environment variables:"
-    echo "  PANEL_DOMAIN              Panel public domain (required)"
     echo "  SIGARDAPANEL_ADMIN_USER   Admin username (default: admin)"
     echo "  SIGARDAPANEL_ADMIN_EMAIL  Admin email (default: admin@localhost)"
+    echo "  SIGARDAPANEL_AGENT_URL    Agent URL for worker (default: http://127.0.0.1:9090)"
     echo "  SIGARDAPANEL_AGENT_TOKEN  Bearer token shared with agent"
+    echo "  PANEL_DOMAIN              Panel public domain (required)"
     echo "  SIGARDAPANEL_DATA_DIR     Data directory (default: /var/lib/sigardapanel)"
     exit 1
 }
@@ -85,9 +86,9 @@ echo "[4/7] Initializing panel..."
 export SIGARDAPANEL_DB_PATH="$DATA_DIR/sigardapanel.db"
 cat > "$CONFIG_DIR/panel.env" <<EOF
 SIGARDAPANEL_API_ADDR=:8080
-SIGARDAPANEL_AGENT_ADDR=:9090
 SIGARDAPANEL_DB_PATH=$DATA_DIR/sigardapanel.db
 SIGARDAPANEL_LOG_DIR=$LOG_DIR
+SIGARDAPANEL_AGENT_URL=$AGENT_URL
 SIGARDAPANEL_AGENT_TOKEN=$AGENT_TOKEN
 EOF
 chmod 600 "$CONFIG_DIR/panel.env"
@@ -99,14 +100,15 @@ fi
 echo "[5/7] Creating systemd service..."
 cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
 [Unit]
-Description=SigardaPanel
+Description=SigardaPanel Panel
 After=network.target nginx.service
 
 [Service]
 Type=simple
-User=root
+User=sigardapanel
+Group=sigardapanel
 EnvironmentFile=$CONFIG_DIR/panel.env
-ExecStart=$INSTALL_DIR/sigardapanel dev
+ExecStart=$INSTALL_DIR/sigardapanel api
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
@@ -121,25 +123,15 @@ server {
     listen 80;
     server_name $PANEL_DOMAIN;
 
-    # API proxy
-    location /api/v1/ {
+    location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 300s;
-        proxy_connect_timeout 60s;
+        proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
-    }
-
-    # Frontend proxy
-    location / {
-        proxy_pass http://127.0.0.1:4001;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
 EOF
@@ -165,7 +157,7 @@ systemctl enable "$SERVICE_NAME"
 systemctl start "$SERVICE_NAME"
 systemctl reload nginx
 
-sleep 3
+sleep 2
 if systemctl is-active --quiet "$SERVICE_NAME"; then
     echo "Installation complete!"
     echo ""

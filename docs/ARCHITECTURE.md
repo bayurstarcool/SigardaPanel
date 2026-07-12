@@ -8,7 +8,7 @@ SigardaPanel v0.5.0 — Self-hosted VPS management panel built with Go.
 ┌──────────────────────────────────────────────────┐
 │               Panel Server                       │
 │  ┌──────────────┐    ┌──────────────────┐        │
-│  │  API (:8080) │    │  Frontend (:4001)│        │
+│  │  API (:7700) │    │  Frontend (:7720)│        │
 │  │  (Go/Echo)   │    │  (SvelteKit)     │        │
 │  └──────┬───────┘    └────────┬─────────┘        │
 │         │                     │                   │
@@ -18,7 +18,7 @@ SigardaPanel v0.5.0 — Self-hosted VPS management panel built with Go.
 └──────────────────────┬───────────────────────────┘
                        │
         ┌──────────────▼──────────────┐
-        │   Agent (:9090) per VPS     │
+        │   Agent (:7710) per VPS     │
         │  • Site management          │
         │  • SSL certificates         │
         │  • Docker management        │
