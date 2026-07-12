@@ -250,7 +250,7 @@ CGO_ENABLED=0 go build -o sigardapanel ./cmd/sigardapanel
 - [ ] High availability setup
 - [ ] Database migration to PostgreSQL (optional)
 - [ ] WebSocket real-time updates
-- [ ] Mobile app (React Native)
+- [ ] Mobile app (Flutter)
 - [ ] Plugin system
 
 ---
