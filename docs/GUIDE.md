@@ -1,131 +1,135 @@
 # Installation Guide
 
-This guide covers installing and running SigardaPanel.
+SigardaPanel v0.5.0 — Installation and setup guide.
 
 ## Quick Start
 
-### 1. Download
+### 1. Download Binary
 
 ```bash
-curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel-linux-amd64 -o sigardapanel
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel -o sigardapanel
 chmod +x sigardapanel
-sudo mv sigardapanel /usr/local/bin/
 ```
 
-### 2. Initialize
+### 2. Run Setup Wizard
 
 ```bash
-sigardapanel init --api-url https://panel.yourdomain.com
+./sigardapanel install
 ```
 
-### 3. Run Services
+This will:
+- Create database and run migrations
+- Create admin user
+- Configure default settings
 
-**Panel Server:**
-
-```bash
-export SIGARDAPANEL_DB_PATH=/opt/sigardapanel/data/sigardapanel.db
-export SIGARDAPANEL_API_ADDR=:7700
-
-sigardapanel api
-```
-
-**Agent (Target VPS):**
+### 3. Start Services
 
 ```bash
-export SIGARDAPANEL_AGENT_ADDR=:7790
-export SIGARDAPANEL_AGENT_TOKEN=your_token
+# Development (API + Agent)
+./sigardapanel dev
 
-sigardapanel agent
-```
-
-## Automated Installation
-
-### Panel Server
-
-```bash
-PANEL_DOMAIN=panel.yourdomain.com bash <(curl -sSL https://raw.githubusercontent.com/bayurstarcool/SigardaPanel/main/deploy/install-panel.sh)
-```
-
-### Agent
-
-```bash
-curl -sSL http://panel.yourdomain.com:7700/api/v1/agents/install?token=YOUR_TOKEN | bash
-```
-
-Or manual:
-
-```bash
-bash install-agent.sh --panel-url http://panel.yourdomain.com --token YOUR_TOKEN
+# Production (separate)
+./sigardapanel api &
+./sigardapanel agent &
 ```
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SIGARDAPANEL_API_ADDR` | `:7700` | API server address |
-| `SIGARDAPANEL_AGENT_ADDR` | `:7790` | Agent address |
-| `SIGARDAPANEL_DB_PATH` | `sigardapanel.db` | Database file path |
-| `SIGARDAPANEL_API_URL` | `http://localhost:7700` | Panel API URL |
-| `SIGARDAPANEL_TOKEN` | - | API token from login |
-| `SIGARDAPANEL_AGENT_TOKEN` | - | Agent authentication token |
-| `SIGARDAPANEL_OUTPUT` | `json` | Output format: `json`, `table`, `yaml` |
+| SIGARDAPANEL_API_ADDR | :8080 | API listen address |
+| SIGARDAPANEL_AGENT_ADDR | :9090 | Agent listen address |
+| SIGARDAPANEL_DB_PATH | sigardapanel.db | Database path |
+| SIGARDAPANEL_AGENT_TOKEN | - | Agent auth token |
 
-## Systemd Services
+## Default Credentials
 
-The installers create systemd services automatically. Manual setup:
+- Username: `admin`
+- Password: `admin123`
 
-**Panel:**
+**Important:** Change the default password after first login!
 
-```bash
-sudo systemctl start sigardapanel-panel
-sudo systemctl enable sigardapanel-panel
-```
-
-**Agent:**
+## Frontend Setup
 
 ```bash
-sudo systemctl start sigardapanel-agent
-sudo systemctl enable sigardapanel-agent
+cd web
+npm install
+npm run dev
 ```
 
-## Verify Installation
+Frontend runs on port 4000 (dev) or 4001 (production).
+
+## Agent Installation on VPS
 
 ```bash
-# Check system health
-sigardapanel doctor
+# Download agent binary
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel -o /usr/local/bin/sigardapanel
+chmod +x /usr/local/bin/sigardapanel
 
-# Check API health
-curl http://localhost:7700/api/v1/health
-
-# Check agent health
-curl http://localhost:7790/health
+# Start agent with token from panel
+SIGARDAPANEL_AGENT_TOKEN=<token> sigardapanel agent
 ```
 
-## Port Reference
+## Systemd Service
 
-| Service | Default Port | Description |
-|---------|--------------|-------------|
-| API | `:7700` | Panel API server |
-| Agent | `:7790` | Agent service |
-| Web UI | `:7780` | Dashboard (Enterprise) |
+```bash
+cat > /etc/systemd/system/sigardapanel.service << 'EOF'
+[Unit]
+Description=SigardaPanel
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/sigardapanel dev
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now sigardapanel
+```
+
+## Nginx Configuration
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name panel.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/panel.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;
+
+    location /api/v1/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:4001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
 
 ## Troubleshooting
 
-### Agent Not Connecting
+### Agent not connecting
+- Check port 9090 is open
+- Verify SIGARDAPANEL_AGENT_TOKEN matches
+- Check agent logs
 
-1. Verify agent token matches panel configuration
-2. Check network connectivity between panel and agent
-3. Verify agent service is running: `systemctl status sigardapanel-agent`
-4. Check agent logs: `journalctl -u sigardapanel-agent -f`
+### Frontend blank page
+- Hard refresh (Ctrl+Shift+R)
+- Check browser console for errors
+- Verify API is running on port 8080
 
-### SSL Issues
-
-1. Verify domain DNS points to server
-2. Check port 80 is accessible for ACME challenge
-3. Run: `sigardapanel ssl status --domain yourdomain.com`
-
-### Database Issues
-
-1. Verify database file exists and is writable
-2. Check WAL mode is enabled
-3. Run: `sigardapanel doctor`
+### Database locked
+- Stop all services
+- Delete sigardapanel.db
+- Restart services

@@ -1,275 +1,177 @@
 # API Reference
 
-This document defines the public API for SigardaPanel. The dashboard and CLI use the same API endpoints.
+SigardaPanel API v0.5.0 — ~150+ endpoints.
 
-## API Principles
+## Base URL
 
-- All public endpoints use the `/api/v1` prefix
-- Consistent JSON response format
-- All responses include a `request_id` for tracing
-- All mutation endpoints perform RBAC checks and audit logging
-- All list endpoints support pagination
-- Secrets are never returned in full after creation
+```
+https://panel.sigarda.dev/api/v1
+```
 
 ## Authentication
 
-### Methods
-
-- **Cookie session** — for dashboard access
-- **Bearer token** — for CLI and API access
-
-### Headers
-
-```http
-Authorization: Bearer <token>
-Content-Type: application/json
-```
+All endpoints require `Authorization: Bearer <token>` header except public endpoints.
 
 ## Response Format
 
-### Success (Single Resource)
-
 ```json
 {
-  "data": {},
-  "request_id": "req_123"
+  "data": { ... },
+  "request_id": "req_xxx"
 }
 ```
 
-### Success (List)
-
-```json
-{
-  "data": [],
-  "pagination": {
-    "page": 1,
-    "per_page": 25,
-    "total": 100
-  },
-  "request_id": "req_123"
-}
-```
-
-### Error
-
+Error format:
 ```json
 {
   "error": {
-    "code": "permission_denied",
-    "message": "Permission denied",
-    "details": null
+    "code": "unauthorized",
+    "message": "invalid token"
   },
-  "request_id": "req_123"
+  "request_id": "req_xxx"
 }
 ```
 
-## HTTP Status Codes
+## Endpoints
 
-| Code | Description |
-|------|-------------|
-| `200` | Success |
-| `201` | Resource created |
-| `202` | Job accepted (async) |
-| `400` | Invalid input |
-| `401` | Not authenticated |
-| `403` | Permission denied |
-| `404` | Resource not found |
-| `409` | Conflict / invalid state |
-| `422` | Domain, path, or runtime validation failed |
-| `429` | Rate limited |
-| `500` | Server error |
-| `502` | Agent or target server error |
-| `504` | Agent or job timeout |
+### Auth
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /auth/login | Login |
+| GET | /auth/me | Current user |
+| PUT | /auth/profile | Update profile |
+| POST | /auth/logout | Logout |
 
-## Pagination
+### Servers
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /servers | List servers |
+| POST | /servers | Create server |
+| GET | /servers/:id | Server detail |
+| PATCH | /servers/:id | Update server |
+| DELETE | /servers/:id | Delete server |
+| GET | /servers/health | All servers health |
+| GET | /servers/:id/health | Server health |
+| POST | /servers/:id/token | Regenerate agent token |
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `page` | `1` | Page number |
-| `per_page` | `25` | Items per page (max: 100) |
-| `sort` | `created_at` | Sort field |
-| `order` | `desc` | Sort order |
-| `q` | - | Search query |
+### Sites
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /sites | List sites |
+| POST | /sites | Create site |
+| GET | /sites/:id | Site detail |
+| DELETE | /sites/:id | Delete site |
+| POST | /sites/:id/deploy | Deploy site |
+| POST | /sites/:id/config | Update config |
+| POST | /sites/:id/reload-nginx | Reload nginx |
+| GET | /sites/:id/vhost | Get vhost |
+| PUT | /sites/:id/vhost | Update vhost |
 
-## Authentication Endpoints
+### Docker
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /servers/:id/docker/containers | List containers |
+| POST | /servers/:id/docker/container/start | Start container |
+| POST | /servers/:id/docker/container/stop | Stop container |
+| POST | /servers/:id/docker/container/restart | Restart container |
+| POST | /servers/:id/docker/container/remove | Remove container |
+| GET | /servers/:id/docker/container/logs | Container logs |
+| GET | /servers/:id/docker/images | List images |
+| POST | /servers/:id/docker/image/pull | Pull image |
+| POST | /servers/:id/docker/image/remove | Remove image |
+| GET | /servers/:id/docker/volumes | List volumes |
+| POST | /servers/:id/docker/volume/create | Create volume |
+| POST | /servers/:id/docker/volume/remove | Remove volume |
+| GET | /servers/:id/docker/networks | List networks |
+| POST | /servers/:id/docker/network/create | Create network |
+| POST | /servers/:id/docker/network/remove | Remove network |
+| GET | /servers/:id/docker/info | Docker info |
+| GET | /servers/:id/docker/disk-usage | Disk usage |
 
-### Login
+### Firewall
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /servers/:id/firewall/status | Firewall status |
+| POST | /servers/:id/firewall/enable | Enable firewall |
+| POST | /servers/:id/firewall/disable | Disable firewall |
+| POST | /servers/:id/firewall/allow | Allow port |
+| POST | /servers/:id/firewall/deny | Deny port |
+| POST | /servers/:id/firewall/delete | Delete rule |
+| GET | /servers/:id/firewall/rules | List rules |
+| POST | /servers/:id/firewall/reset | Reset firewall |
 
-```
-POST /api/v1/auth/login
-```
+### Redis
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /servers/:id/redis/stats | Redis stats |
+| POST | /servers/:id/redis/flush | Flush all |
+| GET | /servers/:id/redis/info | Redis info |
+| POST | /servers/:id/redis/flushdb | Flush database |
 
-**Request:**
+### Git
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /sites/:id/git/branches | List branches |
+| GET | /sites/:id/git/log | Commit history |
+| POST | /sites/:id/git/rollback | Rollback to commit |
+| POST | /sites/:id/git/checkout | Checkout branch |
 
-```json
-{
-  "email": "admin@example.com",
-  "password": "secret"
-}
-```
+### SSL
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /sites/:id/ssl | SSL status |
+| POST | /sites/:id/ssl/issue | Issue cert |
+| POST | /sites/:id/ssl/renew | Renew cert |
+| POST | /ssl/renew-all | Batch renew all |
 
-**Response:**
+### Databases
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /databases | List all databases |
+| POST | /sites/:id/databases | Create database |
+| GET | /sites/:id/databases | List site databases |
+| GET | /databases/:id | Database detail |
+| PATCH | /databases/:id | Update database |
+| DELETE | /databases/:id | Delete database |
+| POST | /databases/:id/users | Create DB user |
+| GET | /databases/:id/users | List DB users |
+| DELETE | /databases/:id/users/:user_id | Delete DB user |
+| POST | /databases/:id/users/:user_id/rotate-password | Rotate password |
 
-```json
-{
-  "data": {
-    "user": {
-      "id": "usr_123",
-      "email": "admin@example.com",
-      "name": "Admin"
-    },
-    "token": "shown_once_for_cli_if_requested"
-  },
-  "request_id": "req_123"
-}
-```
+### Backups
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /backups/bulk | Bulk create |
+| POST | /sites/:id/backups | Create backup |
+| POST | /sites/:id/backups/database | Database backup |
+| GET | /backups | List backups |
+| GET | /backups/:id/download | Download backup |
+| DELETE | /backups/:id | Delete backup |
+| POST | /backups/:id/restore | Restore backup |
 
-### Logout
+### Jobs
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /jobs | List jobs |
+| GET | /jobs/:id | Job detail |
+| POST | /jobs/:id/cancel | Cancel job |
 
-```
-POST /api/v1/auth/logout
-```
+### Cloudflare
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /cloudflare/config | Get config |
+| PUT | /cloudflare/config | Save config |
+| DELETE | /cloudflare/config | Delete config |
+| GET | /cloudflare/verify | Verify token |
+| GET | /cloudflare/zones | List zones |
+| GET | /cloudflare/zones/:id/dns | List DNS records |
+| POST | /cloudflare/zones/:id/dns | Create DNS record |
+| DELETE | /cloudflare/zones/:id/dns/:recordId | Delete DNS record |
 
-Revoke current session or token.
-
-### Current User
-
-```
-GET /api/v1/auth/me
-```
-
-Returns current user and permissions.
-
-## User Endpoints
-
-| Method | Endpoint | Permission | Description |
-|--------|----------|------------|-------------|
-| `GET` | `/api/v1/users` | `user.manage` | List users |
-| `POST` | `/api/v1/users` | `user.manage` | Create user |
-| `PATCH` | `/api/v1/users/{user_id}` | `user.manage` | Update user |
-| `POST` | `/api/v1/users/{user_id}/disable` | `user.manage` | Disable user |
-
-## API Token Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/api-tokens` | List token metadata |
-| `POST` | `/api/v1/api-tokens` | Create token (shown once) |
-| `DELETE` | `/api/v1/api-tokens/{token_id}` | Revoke token |
-
-## Server Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/servers` | List servers |
-| `POST` | `/api/v1/servers` | Create server and bootstrap token |
-| `GET` | `/api/v1/servers/{server_id}` | Server details |
-| `DELETE` | `/api/v1/servers/{server_id}` | Remove server (guards active sites) |
-| `GET` | `/api/v1/servers/{server_id}/health` | Agent health status |
-| `GET` | `/api/v1/servers/{server_id}/capabilities` | Capability report |
-| `POST` | `/api/v1/servers/{server_id}/doctor` | Run diagnostics |
-
-## Agent Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/agents/register` | Register agent with bootstrap token |
-| `POST` | `/api/v1/agents/heartbeat` | Agent heartbeat |
-| `POST` | `/api/v1/agents/capabilities` | Update capabilities |
-
-Agent endpoints require dedicated authentication middleware.
-
-## Site Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/sites` | List sites (filters: `server_id`, `runtime`, `status`, `q`) |
-| `POST` | `/api/v1/sites` | Create site (returns job) |
-| `GET` | `/api/v1/sites/{site_id}` | Site details |
-| `PATCH` | `/api/v1/sites/{site_id}` | Update site configuration |
-| `DELETE` | `/api/v1/sites/{site_id}` | Delete site (requires confirmation) |
-| `POST` | `/api/v1/sites/{site_id}/enable` | Enable site |
-| `POST` | `/api/v1/sites/{site_id}/disable` | Disable site |
-
-## Deployment Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/sites/{site_id}/deployments` | Create deployment job |
-| `GET` | `/api/v1/sites/{site_id}/deployments` | List deployments |
-| `GET` | `/api/v1/deployments/{deployment_id}` | Deployment details |
-| `POST` | `/api/v1/deployments/{deployment_id}/rollback` | Rollback to previous deployment |
-
-## SSL Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/sites/{site_id}/ssl/issue` | Issue SSL certificate |
-| `POST` | `/api/v1/sites/{site_id}/ssl/renew` | Renew SSL certificate |
-| `GET` | `/api/v1/sites/{site_id}/ssl/status` | SSL status and expiry |
-
-## Log Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/sites/{site_id}/logs` | Query logs (`type`: access, error, app) |
-| `GET` | `/api/v1/jobs/{job_id}/logs` | Job logs |
-
-Streaming support via SSE/WebSocket planned:
-- `GET /api/v1/jobs/{job_id}/stream`
-- `GET /api/v1/sites/{site_id}/logs/stream`
-
-## Job Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/jobs` | List jobs |
-| `GET` | `/api/v1/jobs/{job_id}` | Job details |
-| `POST` | `/api/v1/jobs/{job_id}/cancel` | Cancel job (best-effort) |
-| `POST` | `/api/v1/jobs/{job_id}/retry` | Retry job (if safe) |
-
-## Backup Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/backups` | Create backup job |
-| `GET` | `/api/v1/backups` | List backups |
-| `POST` | `/api/v1/backups/{backup_id}/restore` | Restore backup (requires confirmation) |
-
-## Metrics Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/servers/{server_id}/metrics` | Server metrics (recent/history) |
-| `GET` | `/api/v1/sites/{site_id}/metrics` | Site metrics |
-
-## Audit Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/audit-logs` | List audit logs (filters: `actor_id`, `action`, `target_type`, `target_id`, `server_id`, `status`) |
-
-## Webhook Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/webhooks/git/{site_id}` | Git deploy webhook (requires signature validation) |
-
-## Idempotency
-
-For critical mutations, clients may send:
-
-```http
-Idempotency-Key: <unique-key>
-```
-
-The backend prevents duplicate creation or deployment if the same key is used.
-
-## Rate Limiting
-
-| Endpoint | Limit |
-|----------|-------|
-| Login | Strict per IP/email |
-| API token creation | Moderate |
-| Webhook | Moderate with signature |
-| Log streaming | Connection limit |
+### Stack
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /servers/:id/stack | Stack info |
+| POST | /servers/:id/stack/action | Install/manage |
+| POST | /servers/:id/stack/restart | Restart services |
+| POST | /servers/:id/command | Execute command |
