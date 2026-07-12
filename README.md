@@ -1,122 +1,105 @@
-# SigardaPanel v0.5.0
+<div align="center">
 
-SigardaPanel adalah panel VPS berbasis Go dengan satu binary utama: `sigardapanel`.
+# SigardaPanel
+
+**Open-source VPS management panel built with Go**
+
+Lightweight, fast, and secure — manage your servers, sites, SSL, and deployments from a single binary.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/bayurstarcool/SigardaPanel)](https://github.com/bayurstarcool/SigardaPanel/releases)
+
+</div>
+
+---
 
 ## Features
 
 ### Core
-- **Server Management** — Add, update, delete, health monitoring
-- **Site Management** — Create, update, delete, deploy, git integration
-- **SSL Certificates** — Auto-issue, auto-renew, expiry alerts
-- **Databases** — MySQL/PostgreSQL create, manage, users
-- **Backups** — Local + S3, scheduled, restore
+- **Multi-Server Management** — Manage multiple VPS instances from one panel
+- **Site Management** — Create, configure, and deploy websites with ease
+- **SSL Automation** — Automatic Let's Encrypt certificate issuance and renewal
+- **Database Management** — MySQL/PostgreSQL create, manage, users
+- **Backups** — Local + S3 storage, scheduled backups, restore
 
 ### DevOps
 - **Docker Management** — Containers, images, volumes, networks, compose
-- **Git Deploy v2** — Branches, commit history, rollback, checkout
+- **Git Deploy** — Branches, commit history, rollback, checkout
 - **Firewall (UFW)** — Rules, presets, IP blocking, enable/disable
 - **Redis/Memcached** — Stats, flush, info, management
 - **Stack Manager** — Install/manage nginx, php, node, docker, etc.
 
-### Monitoring & Security
+### Monitoring and Security
 - **System Monitoring** — CPU, memory, disk, network metrics
-- **SSL Dashboard** — Visual certificate status & expiry timeline
+- **SSL Dashboard** — Visual certificate status and expiry timeline
 - **Disk Usage Alerts** — 80% warning, 90% critical notifications
-- **Audit Logs** — Track all admin actions
-
-### UX
+- **Audit Logs** — Track all administrative actions
 - **Global Search** — Cmd+K search across servers, sites, databases
-- **Server Health Overview** — Dashboard with real-time metrics
-- **Dark/Light Theme** — Toggle between themes
-- **Mobile Responsive** — Works on all devices
-
-## CLI Commands
-
-```
-sigardapanel
-├── api / agent / dev / install / init / login / logout / doctor / version
-├── server    add|list|update|remove|doctor
-├── site      create|list|update|delete|deploy|config|setup-logrotate
-├── ssl       status|issue|renew|renew-all
-├── job       list|watch|cancel|logs
-├── backup    create|list|delete|restore
-├── db        create|list|update|delete
-│   └── user  create|list|rotate-password|delete
-├── docker    ps|start|stop|restart|rm|logs|images|compose
-├── git       branches|log|rollback|checkout
-├── firewall  status|enable|disable|allow|deny|rules|delete|reset
-├── redis     stats|info|flush|flushdb
-├── system    disk-usage|updates
-├── channels  add|list|remove
-├── alerts    list
-├── metrics   latest|list
-├── user      create|list|reset-password|delete
-└── cloudpanel scan|import-sites|import-ssl|doctor
-```
-
-## API Endpoints (~150+)
-
-| Domain | Endpoints |
-|---|---|
-| Auth | 5 |
-| Users | 12 |
-| Servers | 8 |
-| Sites | 15 |
-| App Runtime | 7 |
-| Databases | 14 |
-| Backups | 16 |
-| SSL | 4 |
-| Jobs | 3 |
-| Cloudflare | 14 |
-| Stack | 4 |
-| Docker | 19 |
-| Git | 4 |
-| Firewall | 8 |
-| Redis | 4 |
-| License/Plans | 9 |
-| Notifications | 6 |
-| Alerts | 4 |
-| Service Tokens | 3 |
-
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
-## Enterprise
-
-Panel API, dashboard, dan licensing tersedia di repo private:
-[SigardaPanel-Enterprise](https://github.com/bayurstarcool/SigardaPanel-Enterprise)
 
 ## Quick Start
+
+### Install
+
+```bash
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel -o sigardapanel
+chmod +x sigardapanel
+./sigardapanel install
+```
 
 ### Development
 
 ```bash
-git clone https://github.com/bayurstarcool/SigardaPanel-Enterprise.git
-cd SigardaPanel-Enterprise
+git clone https://github.com/bayurstarcool/SigardaPanel.git
+cd SigardaPanel
 go run ./cmd/sigardapanel dev
 ```
 
 ### Production
 
 ```bash
-# Build
 CGO_ENABLED=0 go build -o sigardapanel ./cmd/sigardapanel
-
-# Run API + Agent
 ./sigardapanel dev
-
-# Or run separately
-./sigardapanel api &
-./sigardapanel agent &
 ```
 
-### Default Credentials
+## CLI Commands
 
-- Username: `admin`
-- Password: `admin123`
+```
+sigardapanel
+  api / agent / dev / install / init / login / logout / doctor / version
+  server    add|list|update|remove|doctor
+  site      create|list|update|delete|deploy|config|setup-logrotate
+  ssl       status|issue|renew|renew-all
+  job       list|watch|cancel|logs
+  backup    create|list|delete|restore
+  db        create|list|update|delete
+  db user   create|list|rotate-password|delete
+  docker    ps|start|stop|restart|rm|logs|images|compose
+  git       branches|log|rollback|checkout
+  firewall  status|enable|disable|allow|deny|rules|delete|reset
+  redis     stats|info|flush|flushdb
+  system    disk-usage|updates
+  channels  add|list|remove
+  alerts    list
+  metrics   latest|list
+  user      create|list|reset-password|delete
+```
 
-### Environment Variables
+## Architecture
+
+```
+Panel Server
+  API (:8080) + Frontend (:4001)
+  SQLite DB (WAL mode)
+      |
+Agent (:9090) per VPS
+  - Site management
+  - SSL certificates
+  - Docker management
+  - Firewall (UFW)
+  - System metrics
+```
+
+## Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
@@ -125,48 +108,19 @@ CGO_ENABLED=0 go build -o sigardapanel ./cmd/sigardapanel
 | SIGARDAPANEL_DB_PATH | sigardapanel.db | Database path |
 | SIGARDAPANEL_AGENT_TOKEN | - | Agent auth token |
 
-## Architecture
-
-```
-┌──────────────────────────────────────────────────┐
-│               Panel Server                       │
-│  ┌──────────────┐    ┌──────────────────┐        │
-│  │  API (:8080) │    │  Frontend (:4001)│        │
-│  │  (Go/Echo)   │    │  (SvelteKit)     │        │
-│  └──────┬───────┘    └────────┬─────────┘        │
-│         │                     │                   │
-│  ┌──────▼─────────────────────▼─────────┐         │
-│  │         SQLite DB (WAL)              │         │
-│  └──────────────────────────────────────┘         │
-└──────────────────────┬───────────────────────────┘
-                       │
-        ┌──────────────▼──────────────┐
-        │   Agent (:9090) per VPS     │
-        │  • Site management          │
-        │  • SSL certificates         │
-        │  • Docker management        │
-        │  • Firewall (UFW)           │
-        │  • System metrics           │
-        └─────────────────────────────┘
-```
-
 ## Tech Stack
 
 - **Backend**: Go 1.22+, Echo framework
 - **Frontend**: Svelte 5, SvelteKit, Tailwind CSS
 - **Database**: SQLite (WAL mode)
-- **Auth**: Argon2id password hashing, JWT-like tokens
+- **Auth**: Argon2id password hashing
 
-## Contributing
+## License
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+MIT License — see [LICENSE](LICENSE) for details.
 
 ## Links
 
 - [GitHub](https://github.com/bayurstarcool/SigardaPanel)
 - [Releases](https://github.com/bayurstarcool/SigardaPanel/releases)
-- [Documentation](https://panel.sigarda.dev/docs)
+- [Enterprise Edition](https://github.com/bayurstarcool/SigardaPanel-Enterprise)
