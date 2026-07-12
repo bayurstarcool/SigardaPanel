@@ -1,0 +1,17 @@
+# Binaries
+sigardapanel-*
+*.bak
+*.bak.*
+
+# Database (sensitive data!)
+*.db
+*.db-shm
+*.db-wal
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
