@@ -5,40 +5,65 @@ set -euo pipefail
 # ║  SigardaPanel Agent Installer                           ║
 # ║                                                         ║
 # ║  One-line install:                                      ║
-# ║    curl -sSL http://panel:8090/api/v1/agents/install    ║
-# ║      ?token=YOUR_REGISTRATION_TOKEN | bash              ║
+# ║    curl -sSL https://raw.githubusercontent.com/...      ║
+# ║      .../install-agent.sh | sudo bash -s --             ║
+# ║      --panel-url https://panel.example.com              ║
+# ║      --registration-token YOUR_TOKEN                    ║
 # ║                                                         ║
 # ║  Manual install:                                        ║
 # ║    bash install-agent.sh --panel-url URL --token TOKEN  ║
 # ╚══════════════════════════════════════════════════════════╝
 
+# ── Configuration ──────────────────────────────────────────
 PANEL_URL=""
 REG_TOKEN=""
-INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="/etc/sigardapanel"
+AGENT_TOKEN=""
+LEGACY_MODE=false
+INSTALL_DIR="${SIGARDAPANEL_INSTALL_DIR:-/usr/local/bin}"
+CONFIG_DIR="${SIGARDAPANEL_CONFIG_DIR:-/etc/sigardapanel}"
 SITE_ROOT="${SIGARDAPANEL_AGENT_SITE_ROOT:-/var/www}"
 SERVICE_NAME="sigardapanel-agent"
-DOWNLOAD_URL_BASE=""
+VERSION="0.5.4"
 
+# ── Colors ─────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log_info()  { echo -e "${BLUE}[INFO]${NC}  $1"; }
+log_ok()    { echo -e "${GREEN}[  OK]${NC}  $1"; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $1"; }
+log_error() { echo -e "${RED}[FAIL]${NC}  $1"; }
+
+# ── Usage ──────────────────────────────────────────────────
 usage() {
-    echo "SigardaPanel Agent Installer"
-    echo ""
-    echo "Usage:"
-    echo "  $0 --panel-url URL --registration-token TOKEN"
-    echo "  $0 --panel-url URL --token AGENT_TOKEN  (legacy: requires manual server creation)"
-    echo ""
-    echo "Options:"
-    echo "  --panel-url URL                Panel API URL (e.g., http://panel.example.com:8090)"
-    echo "  --registration-token TOKEN     One-time registration token (auto-registers server)"
-    echo "  --token TOKEN                  Agent token (legacy mode, requires manual server creation)"
-    echo "  --install-dir DIR              Install directory (default: /usr/local/bin)"
-    echo "  -h, --help                     Show this help"
+    cat << EOF
+SigardaPanel Agent Installer v${VERSION}
+
+Usage:
+  $0 --panel-url URL --registration-token TOKEN
+  $0 --panel-url URL --token AGENT_TOKEN  (legacy mode)
+
+Options:
+  --panel-url URL                Panel API URL (required)
+  --registration-token TOKEN     One-time registration token (auto-register)
+  --token TOKEN                  Agent token (legacy: manual server creation)
+  --install-dir DIR              Install directory (default: /usr/local/bin)
+  -h, --help                     Show this help
+
+Examples:
+  # Auto-register with panel
+  $0 --panel-url https://panel.example.com --registration-token abc123
+
+  # Legacy mode (manual server creation in panel)
+  $0 --panel-url https://panel.example.com --token agent_token_here
+EOF
     exit 1
 }
 
-LEGACY_MODE=false
-AGENT_TOKEN=""
-
+# ── Parse arguments ────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case $1 in
         --panel-url) PANEL_URL="$2"; shift 2;;
@@ -46,90 +71,90 @@ while [[ $# -gt 0 ]]; do
         --token) AGENT_TOKEN="$2"; LEGACY_MODE=true; shift 2;;
         --install-dir) INSTALL_DIR="$2"; shift 2;;
         -h|--help) usage;;
-        *) echo "Unknown arg: $1"; usage;;
+        *) log_error "Unknown argument: $1"; usage;;
     esac
 done
 
-# Check that this script was NOT piped from curl (env vars set by panel template)
-# If PANEL_URL and REG_TOKEN are already set (from curl | bash), skip arg parsing.
-# They're set at the top of the file by the template.
-
-if [ -z "$PANEL_URL" ] || [ -z "$REG_TOKEN" ]; then
-    # Not piped from panel — check manual args
-    if [ -z "$PANEL_URL" ]; then
-        echo "Error: --panel-url required"
-        usage
-    fi
-    if [ -z "$REG_TOKEN" ] && [ -z "$AGENT_TOKEN" ]; then
-        echo "Error: --registration-token or --token required"
-        usage
-    fi
+# ── Validate ───────────────────────────────────────────────
+if [ -z "$PANEL_URL" ]; then
+    log_error "--panel-url is required"
+    echo ""
+    usage
 fi
 
-# If legacy mode (manual --token), we need the agent token from args
-if [ "$LEGACY_MODE" = true ] && [ -z "$AGENT_TOKEN" ]; then
-    echo "Error: --token requires a value"
+if [ -z "$REG_TOKEN" ] && [ -z "$AGENT_TOKEN" ]; then
+    log_error "--registration-token or --token is required"
+    echo ""
     usage
 fi
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "Error: must run as root"
+    log_error "This installer must be run as root"
+    echo "  Try: sudo $0 --panel-url $PANEL_URL --registration-token ..."
     exit 1
 fi
 
-echo "╔══════════════════════════════════════════════════╗"
-echo "║       SigardaPanel Agent Installer              ║"
-echo "╚══════════════════════════════════════════════════╝"
-echo ""
-
-# ── Detect OS ──
+# ── Detect OS ──────────────────────────────────────────────
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     OS=$ID
+    OS_VERSION="${VERSION_ID:-}"
 else
-    echo "Error: cannot detect OS"
+    log_error "Cannot detect operating system"
     exit 1
 fi
-echo "Detected OS: $OS"
 
-# ── Install dependencies ──
-echo "[1/7] Installing dependencies..."
+echo ""
+echo -e "${BLUE}╔══════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║       SigardaPanel Agent Installer v${VERSION}        ║${NC}"
+echo -e "${BLUE}╚══════════════════════════════════════════════════╝${NC}"
+echo ""
+log_info "Panel:     $PANEL_URL"
+log_info "OS:        $OS $OS_VERSION"
+log_info "Install:   $INSTALL_DIR"
+echo ""
+
+# ── Step 1: Install dependencies ───────────────────────────
+log_info "[1/7] Installing dependencies..."
 case "$OS" in
     ubuntu|debian)
         apt-get update -qq
         apt-get install -y -qq nginx tar git curl > /dev/null 2>&1
-        apt-get install -y -qq certbot python3-certbot-nginx > /dev/null 2>&1 || echo "  certbot install failed (optional)"
         ;;
     centos|rhel|fedora|rocky|almalinux)
-        yum install -y -q nginx tar git curl 2>/dev/null
-        yum install -y -q certbot 2>/dev/null || echo "  certbot install failed (optional)"
+        yum install -y -q nginx tar git curl
         ;;
     *)
-        echo "Error: unsupported OS: $OS (supported: ubuntu, debian, centos, rhel, fedora, rocky, almalinux)"
+        log_error "Unsupported OS: $OS"
+        echo "  Supported: ubuntu, debian, centos, rhel, fedora, rocky, almalinux"
         exit 1
         ;;
 esac
+log_ok "Dependencies installed"
 
-# ── Generate agent token (if not in legacy mode) ──
+# ── Step 2: Generate agent token ───────────────────────────
 if [ -z "$AGENT_TOKEN" ]; then
-    echo "[2/7] Generating agent token..."
+    log_info "[2/7] Generating agent token..."
     AGENT_TOKEN=$(openssl rand -hex 32)
-    echo "  Agent token generated."
+    log_ok "Agent token generated"
 else
-    echo "[2/7] Using provided agent token."
+    log_info "[2/7] Using provided agent token..."
+    log_ok "Agent token set"
 fi
 
-# ── Get server info ──
-echo "[3/7] Detecting server info..."
-SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}')
+# ── Step 3: Detect server info ─────────────────────────────
+log_info "[3/7] Detecting server info..."
+SERVER_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || \
+            curl -s --max-time 5 icanhazip.com 2>/dev/null || \
+            hostname -I | awk '{print $1}')
 HOSTNAME=$(hostname -f 2>/dev/null || hostname)
-echo "  Hostname: $HOSTNAME"
-echo "  IP: $SERVER_IP"
+log_ok "Hostname: $HOSTNAME"
+log_ok "IP:       $SERVER_IP"
 
-# ── Register with panel ──
+# ── Step 4: Register with panel ────────────────────────────
 if [ -n "$REG_TOKEN" ]; then
-    echo "[4/7] Registering with panel..."
-    REGISTER_RESPONSE=$(curl -sf -X POST "$PANEL_URL/api/v1/agents/register" \
+    log_info "[4/7] Registering with panel..."
+    REGISTER_RESPONSE=$(curl -sf --max-time 30 -X POST "$PANEL_URL/api/v1/agents/register" \
         -H "Content-Type: application/json" \
         -d "{
             \"registration_token\": \"$REG_TOKEN\",
@@ -137,55 +162,56 @@ if [ -n "$REG_TOKEN" ]; then
             \"ip_address\": \"$SERVER_IP\",
             \"agent_token\": \"$AGENT_TOKEN\",
             \"os_info\": \"$(cat /etc/os-release 2>/dev/null | head -5 | tr '\n' '; ')\"
-        }")
+        }" 2>/dev/null || echo "")
 
-    if ! echo "$REGISTER_RESPONSE" | grep -q '"server_id"'; then
-        echo "Error: registration failed"
-        echo "Response: $REGISTER_RESPONSE"
+    if echo "$REGISTER_RESPONSE" | grep -q '"server_id"'; then
+        SERVER_ID=$(echo "$REGISTER_RESPONSE" | grep -o '"server_id":[0-9]*' | cut -d: -f2)
+        log_ok "Registered! Server ID: $SERVER_ID"
+    else
+        log_error "Registration failed"
+        echo "  Response: $REGISTER_RESPONSE"
+        echo "  Check panel URL and registration token."
         exit 1
     fi
-
-    SERVER_ID=$(echo "$REGISTER_RESPONSE" | grep -o '"server_id":[0-9]*' | cut -d: -f2)
-    echo "  Registered! Server ID: $SERVER_ID"
 else
-    echo "[4/7] Skipping registration (legacy mode — create server manually in panel)"
+    log_info "[4/7] Skipping registration (legacy mode)"
+    log_warn "Create server manually in panel with token: $AGENT_TOKEN"
 fi
 
-# ── Download binary ──
-echo "[5/7] Downloading agent binary..."
-DOWNLOAD_URL="$PANEL_URL/api/v1/agent/download"
+# ── Step 5: Download binary ────────────────────────────────
+log_info "[5/7] Downloading agent binary..."
 mkdir -p "$INSTALL_DIR"
 
-if curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/sigardapanel" 2>/dev/null; then
+DOWNLOAD_URL="$PANEL_URL/api/v1/agent/download"
+if curl -fsSL --max-time 60 "$DOWNLOAD_URL" -o "$INSTALL_DIR/sigardapanel" 2>/dev/null; then
     chmod +x "$INSTALL_DIR/sigardapanel"
-    echo "  Binary downloaded."
+    log_ok "Binary downloaded"
+elif [ -f "$INSTALL_DIR/sigardapanel" ]; then
+    log_warn "Using existing binary at $INSTALL_DIR/sigardapanel"
 else
-    echo "  Direct download not available."
-    if [ -f "$INSTALL_DIR/sigardapanel" ]; then
-        echo "  Using existing binary at $INSTALL_DIR/sigardapanel"
-    else
-        echo "Error: no sigardapanel binary found at $INSTALL_DIR/sigardapanel"
-        echo "Please place the binary manually before running this script."
-        exit 1
-    fi
+    log_error "No sigardapanel binary found"
+    echo "  Download from: https://github.com/bayurstarcool/SigardaPanel/releases"
+    echo "  Place at: $INSTALL_DIR/sigardapanel"
+    exit 1
 fi
 
-# ── Create config ──
-echo "[6/7] Creating configuration..."
-mkdir -p "$CONFIG_DIR"
-mkdir -p "$SITE_ROOT"
-cat > "$CONFIG_DIR/agent.env" <<ENVEOF
+# ── Step 6: Create configuration ───────────────────────────
+log_info "[6/7] Creating configuration..."
+mkdir -p "$CONFIG_DIR" "$SITE_ROOT"
+
+cat > "$CONFIG_DIR/agent.env" <<EOF
 SIGARDAPANEL_AGENT_ADDR=:7710
 SIGARDAPANEL_PANEL_URL=$PANEL_URL
 SIGARDAPANEL_AGENT_TOKEN=$AGENT_TOKEN
 SIGARDAPANEL_AGENT_SITE_ROOT=$SITE_ROOT
 SIGARDAPANEL_AGENT_ALLOW_STUB_SSL=false
-ENVEOF
+EOF
 chmod 600 "$CONFIG_DIR/agent.env"
+log_ok "Configuration written to $CONFIG_DIR/agent.env"
 
-# ── Create systemd service ──
-echo "[7/7] Setting up systemd service..."
-cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SVCEOF
+# ── Step 7: Create systemd service ─────────────────────────
+log_info "[7/7] Creating systemd service..."
+cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
 [Unit]
 Description=SigardaPanel Agent
 After=network.target nginx.service
@@ -202,29 +228,40 @@ LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-SVCEOF
+EOF
 
-# ── Start service ──
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" > /dev/null 2>&1
 systemctl start "$SERVICE_NAME"
+log_ok "Systemd service created and started"
 
+# ── Verify ─────────────────────────────────────────────────
 sleep 2
+echo ""
 if systemctl is-active --quiet "$SERVICE_NAME"; then
+    echo -e "${GREEN}╔══════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║       Agent Installed Successfully!              ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "✅ Agent installed and running!"
+    echo -e "  Hostname:  ${BLUE}$HOSTNAME${NC}"
+    echo -e "  IP:        ${BLUE}$SERVER_IP${NC}"
+    echo -e "  Agent:     ${GREEN}http://$SERVER_IP:7710${NC}"
+    echo -e "  Panel:     ${GREEN}$PANEL_URL${NC}"
     echo ""
-    echo "  Hostname:  $HOSTNAME"
-    echo "  IP:        $SERVER_IP"
-    echo "  Agent:     http://$SERVER_IP:7710"
-    echo "  Panel:     $PANEL_URL"
+    echo -e "  ${YELLOW}Agent Token:${NC}"
+    echo -e "  ${BLUE}$AGENT_TOKEN${NC}"
     echo ""
     echo "  Status:  systemctl status $SERVICE_NAME"
     echo "  Logs:    journalctl -u $SERVICE_NAME -f"
     echo "  Health:  curl http://localhost:7710/health"
-else
     echo ""
-    echo "❌ Agent service failed to start."
-    echo "Check: journalctl -u $SERVICE_NAME -e"
+else
+    echo -e "${RED}╔══════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║       Agent Installation Failed                 ║${NC}"
+    echo -e "${RED}╚══════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo "  Check logs: journalctl -u $SERVICE_NAME -e"
+    echo "  Check config: cat $CONFIG_DIR/agent.env"
+    echo ""
     exit 1
 fi
