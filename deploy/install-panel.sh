@@ -3,7 +3,7 @@ set -euo pipefail
 
 ADMIN_USER="${SIGARDAPANEL_ADMIN_USER:-admin}"
 ADMIN_EMAIL="${SIGARDAPANEL_ADMIN_EMAIL:-admin@localhost}"
-AGENT_URL="${SIGARDAPANEL_AGENT_URL:-http://127.0.0.1:9090}"
+AGENT_URL="${SIGARDAPANEL_AGENT_URL:-http://127.0.0.1:7710}"
 AGENT_TOKEN="${SIGARDAPANEL_AGENT_TOKEN:-}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sigardapanel"
@@ -23,7 +23,7 @@ usage() {
     echo "Environment variables:"
     echo "  SIGARDAPANEL_ADMIN_USER   Admin username (default: admin)"
     echo "  SIGARDAPANEL_ADMIN_EMAIL  Admin email (default: admin@localhost)"
-    echo "  SIGARDAPANEL_AGENT_URL    Agent URL for worker (default: http://127.0.0.1:9090)"
+    echo "  SIGARDAPANEL_AGENT_URL    Agent URL for worker (default: http://127.0.0.1:7710)"
     echo "  SIGARDAPANEL_AGENT_TOKEN  Bearer token shared with agent"
     echo "  PANEL_DOMAIN              Panel public domain (required)"
     echo "  SIGARDAPANEL_DATA_DIR     Data directory (default: /var/lib/sigardapanel)"
@@ -85,7 +85,8 @@ chmod 750 "$DATA_DIR" "$LOG_DIR" "$BACKUP_DIR"
 echo "[4/7] Initializing panel..."
 export SIGARDAPANEL_DB_PATH="$DATA_DIR/sigardapanel.db"
 cat > "$CONFIG_DIR/panel.env" <<EOF
-SIGARDAPANEL_API_ADDR=:8080
+SIGARDAPANEL_API_ADDR=:7700
+SIGARDAPANEL_AGENT_ADDR=:7710
 SIGARDAPANEL_DB_PATH=$DATA_DIR/sigardapanel.db
 SIGARDAPANEL_LOG_DIR=$LOG_DIR
 SIGARDAPANEL_AGENT_URL=$AGENT_URL
@@ -124,7 +125,7 @@ server {
     server_name $PANEL_DOMAIN;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:7700;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -132,6 +133,20 @@ server {
         proxy_read_timeout 300s;
         proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
+    }
+
+    # WebSocket terminal proxy
+    location /api/ws/ {
+        proxy_pass http://127.0.0.1:7710/ws/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
 EOF

@@ -14,7 +14,9 @@ Agent (:7710) per VPS
   - SSL certificates
   - Docker management
   - Firewall (UFW)
+  - Fail2ban management
   - Redis/Memcached
+  - WebSocket PTY Terminal
   - System metrics
 ```
 
@@ -64,7 +66,7 @@ sigardapanel
 └── cloudpanel scan|import-sites|import-ssl|doctor
 ```
 
-## API Endpoints (~150+)
+## API Endpoints (~160+)
 
 ### Auth (5 endpoints)
 - `POST /api/v1/auth/login` — Login
@@ -199,7 +201,7 @@ sigardapanel
 
 ### Job Logs (2 endpoints)
 - `POST /api/v1/jobs/:id/logs` — Append logs
-- `GET /api/v1/jobs/:id/logs` — Get logs
+- `GET /api/v1/jobs/:id/logs` — Get job logs
 
 ### Metrics (3 endpoints)
 - `POST /api/v1/servers/:id/metrics` — Ingest metrics
@@ -225,7 +227,7 @@ sigardapanel
 - `DELETE /api/v1/notifications/:id` — Delete notification
 - `DELETE /api/v1/notifications/read` — Delete all read
 
-### Cloudflare (14 endpoints)
+### Cloudflare (16 endpoints)
 - `GET /api/v1/cloudflare/config` — Get config
 - `PUT /api/v1/cloudflare/config` — Save config
 - `DELETE /api/v1/cloudflare/config` — Delete config
@@ -287,11 +289,26 @@ sigardapanel
 - `GET /api/v1/servers/:id/firewall/rules` — List rules
 - `POST /api/v1/servers/:id/firewall/reset` — Reset firewall
 
+### Fail2ban (6 endpoints)
+- `GET /api/v1/servers/:id/fail2ban/status` — Fail2ban status
+- `GET /api/v1/servers/:id/fail2ban/jail` — List jails
+- `POST /api/v1/servers/:id/fail2ban/ban` — Ban IP
+- `POST /api/v1/servers/:id/fail2ban/unban` — Unban IP
+- `POST /api/v1/servers/:id/fail2ban/enable` — Enable jail
+- `POST /api/v1/servers/:id/fail2ban/disable` — Disable jail
+
 ### Redis (4 endpoints)
 - `GET /api/v1/servers/:id/redis/stats` — Redis stats
 - `POST /api/v1/servers/:id/redis/flush` — Flush all
 - `GET /api/v1/servers/:id/redis/info` — Redis info
 - `POST /api/v1/servers/:id/redis/flushdb` — Flush database
+
+### WebSocket Terminal (1 endpoint)
+- `GET /api/ws/terminal` — WebSocket PTY terminal
+  - Full TUI support (htop, vim, nano)
+  - Session persistence across reconnections
+  - Sticky keyboard shortcuts (Ctrl+C/Z/D/L/U, Tab, Esc, arrows)
+  - Mobile-optimized (no resize interference during typing)
 
 ### License & Plans (9 endpoints)
 - `GET /api/v1/license` — Get license
@@ -324,6 +341,81 @@ sigardapanel
 - `POST /api/v1/database-server/import` — Import databases
 - `GET /api/v1/audit-logs` — Audit logs
 
+## WebSocket Terminal
+
+### Architecture
+```
+Browser (xterm.js) ←WebSocket→ Nginx ←WebSocket→ Agent (:7710/ws/terminal)
+                                         ↕
+                                    PTY (bash)
+```
+
+### Features
+- **Full TUI support**: htop, vim, nano, tmux
+- **Session persistence**: reconnect to same PTY session after disconnect
+- **Sticky keyboard shortcuts**: Ctrl+C/Z/D/L/U, Tab, Esc, arrows
+- **Mobile-optimized**: no resize interference during typing
+- **Pending buffer**: up to 64KB buffered when no client attached
+
+### Session Persistence Flow
+1. Agent sends `{"type":"session","id":"pty_xxx"}` on connect
+2. Frontend stores session ID in memory
+3. On reconnect, frontend sends `?session=pty_xxx` query param
+4. Agent swaps WebSocket reference (single goroutine per session)
+5. Agent flushes pending buffer + sends prompt redraw
+
+### Nginx Proxy Config
+```nginx
+location /api/ws/ {
+    proxy_pass http://127.0.0.1:7710/ws/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Authorization "Bearer <agent_token>";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+```
+
+## Fail2ban Management
+
+### Features
+- View fail2ban status and jail list
+- Ban/unban IPs per jail
+- Enable/disable jails
+- Real-time status updates
+
+### Agent Endpoints
+- `GET /tasks/fail2ban/status` — Overall status
+- `GET /tasks/fail2ban/jail` — Jail list with stats
+- `POST /tasks/fail2ban/ban` — Ban IP `{jail, ip}`
+- `POST /tasks/fail2ban/unban` — Unban IP `{jail, ip}`
+- `POST /tasks/fail2ban/enable` — Enable jail `{jail}`
+- `POST /tasks/fail2ban/disable` — Disable jail `{jail}`
+
+## Backup System
+
+### Job Types
+- `backup.create` — File backup
+- `backup.database` — Database backup
+- `backup.restore` — Restore backup
+
+### Features
+- **S3 upload**: backup to S3-compatible storage (B2, Wasabi, etc.)
+- **Local fallback**: if S3 fails, keep local backup
+- **Concurrency limit**: max 5 concurrent backups per server
+- **Stuck cleanup**: jobs stuck >30min auto-marked as failed
+- **Deduplication**: skip if backup job already active for site
+- **Retention**: auto-expire old backups based on config
+
+### Worker Flow
+1. Claim next queued job
+2. Set backup status to "running"
+3. Execute on agent (tar + optional S3 upload)
+4. On success: update backup record with paths
+5. On failure: retry with backoff, then mark as failed
+6. On permanent failure: create failover job (local only)
+
 ## Env Variables
 
 | Variable | Default | Description |
@@ -335,6 +427,7 @@ sigardapanel
 | SIGARDAPANEL_API_URL | - | API base URL for CLI |
 | SIGARDAPANEL_TOKEN | - | API token from login |
 | SIGARDAPANEL_OUTPUT | table | Output format (table|json|yaml) |
+| SIGARDAPANEL_DEV | false | Dev mode (enables hot reload) |
 
 ## Repositories
 
@@ -344,4 +437,4 @@ sigardapanel
 ## GitHub Releases
 
 Binary releases: https://github.com/bayurstarcool/SigardaPanel/releases
-Latest: v0.5.0 — Full Docker/Firewall/Redis management, Global Search, SSL Dashboard
+Latest: v0.5.3 — WebSocket PTY Terminal, Fail2ban Management, Backup System Fixes

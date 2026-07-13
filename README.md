@@ -35,6 +35,7 @@ Lightweight, fast, and secure — manage your servers, sites, SSL, Docker, firew
 - **SSL Dashboard** — Visual certificate status and expiry timeline
 - **Auto-Renewal** — Cron-based renewal with expiry alerts
 - **Firewall (UFW)** — Rules, presets, IP blocking, enable/disable
+- **Fail2ban** — Ban/unban IPs, manage jails, enable/disable
 
 ### 🐳 Docker Management
 - **Containers** — Start, stop, restart, remove, view logs
@@ -52,9 +53,18 @@ Lightweight, fast, and secure — manage your servers, sites, SSL, Docker, firew
 
 ### 💿 Backups
 - **Local Backups** — On-server backup storage
-- **S3 Backups** — AWS S3, DigitalOcean Spaces, Wasabi
+- **S3 Backups** — AWS S3, DigitalOcean Spaces, Wasabi, B2
 - **Scheduled Backups** — Cron-based automation
 - **Backup Restore** — One-click restore from any backup
+- **Concurrency Limit** — Max 5 concurrent backups per server
+- **Stuck Cleanup** — Auto-fail jobs stuck >30min
+
+### 🖥️ WebSocket Terminal
+- **Full TUI Support** — htop, vim, nano, tmux
+- **Session Persistence** — Reconnect to same session
+- **Sticky Shortcuts** — Ctrl+C/Z/D/L/U, Tab, Esc, arrows
+- **Mobile Optimized** — No resize interference during typing
+- **Pending Buffer** — 64KB buffer when no client attached
 
 ### 📊 Monitoring & Alerts
 - **System Metrics** — CPU, memory, disk, network
@@ -74,7 +84,6 @@ Lightweight, fast, and secure — manage your servers, sites, SSL, Docker, firew
 - **Varnish Cache** — Config and purge
 - **Cron Jobs** — Per-site cron management
 - **File Manager** — Browse, edit, upload, download
-- **Web Terminal** — Browser-based SSH terminal
 - **Audit Logs** — Complete action audit trail
 - **User Management** — RBAC with roles (super_admin, admin, user)
 - **Impersonation** — Admin can impersonate users
@@ -114,7 +123,7 @@ sigardapanel
 
 ---
 
-## API Endpoints (~150+)
+## API Endpoints (~160+)
 
 | Domain | Endpoints | Description |
 |--------|-----------|-------------|
@@ -125,14 +134,17 @@ sigardapanel
 | App Runtime | 7 | Start, stop, restart, limits |
 | Databases | 14 | MySQL/PostgreSQL CRUD |
 | Backups | 16 | Local/S3, scheduled, restore |
+| Backup Providers | 6 | S3, B2, Wasabi config |
 | SSL | 4 | Issue, renew, auto-renew |
 | Jobs | 3 | List, cancel, logs |
-| Cloudflare | 14 | DNS, zones, analytics |
+| Cloudflare | 16 | DNS, zones, analytics |
 | Stack | 4 | Install/manage software |
 | Docker | 19 | Containers, images, volumes, networks |
 | Git | 4 | Branches, history, rollback |
 | Firewall | 8 | UFW rules, presets |
+| Fail2ban | 6 | Ban/unban, jail management |
 | Redis | 4 | Stats, flush, info |
+| WebSocket | 1 | Terminal (PTY) |
 | License/Plans | 9 | License management |
 | Notifications | 6 | Real-time notifications |
 | Alerts | 4 | Alert channels and history |
@@ -161,6 +173,8 @@ sigardapanel
         │  • SSL certificates         │
         │  • Docker management        │
         │  • Firewall (UFW)           │
+        │  • Fail2ban management      │
+        │  • WebSocket PTY terminal   │
         │  • Redis/Memcached          │
         │  • System metrics           │
         └─────────────────────────────┘
@@ -173,7 +187,7 @@ sigardapanel
 ### Install
 
 ```bash
-curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel -o sigardapanel
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel-linux-amd64 -o sigardapanel
 chmod +x sigardapanel
 ./sigardapanel install
 ```
@@ -202,6 +216,20 @@ CGO_ENABLED=0 go build -o sigardapanel ./cmd/sigardapanel
 
 ---
 
+## Downloads
+
+| Platform | Architecture | Binary |
+|----------|-------------|--------|
+| Linux | amd64 | `sigardapanel-linux-amd64` |
+| Linux | arm64 | `sigardapanel-linux-arm64` |
+| macOS | amd64 | `sigardapanel-darwin-amd64` |
+| macOS | arm64 | `sigardapanel-darwin-arm64` |
+| Windows | amd64 | `sigardapanel-windows-amd64.exe` |
+
+All binaries: https://github.com/bayurstarcool/SigardaPanel/releases
+
+---
+
 ## Tech Stack
 
 | Component | Technology |
@@ -211,6 +239,7 @@ CGO_ENABLED=0 go build -o sigardapanel ./cmd/sigardapanel
 | Database | SQLite (WAL mode) |
 | Auth | Argon2id password hashing |
 | Agent | Go, system commands |
+| Terminal | WebSocket PTY (gorilla/websocket, creack/pty, xterm.js) |
 
 ---
 
