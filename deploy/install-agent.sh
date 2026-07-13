@@ -175,7 +175,7 @@ echo "[6/7] Creating configuration..."
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$SITE_ROOT"
 cat > "$CONFIG_DIR/agent.env" <<ENVEOF
-SIGARDAPANEL_AGENT_ADDR=:9090
+SIGARDAPANEL_AGENT_ADDR=:7710
 SIGARDAPANEL_PANEL_URL=$PANEL_URL
 SIGARDAPANEL_AGENT_TOKEN=$AGENT_TOKEN
 SIGARDAPANEL_AGENT_SITE_ROOT=$SITE_ROOT
@@ -216,12 +216,12 @@ if systemctl is-active --quiet "$SERVICE_NAME"; then
     echo ""
     echo "  Hostname:  $HOSTNAME"
     echo "  IP:        $SERVER_IP"
-    echo "  Agent:     http://$SERVER_IP:9090"
+    echo "  Agent:     http://$SERVER_IP:7710"
     echo "  Panel:     $PANEL_URL"
     echo ""
     echo "  Status:  systemctl status $SERVICE_NAME"
     echo "  Logs:    journalctl -u $SERVICE_NAME -f"
-    echo "  Health:  curl http://localhost:9090/health"
+    echo "  Health:  curl http://localhost:7710/health"
 else
     echo ""
     echo "❌ Agent service failed to start."

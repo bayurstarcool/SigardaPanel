@@ -1,15 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-INSTALL_DIR="/root/SigardaPanel"
-REPO_DIR="/root/SigardaPanel-Enterprise"
+INSTALL_DIR="${SIGARDAPANEL_INSTALL_DIR:-/usr/local/bin}"
+REPO_DIR="${SIGARDAPANEL_REPO_DIR:-/root/SigardaPanel-Enterprise}"
 CACHE_FILE="/tmp/sigardapanel_latest_version"
 
 # Set Go environment
-# HOME is required by Go for build cache; setsid strips it from detached processes
-export HOME="/root"
+export HOME="${HOME:-/root}"
 export PATH="/usr/local/go/bin:$PATH"
-export GOPATH="/root/go"
+export GOPATH="${GOPATH:-$HOME/go}"
 export GOMODCACHE="$GOPATH/pkg/mod"
 export GOCACHE="$HOME/.cache/go-build"
 
@@ -22,7 +21,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Current version
-CURRENT=$("$INSTALL_DIR/sigardapanel" version 2>/dev/null || echo "unknown")
+CURRENT=$(sigardapanel version 2>/dev/null || "$INSTALL_DIR/sigardapanel" version 2>/dev/null || echo "unknown")
 echo "📦 Current: $CURRENT"
 
 # Get latest version
@@ -68,7 +67,7 @@ cp -r web/build dashboard/web/build 2>/dev/null || true
 
 # Build binary
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-X sigardapanel/internal/commands.Version=${LATEST_CLEAN}" \
+    -ldflags="-s -w -X sigardapanel/internal/commands.Version=${LATEST_CLEAN}" \
     -o sigardapanel-linux-amd64 ./cmd/sigardapanel
 
 if [ ! -f sigardapanel-linux-amd64 ]; then
@@ -78,10 +77,13 @@ fi
 
 # Backup
 echo "💾 Backing up..."
-cp "$INSTALL_DIR/sigardapanel" "$INSTALL_DIR/sigardapanel.bak"
+if [ -f "$INSTALL_DIR/sigardapanel" ]; then
+    cp "$INSTALL_DIR/sigardapanel" "$INSTALL_DIR/sigardapanel.bak"
+fi
 
 # Stop
 echo "⏸️  Stopping..."
+systemctl stop sigardapanel-panel 2>/dev/null || true
 systemctl stop sigardapanel-api 2>/dev/null || true
 systemctl stop sigardapanel-agent 2>/dev/null || true
 sleep 1
@@ -93,15 +95,17 @@ chmod +x "$INSTALL_DIR/sigardapanel"
 
 # Start
 echo "▶️  Starting..."
-systemctl start sigardapanel-api
-systemctl start sigardapanel-agent
+systemctl start sigardapanel-panel 2>/dev/null || true
+systemctl start sigardapanel-api 2>/dev/null || true
+systemctl start sigardapanel-agent 2>/dev/null || true
 sleep 2
 
 # Verify
-NEW=$("$INSTALL_DIR/sigardapanel" version 2>/dev/null || echo "unknown")
+NEW=$(sigardapanel version 2>/dev/null || "$INSTALL_DIR/sigardapanel" version 2>/dev/null || echo "unknown")
 echo ""
 echo "══════════════════════════════════════"
 echo "✅ Updated: $CURRENT → $NEW"
 echo "══════════════════════════════════════"
-echo "API: $(systemctl is-active sigardapanel-api)"
-echo "Agent: $(systemctl is-active sigardapanel-agent)"
+echo "Panel: $(systemctl is-active sigardapanel-panel 2>/dev/null || echo 'not installed')"
+echo "API: $(systemctl is-active sigardapanel-api 2>/dev/null || echo 'not running')"
+echo "Agent: $(systemctl is-active sigardapanel-agent 2>/dev/null || echo 'not running')"
