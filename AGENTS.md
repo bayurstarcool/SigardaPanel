@@ -8,7 +8,7 @@ Panel manajemen VPS open-source. Satu binary untuk panel server + agent.
 
 ```bash
 # 1. Download binary
-curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/download/v0.4.0/sigardapanel -o /usr/local/bin/sigardapanel
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/download/v0.5.6/sigardapanel-linux-amd64 -o /usr/local/bin/sigardapanel
 chmod +x /usr/local/bin/sigardapanel
 
 # 2. Run setup wizard
@@ -27,18 +27,18 @@ Wizard akan:
 sigardapanel dev
 
 # Atau terpisah
-sigardapanel api      # API server :8080
-sigardapanel agent     # Agent service :9090
+sigardapanel api       # API server :7700
+sigardapanel agent     # Agent service :7710
 
 # Frontend (SvelteKit)
-cd web && npx vite dev --host 0.0.0.0 --port 4000
+cd web && npx vite dev --host 0.0.0.0 --port 7720
 ```
 
 ### Add Agent on Another VPS
 
 ```bash
 # 1. Download binary
-curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/download/v0.4.0/sigardapanel -o /usr/local/bin/sigardapanel
+curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/download/v0.5.6/sigardapanel-linux-amd64 -o /usr/local/bin/sigardapanel
 chmod +x /usr/local/bin/sigardapanel
 
 # 2. Add server in panel UI → copy agent token
@@ -51,38 +51,45 @@ SIGARDAPANEL_AGENT_TOKEN=<token> sigardapanel agent
 
 | Service  | Port | Desc |
 |----------|------|------|
-| API      | 8080 | Panel REST API |
-| Agent    | 9090 | Agent per VPS |
-| Frontend | 4000 | Web dashboard |
+| API      | 7700 | Panel REST API |
+| Agent    | 7710 | Agent per VPS |
+| Frontend | 7720 | SvelteKit web dashboard |
 
 ## Login
 
-Default: `admin` / (password from wizard)
+Default: `admin` / `admin123` (change after first login)
 
 ## CLI Commands
 
 ```
-sigardapanel install    Setup wizard (recommended for new installs)
-sigardapanel init       Create admin user
-sigardapanel dev        Run API + agent locally
-sigardapanel api        Run API server
-sigardapanel agent      Run agent service
-sigardapanel login      Save API token
-sigardapanel server     Manage servers
-sigardapanel site       Manage sites
+sigardapanel
+├── api / agent / dev / install / init / login / logout / doctor / version
+├── server    add|list|update|remove|doctor
+├── site      create|list|update|delete|deploy|config|setup-logrotate
+├── ssl       status|issue|renew|renew-all
+├── job       list|watch|cancel|logs
+├── backup    create|list|delete|restore
+├── db        create|list|delete
+│   └── user  create|list|rotate-password|delete
+├── docker    ps|start|stop|restart|rm|logs|images|compose
+├── git       branches|log|rollback|checkout
+├── firewall  status|enable|disable|rules|reset
+├── channels  add|list|remove
+├── alerts    list
 ```
 
 ## GitHub Releases
 
 https://github.com/bayurstarcool/SigardaPanel/releases
 
-Latest: v0.4.0 — includes setup wizard, metrics, server auto-promotion
+Latest: v0.5.6 — Docker Multi-Language, Auto Token Sync, Progressive Create Flow
 
 ## ENV
 
 | Variable | Default | Desc |
 |----------|---------|------|
-| SIGARDAPANEL_API_ADDR | :8080 | API listen |
-| SIGARDAPANEL_AGENT_ADDR | :9090 | Agent listen |
+| SIGARDAPANEL_API_ADDR | :7700 | API listen |
+| SIGARDAPANEL_AGENT_ADDR | :7710 | Agent listen |
 | SIGARDAPANEL_DB_PATH | sigardapanel.db | DB path |
 | SIGARDAPANEL_AGENT_TOKEN | - | Agent auth |
+| SIGARDAPANEL_DEV | false | Dev mode |

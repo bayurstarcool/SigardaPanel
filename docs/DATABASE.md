@@ -1,26 +1,33 @@
 # Database Schema
 
-This document defines the database schema for SigardaPanel.
+This document defines the actual database schema for SigardaPanel v0.5.x.
 
 ## Target Database
 
 - **Engine:** SQLite with WAL mode
-- **IDs:** UUID/ULID strings recommended for public IDs
-- **Timestamps:** Must include timezone information
-- **Soft delete:** Required for important resources
-- **Migrations:** Must be versioned
+- **IDs:** `INTEGER PRIMARY KEY AUTOINCREMENT`
+- **Timestamps:** `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
+- **Migrations:** Versioned via `schema_migrations` table
 
 ## Conventions
 
 | Convention | Description |
 |------------|-------------|
-| Primary key | `id` |
-| Public ID prefix | Optional: `usr_`, `srv_`, `site_`, `job_` |
-| Timestamps | `created_at`, `updated_at`, `deleted_at` (nullable for soft delete) |
+| Primary key | `id` (integer, autoincrement) |
+| Timestamps | `created_at`, `updated_at` |
 | Status | Enum string or constrained text |
-| Secrets | Never stored in plaintext |
+| Secrets | Encrypted or hashed at rest |
 
 ## Core Tables
+
+### `schema_migrations`
+
+Tracks applied migrations.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `version` | integer | PRIMARY KEY |
+| `applied_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
 
 ### `users`
 
@@ -28,66 +35,21 @@ Stores user accounts.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `username` | text | UNIQUE NOT NULL |
 | `email` | text | UNIQUE NOT NULL |
-| `name` | text | NOT NULL |
 | `password_hash` | text | NOT NULL |
-| `status` | text | NOT NULL (`active`, `disabled`) |
-| `last_login_at` | timestamptz | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
-| `deleted_at` | timestamptz | NULLABLE |
+| `role` | text | NOT NULL DEFAULT 'user' |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `created_by` | integer | REFERENCES users(id) |
+| `disk_limit` | integer | NULLABLE |
+| `max_sites` | integer | NULLABLE |
+| `plan_id` | integer | REFERENCES plans(id) |
 
-**Indexes:** `lower(email)` (unique), `status`
+**Roles:** `super_admin`, `admin`, `user`
 
-### `roles`
-
-Default and custom roles.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `name` | text | UNIQUE NOT NULL |
-| `description` | text | NULLABLE |
-| `is_system` | boolean | NOT NULL DEFAULT false |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
-
-**Default roles:** `super_admin`, `admin`, `user`
-
-### `permissions`
-
-Granular permission definitions.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `key` | text | UNIQUE NOT NULL |
-| `description` | text | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
-
-### `role_permissions`
-
-Role-permission relationships.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `role_id` | text | REFERENCES `roles(id)` |
-| `permission_id` | text | REFERENCES `permissions(id)` |
-
-**Primary key:** (`role_id`, `permission_id`)
-
-### `user_roles`
-
-Global user-role assignments.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `user_id` | text | REFERENCES `users(id)` |
-| `role_id` | text | REFERENCES `roles(id)` |
-| `created_at` | timestamptz | NOT NULL |
-
-**Primary key:** (`user_id`, `role_id`)
+**Indexes:** `username` (unique), `email` (unique), `created_by`
 
 ### `sessions`
 
@@ -95,34 +57,48 @@ Dashboard sessions.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `user_id` | text | REFERENCES `users(id)` |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `user_id` | integer | NOT NULL REFERENCES users(id) ON DELETE CASCADE |
 | `token_hash` | text | UNIQUE NOT NULL |
-| `user_agent` | text | NULLABLE |
-| `ip_address` | text | NULLABLE |
-| `expires_at` | timestamptz | NOT NULL |
-| `revoked_at` | timestamptz | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
+| `expires_at` | datetime | NOT NULL |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `revoked_at` | datetime | NULLABLE |
+| `impersonated_by` | integer | REFERENCES users(id) |
 
-**Indexes:** `user_id`, `token_hash`, `expires_at`
+**Indexes:** `token_hash` (unique), `user_id`
 
-### `api_tokens`
+### `service_tokens`
 
-CLI and API tokens.
+Service-to-service auth tokens (agent, metrics ingestion).
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `user_id` | text | REFERENCES `users(id)` |
-| `name` | text | NOT NULL |
-| `token_hash` | text | UNIQUE NOT NULL |
-| `scopes` | text | NOT NULL DEFAULT `[]` |
-| `last_used_at` | timestamptz | NULLABLE |
-| `expires_at` | timestamptz | NULLABLE |
-| `revoked_at` | timestamptz | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `name` | text | UNIQUE NOT NULL |
+| `key_hash` | text | UNIQUE NOT NULL |
+| `scopes` | text | NOT NULL DEFAULT '*' |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `expires_at` | datetime | NULLABLE |
+| `last_used_at` | datetime | NULLABLE |
 
-**Indexes:** `user_id`, `token_hash`, `revoked_at`
+**Indexes:** `key_hash` (unique)
+
+### `registration_tokens`
+
+One-time tokens for agent registration.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `token_hash` | text | NOT NULL |
+| `created_by` | integer | NULLABLE |
+| `expires_at` | datetime | NOT NULL |
+| `used_at` | datetime | NULLABLE |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+**Indexes:** `token_hash`
+
+---
 
 ## Server and Agent Tables
 
@@ -132,64 +108,26 @@ Managed servers/VPS instances.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `name` | text | UNIQUE NOT NULL |
-| `host` | text | NULLABLE |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `name` | text | NOT NULL |
+| `hostname` | text | NOT NULL |
+| `ip_address` | text | NULLABLE |
+| `status` | text | NOT NULL DEFAULT 'pending' |
+| `agent_token` | text | NOT NULL |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `agent_url` | text | NULLABLE |
+| `ipv6` | text | NULLABLE |
 | `provider` | text | NULLABLE |
-| `status` | text | NOT NULL (`pending`, `online`, `offline`, `error`, `disabled`) |
-| `os_name` | text | NULLABLE |
-| `os_version` | text | NULLABLE |
-| `arch` | text | NULLABLE |
-| `last_seen_at` | timestamptz | NULLABLE |
-| `created_by` | text | REFERENCES `users(id)` |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
-| `deleted_at` | timestamptz | NULLABLE |
+| `ssh_port` | integer | DEFAULT 22 |
+| `description` | text | DEFAULT '' |
+| `last_health_check` | datetime | NULLABLE |
+| `health_status` | text | DEFAULT 'unknown' |
+| `health_latency_ms` | integer | DEFAULT 0 |
 
-**Indexes:** `status`, `last_seen_at`
+**Status:** `pending`, `online`, `offline`, `error`, `disabled`
 
-### `agents`
-
-Agent identity per server.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `server_id` | text | REFERENCES `servers(id)` |
-| `version` | text | NULLABLE |
-| `fingerprint` | text | UNIQUE NOT NULL |
-| `auth_hash` | text | NULLABLE |
-| `status` | text | NOT NULL (`pending`, `active`, `revoked`) |
-| `registered_at` | timestamptz | NULLABLE |
-| `last_heartbeat_at` | timestamptz | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
-
-**Indexes:** `server_id`, `fingerprint`, `status`
-
-### `agent_bootstrap_tokens`
-
-One-time tokens for agent registration.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `server_id` | text | REFERENCES `servers(id)` |
-| `token_hash` | text | UNIQUE NOT NULL |
-| `expires_at` | timestamptz | NOT NULL |
-| `used_at` | timestamptz | NULLABLE |
-| `created_by` | text | REFERENCES `users(id)` |
-| `created_at` | timestamptz | NOT NULL |
-
-### `server_capabilities`
-
-Latest capability report.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `server_id` | text | PRIMARY KEY REFERENCES `servers(id)` |
-| `capabilities` | text | NOT NULL |
-| `reported_at` | timestamptz | NOT NULL |
+---
 
 ## Site Tables
 
@@ -199,98 +137,126 @@ Managed sites/applications.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `server_id` | text | REFERENCES `servers(id)` |
-| `primary_domain` | text | NOT NULL |
-| `runtime` | text | NOT NULL (`static`, `node`, `go`, `php`, `python`, `docker`) |
-| `status` | text | NOT NULL (`provisioning`, `active`, `disabled`, `error`, `deleting`) |
-| `site_user` | text | NULLABLE |
-| `root_path` | text | NULLABLE |
-| `current_release_path` | text | NULLABLE |
-| `ssl_enabled` | boolean | NOT NULL DEFAULT false |
-| `created_by` | text | REFERENCES `users(id)` |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
-| `deleted_at` | timestamptz | NULLABLE |
-
-**Indexes:** `server_id`, `primary_domain`, `status`, `runtime`
-
-**Constraint:** Unique active domain via partial unique index on `lower(primary_domain)` where `deleted_at` is null.
-
-### `site_domains`
-
-Additional domains and aliases.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `site_id` | text | REFERENCES `sites(id)` |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `server_id` | integer | NOT NULL REFERENCES servers(id) ON DELETE CASCADE |
+| `name` | text | NOT NULL |
 | `domain` | text | NOT NULL |
-| `type` | text | NOT NULL (`primary`, `alias`, `redirect`) |
-| `created_at` | timestamptz | NOT NULL |
+| `runtime` | text | NOT NULL DEFAULT 'static' |
+| `root_path` | text | NOT NULL |
+| `status` | text | NOT NULL DEFAULT 'pending' |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `owner_id` | integer | REFERENCES users(id) |
+| `ssl_status` | text | NULLABLE |
+| `ssl_issuer` | text | NULLABLE |
+| `ssl_expires_at` | datetime | NULLABLE |
+| `ssl_last_check` | datetime | NULLABLE |
+| `git_repo` | text | NULLABLE |
+| `git_branch` | text | DEFAULT 'main' |
+| `git_commit` | text | NULLABLE |
+| `deploy_key` | text | NULLABLE |
+| `webhook_secret` | text | NULLABLE |
+| `managed_by` | text | NOT NULL DEFAULT 'sigardapanel' |
+| `system_user` | text | NULLABLE |
+| `conf_file` | text | NULLABLE |
+| `proxy_pass_url` | text | NULLABLE |
+| `app_port` | integer | NULLABLE |
+| `app_command` | text | DEFAULT '' |
+| `app_status` | text | DEFAULT 'stopped' |
+| `app_memory_max` | integer | DEFAULT 512 |
+| `php_version` | text | DEFAULT '' |
+| `php_ini` | text | DEFAULT '' |
+| `backup_provider_id` | integer | NULLABLE |
 
-### `site_env_vars`
+**Runtimes:** `static`, `php`, `node`, `go`, `python`, `proxy`, `docker`
 
-Environment variable metadata per site.
+**Indexes:** `server_id`, `domain`, `owner_id`, `managed_by`, `system_user`
 
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `site_id` | text | REFERENCES `sites(id)` |
-| `key` | text | NOT NULL |
-| `value_ref` | text | NOT NULL |
-| `is_secret` | boolean | NOT NULL DEFAULT true |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
+### `user_sites`
 
-**Constraint:** UNIQUE (`site_id`, `key`)
-
-### `site_permissions`
-
-User access to specific sites.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `site_id` | text | REFERENCES `sites(id)` |
-| `user_id` | text | REFERENCES `users(id)` |
-| `role_id` | text | REFERENCES `roles(id)` |
-| `created_at` | timestamptz | NOT NULL |
-
-**Primary key:** (`site_id`, `user_id`, `role_id`)
-
-## Deployment Tables
-
-### `deployments`
-
-Deployment history.
+User-to-site access mapping.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `site_id` | text | REFERENCES `sites(id)` |
-| `job_id` | text | NULLABLE REFERENCES `jobs(id)` |
-| `source_type` | text | NOT NULL (`git`, `artifact`, `manual`) |
-| `source_ref` | text | NULLABLE |
-| `commit_sha` | text | NULLABLE |
-| `release_path` | text | NULLABLE |
-| `status` | text | NOT NULL (`pending`, `running`, `succeeded`, `failed`, `rolled_back`) |
-| `started_at` | timestamptz | NULLABLE |
-| `finished_at` | timestamptz | NULLABLE |
-| `created_by` | text | REFERENCES `users(id)` |
-| `created_at` | timestamptz | NOT NULL |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `user_id` | integer | NOT NULL REFERENCES users(id) ON DELETE CASCADE |
+| `site_id` | integer | NOT NULL REFERENCES sites(id) ON DELETE CASCADE |
+| `permission` | text | NOT NULL DEFAULT 'read' CHECK ('read','write','admin') |
+| `created_at` | timestamp | DEFAULT CURRENT_TIMESTAMP |
 
-### `deployment_artifacts`
+**Constraint:** UNIQUE(`user_id`, `site_id`)
 
-Deployment artifact metadata.
+### `site_vhost`
+
+Custom Nginx vhost configuration per site.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `deployment_id` | text | REFERENCES `deployments(id)` |
-| `storage_path` | text | NOT NULL |
-| `checksum` | text | NULLABLE |
-| `size_bytes` | integer | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `site_id` | integer | UNIQUE NOT NULL REFERENCES sites(id) ON DELETE CASCADE |
+| `config` | text | NOT NULL DEFAULT '' |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+### `site_varnish`
+
+Varnish cache configuration per site.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `site_id` | integer | UNIQUE NOT NULL REFERENCES sites(id) ON DELETE CASCADE |
+| `enabled` | integer | NOT NULL DEFAULT 0 |
+| `cache_time` | integer | NOT NULL DEFAULT 3600 |
+| `hit_rate` | text | NOT NULL DEFAULT '0%' |
+| `backend_host` | text | NOT NULL DEFAULT '127.0.0.1' |
+| `backend_port` | integer | NOT NULL DEFAULT 80 |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+### `site_security`
+
+Security configuration per site.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `site_id` | integer | UNIQUE NOT NULL REFERENCES sites(id) ON DELETE CASCADE |
+| `basic_auth_enabled` | integer | NOT NULL DEFAULT 0 |
+| `basic_auth_username` | text | NOT NULL DEFAULT '' |
+| `basic_auth_password` | text | NOT NULL DEFAULT '' |
+| `blocked_ips` | text | NOT NULL DEFAULT '[]' |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+### `site_ssh_ftp`
+
+SSH/FTP user accounts per site.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `site_id` | integer | NOT NULL REFERENCES sites(id) ON DELETE CASCADE |
+| `username` | text | NOT NULL |
+| `password` | text | NOT NULL DEFAULT '' |
+| `ssh_keys` | text | NOT NULL DEFAULT '' |
+| `home_dir` | text | NOT NULL DEFAULT '' |
+| `ssh_private_key` | text | NOT NULL DEFAULT '' |
+| `ssh_public_key` | text | NOT NULL DEFAULT '' |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+**Constraint:** UNIQUE(`site_id`, `username`)
+
+### `site_cron_jobs`
+
+Cron jobs per site.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `site_id` | integer | NOT NULL REFERENCES sites(id) ON DELETE CASCADE |
+| `schedule` | text | NOT NULL DEFAULT '* * * * *' |
+| `command` | text | NOT NULL |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+---
 
 ## Job Tables
 
@@ -300,65 +266,42 @@ Async job queue.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `server_id` | integer | REFERENCES servers(id) ON DELETE CASCADE |
+| `site_id` | integer | REFERENCES sites(id) ON DELETE CASCADE |
 | `type` | text | NOT NULL |
-| `status` | text | NOT NULL (`queued`, `running`, `succeeded`, `failed`, `canceled`) |
-| `priority` | integer | NOT NULL DEFAULT 0 |
-| `target_type` | text | NULLABLE |
-| `target_id` | text | NULLABLE |
-| `server_id` | text | NULLABLE REFERENCES `servers(id)` |
-| `payload` | text | NOT NULL DEFAULT `{}` |
+| `status` | text | NOT NULL DEFAULT 'queued' |
+| `payload` | text | NULLABLE |
 | `result` | text | NULLABLE |
-| `error_code` | text | NULLABLE |
-| `error_message` | text | NULLABLE |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `error` | text | NULLABLE |
 | `attempts` | integer | NOT NULL DEFAULT 0 |
-| `max_attempts` | integer | NOT NULL DEFAULT 1 |
-| `available_at` | timestamptz | NOT NULL |
-| `started_at` | timestamptz | NULLABLE |
-| `finished_at` | timestamptz | NULLABLE |
-| `created_by` | text | NULLABLE REFERENCES `users(id)` |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
+| `max_attempts` | integer | NOT NULL DEFAULT 3 |
+| `started_at` | datetime | NULLABLE |
+| `completed_at` | datetime | NULLABLE |
+| `next_retry_at` | datetime | NULLABLE |
 
-**Indexes:** (`status`, `priority`, `available_at`), `server_id`, (`target_type`, `target_id`), `created_at`
+**Status:** `queued`, `running`, `succeeded`, `failed`, `canceled`
 
-**Note:** Payload must never contain plaintext secrets.
+**Indexes:** `status`, `server_id`, (`status`, `type`), partial index on `next_retry_at` WHERE status='queued'
 
 ### `job_logs`
 
-Per-job log entries.
+Per-line job output.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `id` | integer | PRIMARY KEY AUTOINCREMENT |
-| `job_id` | text | REFERENCES `jobs(id)` |
-| `level` | text | NOT NULL (`debug`, `info`, `warn`, `error`) |
+| `job_id` | integer | NOT NULL REFERENCES jobs(id) ON DELETE CASCADE |
+| `line_number` | integer | NOT NULL |
 | `message` | text | NOT NULL |
-| `metadata` | text | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
+| `stream` | text | NOT NULL DEFAULT 'stdout' |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
 
-**Index:** (`job_id`, `created_at`)
+**Indexes:** `job_id`, (`job_id`, `line_number`)
 
-## SSL Tables
-
-### `ssl_certificates`
-
-SSL certificate metadata.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `site_id` | text | REFERENCES `sites(id)` |
-| `domain` | text | NOT NULL |
-| `issuer` | text | NULLABLE |
-| `status` | text | NOT NULL (`pending`, `active`, `expired`, `failed`, `revoked`) |
-| `not_before` | timestamptz | NULLABLE |
-| `not_after` | timestamptz | NULLABLE |
-| `last_renewed_at` | timestamptz | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
-
-**Indexes:** `site_id`, `domain`, `not_after`, `status`
+---
 
 ## Backup Tables
 
@@ -368,44 +311,227 @@ Backup metadata.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `site_id` | text | NULLABLE REFERENCES `sites(id)` |
-| `server_id` | text | NULLABLE REFERENCES `servers(id)` |
-| `job_id` | text | NULLABLE REFERENCES `jobs(id)` |
-| `type` | text | NOT NULL (`site`, `database`, `full`) |
-| `status` | text | NOT NULL (`pending`, `running`, `succeeded`, `failed`, `deleted`) |
-| `storage` | text | NOT NULL (`local`, `s3`, `sftp`) |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `site_id` | integer | NOT NULL REFERENCES sites(id) ON DELETE CASCADE |
+| `status` | text | NOT NULL DEFAULT 'pending' |
+| `storage_type` | text | NOT NULL DEFAULT 'local' |
 | `storage_path` | text | NULLABLE |
-| `checksum` | text | NULLABLE |
-| `size_bytes` | integer | NULLABLE |
-| `created_by` | text | REFERENCES `users(id)` |
-| `created_at` | timestamptz | NOT NULL |
-| `completed_at` | timestamptz | NULLABLE |
-| `expires_at` | timestamptz | NULLABLE |
+| `size_bytes` | integer | NOT NULL DEFAULT 0 |
+| `file_count` | integer | NOT NULL DEFAULT 0 |
+| `error` | text | NULLABLE |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `completed_at` | datetime | NULLABLE |
+| `expires_at` | datetime | NULLABLE |
+| `s3_path` | text | NULLABLE |
+| `progress` | text | DEFAULT '' |
 
-**Indexes:** `site_id`, `server_id`, `status`, `created_at`, `expires_at`
+**Status:** `pending`, `running`, `archiving`, `succeeded`, `failed`, `deleted`
 
-## Secret Tables
+**Indexes:** `site_id`, `status`, `created_at`
 
-### `secrets`
+### `backup_storage_providers`
 
-Secret metadata and encrypted values.
+External backup storage (S3/B2/R2/Wasabi).
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `scope_type` | text | NOT NULL (`global`, `server`, `site`, `user`) |
-| `scope_id` | text | NULLABLE |
-| `key` | text | NOT NULL |
-| `encrypted_value` | blob | NOT NULL |
-| `value_hash` | text | NULLABLE |
-| `created_by` | text | NULLABLE REFERENCES `users(id)` |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `name` | text | NOT NULL |
+| `provider_type` | text | NOT NULL DEFAULT 's3' CHECK('s3','b2','r2','wasabi','digitalocean','generic') |
+| `bucket` | text | NOT NULL |
+| `endpoint` | text | NOT NULL |
+| `region` | text | NOT NULL DEFAULT 'auto' |
+| `access_key` | text | NOT NULL |
+| `secret_key` | text | NOT NULL |
+| `is_default` | integer | NOT NULL DEFAULT 0 |
+| `retention_days` | integer | NOT NULL DEFAULT 0 |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
 
-**Indexes:** (`scope_type`, `scope_id`), `key`
+**Indexes:** `is_default`
 
-**Constraint:** UNIQUE (`scope_type`, `scope_id`, `key`)
+### `backup_schedules`
+
+Per-site backup schedules.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `site_id` | integer | NOT NULL REFERENCES sites(id) ON DELETE CASCADE |
+| `provider_id` | integer | NULLABLE |
+| `cron_expr` | text | NOT NULL DEFAULT '' |
+| `backup_type` | text | NOT NULL DEFAULT 'files' |
+| `enabled` | integer | NOT NULL DEFAULT 1 |
+| `last_run_at` | datetime | NULLABLE |
+| `next_run_at` | datetime | NULLABLE |
+| `created_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
+
+**Indexes:** `site_id`, (`enabled`, `next_run_at`)
+
+### `backup_configs`
+
+Global backup configurations (multi-site).
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `name` | text | NOT NULL DEFAULT '' |
+| `scope_type` | text | NOT NULL DEFAULT 'files' |
+| `site_ids` | text | NOT NULL DEFAULT '[]' |
+| `provider_id` | integer | NULLABLE |
+| `cron_expr` | text | NOT NULL DEFAULT '' |
+| `enabled` | integer | NOT NULL DEFAULT 1 |
+| `exclude_patterns` | text | NOT NULL DEFAULT '[]' |
+| `database_ids` | text | NOT NULL DEFAULT '[]' |
+| `retention_days` | integer | NOT NULL DEFAULT 30 |
+| `last_run_at` | datetime | NULLABLE |
+| `next_run_at` | datetime | NULLABLE |
+| `created_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
+
+**Indexes:** (`enabled`, `next_run_at`)
+
+---
+
+## Database Management Tables
+
+### `database_servers`
+
+External MySQL/MariaDB server connections.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `name` | text | NOT NULL DEFAULT 'Local MySQL' |
+| `engine` | text | NOT NULL DEFAULT 'MariaDB' |
+| `host` | text | NOT NULL DEFAULT '127.0.0.1' |
+| `port` | integer | NOT NULL DEFAULT 3306 |
+| `username` | text | NOT NULL DEFAULT 'root' |
+| `password_encrypted` | text | NOT NULL |
+| `is_active` | integer | NOT NULL DEFAULT 1 |
+| `is_default` | integer | NOT NULL DEFAULT 1 |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+### `databases`
+
+Managed databases.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `site_id` | integer | NOT NULL REFERENCES sites(id) ON DELETE CASCADE |
+| `name` | text | NOT NULL |
+| `type` | text | NOT NULL |
+| `charset` | text | NOT NULL DEFAULT 'utf8mb4' |
+| `collation` | text | NOT NULL DEFAULT 'utf8mb4_unicode_ci' |
+| `size_bytes` | integer | NOT NULL DEFAULT 0 |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+**Indexes:** `site_id`, `name`
+
+### `db_users`
+
+Database user accounts.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `database_id` | integer | NOT NULL REFERENCES databases(id) ON DELETE CASCADE |
+| `username` | text | NOT NULL |
+| `password_hash` | text | NOT NULL |
+| `host_pattern` | text | NOT NULL DEFAULT 'localhost' |
+| `privileges` | text | NOT NULL DEFAULT 'ALL' |
+| `encrypted_password` | text | NOT NULL DEFAULT '' |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+**Indexes:** `database_id`, `username`
+
+---
+
+## Metrics Tables
+
+### `server_metrics`
+
+Per-server resource metrics.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `server_id` | integer | NOT NULL REFERENCES servers(id) ON DELETE CASCADE |
+| `collected_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `cpu_percent` | real | NULLABLE |
+| `mem_used` | integer | NULLABLE |
+| `mem_total` | integer | NULLABLE |
+| `disk_used` | integer | NULLABLE |
+| `disk_total` | integer | NULLABLE |
+| `net_in_bytes` | integer | NULLABLE |
+| `net_out_bytes` | integer | NULLABLE |
+| `swap_used` | integer | NULLABLE |
+| `swap_total` | integer | NULLABLE |
+
+**Indexes:** `server_id`, `collected_at`, (`server_id`, `collected_at`)
+
+---
+
+## Notification Tables
+
+### `alert_channels`
+
+Alert output channels (Telegram, Discord, email, webhook).
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `name` | text | NOT NULL |
+| `type` | text | NOT NULL |
+| `enabled` | integer | NOT NULL DEFAULT 1 |
+| `config` | text | NOT NULL |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+**Indexes:** `type`
+
+### `alerts`
+
+Alert events sent through channels.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `channel_id` | integer | NOT NULL REFERENCES alert_channels(id) ON DELETE CASCADE |
+| `severity` | text | NOT NULL |
+| `subject` | text | NOT NULL |
+| `message` | text | NOT NULL |
+| `status` | text | NOT NULL DEFAULT 'pending' |
+| `error` | text | NULLABLE |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `sent_at` | datetime | NULLABLE |
+
+**Indexes:** `channel_id`, `status`, `created_at`
+
+### `notifications`
+
+In-app notifications (per-user).
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `user_id` | integer | NOT NULL |
+| `type` | text | NOT NULL DEFAULT 'info' |
+| `title` | text | NOT NULL |
+| `message` | text | NOT NULL DEFAULT '' |
+| `severity` | text | NOT NULL DEFAULT 'info' |
+| `read` | integer | NOT NULL DEFAULT 0 |
+| `entity_type` | text | NOT NULL DEFAULT '' |
+| `entity_id` | integer | NOT NULL DEFAULT 0 |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+| `read_at` | datetime | NULLABLE |
+
+**Indexes:** `user_id`, (`user_id`, `read`), `created_at DESC`
+
+---
 
 ## Audit Tables
 
@@ -416,89 +542,111 @@ Audit events.
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `id` | integer | PRIMARY KEY AUTOINCREMENT |
-| `request_id` | text | NULLABLE |
-| `actor_id` | text | NULLABLE REFERENCES `users(id)` |
-| `actor_type` | text | NOT NULL (`user`, `token`, `agent`, `system`) |
+| `user_id` | integer | REFERENCES users(id) |
 | `action` | text | NOT NULL |
-| `target_type` | text | NULLABLE |
-| `target_id` | text | NULLABLE |
-| `server_id` | text | NULLABLE REFERENCES `servers(id)` |
-| `status` | text | NOT NULL (`success`, `failure`) |
-| `ip_address` | text | NULLABLE |
-| `user_agent` | text | NULLABLE |
-| `metadata` | text | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
+| `resource` | text | NOT NULL |
+| `resource_id` | integer | NULLABLE |
+| `details` | text | NULLABLE |
+| `created_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |
 
-**Indexes:** `actor_id`, `action`, (`target_type`, `target_id`), `server_id`, `status`, `created_at`
+**Indexes:** `user_id`, `created_at`
 
-**Note:** Metadata must be masked from secrets.
+---
 
-## Metrics Tables
+## Integration Tables
 
-### `server_metrics`
+### `cloudflare_config`
 
-Lightweight per-server metrics.
+Cloudflare API configuration.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY CHECK (id = 1) |
+| `api_token` | text | NOT NULL DEFAULT '' |
+| `email` | text | DEFAULT '' |
+| `user_id` | integer | DEFAULT NULL |
+| `created_at` | timestamp | DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | timestamp | DEFAULT CURRENT_TIMESTAMP |
+
+**Constraint:** UNIQUE(`user_id`) WHERE user_id IS NOT NULL
+
+---
+
+## License & Billing Tables
+
+### `licenses`
+
+System license keys.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `id` | integer | PRIMARY KEY AUTOINCREMENT |
-| `server_id` | text | REFERENCES `servers(id)` |
-| `cpu_percent` | real | NULLABLE |
-| `memory_used_bytes` | integer | NULLABLE |
-| `memory_total_bytes` | integer | NULLABLE |
-| `disk_used_bytes` | integer | NULLABLE |
-| `disk_total_bytes` | integer | NULLABLE |
-| `load_average` | real | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
+| `key` | text | UNIQUE NOT NULL |
+| `tier` | text | NOT NULL DEFAULT 'free' |
+| `activated_at` | datetime | NULLABLE |
+| `expires_at` | datetime | NULLABLE |
+| `max_servers` | integer | DEFAULT 1 |
+| `features` | text | DEFAULT '{}' |
+| `created_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
 
-**Index:** (`server_id`, `created_at`)
+### `feature_flags`
 
-**Note:** Retention policy required to prevent table bloat.
-
-### `site_metrics`
-
-Lightweight per-site metrics.
+Feature gating per tier.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `id` | integer | PRIMARY KEY AUTOINCREMENT |
-| `site_id` | text | REFERENCES `sites(id)` |
-| `cpu_percent` | real | NULLABLE |
-| `memory_bytes` | integer | NULLABLE |
-| `requests_count` | integer | NULLABLE |
-| `error_count` | integer | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
-
-**Index:** (`site_id`, `created_at`)
-
-## Notification Tables
-
-### `notification_channels`
-
-Alert channels.
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `id` | text | PRIMARY KEY |
+| `key` | text | UNIQUE NOT NULL |
 | `name` | text | NOT NULL |
-| `type` | text | NOT NULL (`telegram`, `discord`, `email`, `webhook`) |
-| `config_secret_ref` | text | NULLABLE |
-| `enabled` | boolean | NOT NULL DEFAULT true |
-| `created_by` | text | REFERENCES `users(id)` |
-| `created_at` | timestamptz | NOT NULL |
-| `updated_at` | timestamptz | NOT NULL |
+| `tier` | text | NOT NULL DEFAULT 'pro' |
+| `enabled` | integer | DEFAULT 1 |
+| `created_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
 
-### `alerts`
+### `plans`
 
-Alert events.
+Billing plans.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `id` | text | PRIMARY KEY |
-| `type` | text | NOT NULL |
-| `severity` | text | NOT NULL (`info`, `warning`, `critical`) |
-| `target_type` | text | NULLABLE |
-| `target_id` | text | NULLABLE |
-| `message` | text | NOT NULL |
-| `resolved_at` | timestamptz | NULLABLE |
-| `created_at` | timestamptz | NOT NULL |
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `name` | text | UNIQUE NOT NULL |
+| `slug` | text | UNIQUE NOT NULL |
+| `price_idr` | integer | DEFAULT 0 |
+| `billing_cycle` | text | DEFAULT 'monthly' |
+| `features` | text | DEFAULT '{}' |
+| `is_active` | boolean | DEFAULT 1 |
+| `created_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
+
+### `license_orders`
+
+License purchase orders.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PRIMARY KEY AUTOINCREMENT |
+| `user_id` | integer | REFERENCES users(id) |
+| `plan_id` | integer | REFERENCES plans(id) |
+| `status` | text | DEFAULT 'pending' |
+| `payment_method` | text | NULLABLE |
+| `payment_proof` | text | NULLABLE |
+| `amount_idr` | integer | DEFAULT 0 |
+| `notes` | text | NULLABLE |
+| `admin_notes` | text | NULLABLE |
+| `approved_by` | integer | REFERENCES users(id) |
+| `created_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
+| `updated_at` | datetime | DEFAULT CURRENT_TIMESTAMP |
+
+---
+
+## Settings Tables
+
+### `app_settings`
+
+Global application settings (key-value).
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `key` | text | PRIMARY KEY |
+| `value` | text | NOT NULL DEFAULT '' |
+| `updated_at` | datetime | NOT NULL DEFAULT CURRENT_TIMESTAMP |

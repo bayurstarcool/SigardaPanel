@@ -5,28 +5,34 @@ SigardaPanel is a self-hosted VPS management panel built with Go. It consists of
 ## Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Panel Server                           │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  API Server  │  │  Dashboard   │  │  Job Worker  │      │
-│  │   (Go/Echo)  │  │ (SvelteKit)  │  │  (Async)     │      │
-│  └──────┬───────┘  └──────────────┘  └──────┬───────┘      │
-│         │                                    │              │
-│         └──────────────┬─────────────────────┘              │
-│                        │                                    │
-│              ┌─────────▼─────────┐                          │
-│              │    SQLite DB      │                          │
-│              │   (WAL mode)      │                          │
-│              └───────────────────┘                          │
-└──────────────────────────┬──────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    Panel Server (:7700)                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│  │  API Server  │  │  Dashboard   │  │  Job Worker   │   │
+│  │  (Go/Echo)   │  │ (SvelteKit)  │  │  (Async)      │   │
+│  └──────┬───────┘  └──────────────┘  └──────┬───────┘   │
+│         │                                    │           │
+│         └──────────────┬─────────────────────┘           │
+│                        │                                 │
+│              ┌─────────▼─────────┐                       │
+│              │    SQLite DB      │                       │
+│              │   (WAL mode)      │                       │
+│              └───────────────────┘                       │
+└──────────────────────────┬──────────────────────────────┘
                            │
               ┌────────────▼────────────┐
-              │    Agent (per VPS)      │
+              │    Agent (:7710) per VPS │
               │  ┌──────────────────┐   │
               │  │  Task Executor   │   │
               │  │  Nginx Manager   │   │
               │  │  SSL Handler     │   │
               │  │  Systemd Control │   │
+              │  │  Docker Manager  │   │
+              │  │  File Manager    │   │
+              │  │  Terminal (PTY)  │   │
+              │  │  Firewall (UFW)  │   │
+              │  │  Fail2ban        │   │
+              │  │  Redis/Memcached │   │
               │  └──────────────────┘   │
               └─────────────────────────┘
 ```
@@ -36,22 +42,46 @@ SigardaPanel is a self-hosted VPS management panel built with Go. It consists of
 ### Panel API
 
 - **Language:** Go (Echo framework)
+- **Port:** `:7700`
 - **Responsibilities:**
-  - Authentication and RBAC
+  - Authentication and RBAC (roles: super_admin, admin, user)
+  - 2FA/TOTP with recovery codes
+  - User impersonation
   - Server and site management
   - Job orchestration and queue management
   - Audit logging
   - Agent communication and health checks
+  - Metrics ingestion and history
+  - Backup management with S3 support
+  - Database management (MySQL/MariaDB)
+  - Docker management
+  - Firewall (UFW) management
+  - Fail2ban management
+  - Redis management
+  - PM2 process management
+  - Cloudflare DNS integration
+  - License and feature gating
+  - In-app notifications and alerts
   - REST API for dashboard and CLI
 
 ### Web Dashboard
 
 - **Technology:** SvelteKit + Tailwind CSS
+- **Port:** `:7720`
 - **Responsibilities:**
   - Administrative interface
   - Job progress and log viewer
   - Site and server management
-  - Secure credential input with masking
+  - File manager
+  - WebSocket terminal (PTY)
+  - Docker management UI
+  - Firewall/Fail2ban UI
+  - Backup management UI
+  - Database management UI
+  - Monitoring and metrics dashboard
+  - Cloudflare DNS management
+  - Notifications center
+  - License and billing management
 
 ### CLI / Unified Binary
 
@@ -64,27 +94,44 @@ SigardaPanel is a self-hosted VPS management panel built with Go. It consists of
   - Site deployment
   - Log and job monitoring
   - System diagnostics (`doctor`)
+  - All operations available via CLI
 
 ### Agent
 
 - **Language:** Go
+- **Port:** `:7710`
 - **Responsibilities:**
   - Execute server operations
-  - Manage reverse proxy configuration
+  - Manage reverse proxy configuration (Nginx)
   - Manage systemd services
-  - Issue and renew SSL certificates
-  - Stream logs
+  - Issue and renew SSL certificates (Let's Encrypt)
+  - Docker container management
+  - File manager operations
+  - WebSocket PTY terminal (session persistence)
+  - Firewall (UFW) management
+  - Fail2ban management
+  - Redis/Memcached management
+  - PM2 process management
+  - Bot blocker management
+  - Stream logs and metrics
   - Report health and capabilities
 
 ### Database
 
 - **Engine:** SQLite with WAL mode
 - **Data:**
-  - Users, roles, sessions
-  - Servers, agents, sites
-  - Jobs, deployments
+  - Users, sessions, service tokens
+  - Servers, agents, registration tokens
+  - Sites, user-site mappings
+  - Jobs, job logs
+  - Backups, backup configs, backup providers
+  - Databases, database users, database servers
+  - Server metrics
+  - Alert channels, alerts, notifications
   - Audit logs
-  - Encrypted secrets
+  - License, plans, orders
+  - Cloudflare config
+  - App settings
 
 ### Job Queue
 
@@ -92,7 +139,11 @@ SigardaPanel is a self-hosted VPS management panel built with Go. It consists of
 - **Behavior:**
   - Worker polls jobs table and dispatches to agents
   - Real-time progress updates
-  - Automatic retry with idempotency
+  - Automatic retry with backoff (max 3 attempts)
+  - Idempotent retries
+  - Job logs captured per-line
+
+---
 
 ## Workflows
 
@@ -120,14 +171,25 @@ SigardaPanel is a self-hosted VPS management panel built with Go. It consists of
 7. Agent restarts/reloads service
 8. Agent streams logs and progress to backend
 
-### Agent Installation
+### Agent Registration
 
-1. User runs agent installer on target VPS
-2. Installer detects OS, architecture, and dependencies
-3. Installer creates agent user and systemd service
-4. Agent registers with panel using bootstrap token
-5. Panel stores agent fingerprint and capabilities
-6. Agent begins heartbeat reporting
+1. Admin creates registration token via API
+2. User runs installer on target VPS with token
+3. Installer sends token to panel API
+4. Panel validates token, registers agent
+5. Agent begins heartbeat reporting
+6. Panel marks server online after valid heartbeat
+
+### Backup
+
+1. User triggers backup (manual or scheduled)
+2. Backend creates backup job
+3. Agent creates tar archive of site files
+4. Agent uploads to S3/storage provider (if configured)
+5. Backend updates backup record with paths and size
+6. Retention policy auto-expires old backups
+
+---
 
 ## Trust Boundary
 
@@ -154,6 +216,7 @@ SigardaPanel is a self-hosted VPS management panel built with Go. It consists of
 - Database state must not indicate success before agent confirms
 - Retries must be idempotent
 - All operations must have appropriate timeouts
+- Backup jobs stuck >30min auto-marked as failed
 
 ## Observability
 
@@ -161,4 +224,7 @@ SigardaPanel is a self-hosted VPS management panel built with Go. It consists of
 - Job ID in all async operations
 - Audit log for critical operations
 - Agent logs separated from application logs
-- Basic metrics per server and site
+- Server metrics (CPU, RAM, disk, network, swap)
+- GPU metrics
+- In-app notifications per user
+- Alert channels (Telegram, Discord, email, webhook)

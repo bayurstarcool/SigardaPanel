@@ -113,7 +113,7 @@ curl -sSL http://panel.yourdomain.com:7700/api/v1/agents/install?token=YOUR_TOKE
 sigardapanel agent
 
 # Custom address
-SIGARDAPANEL_AGENT_ADDR=:19090 sigardapanel agent
+SIGARDAPANEL_AGENT_ADDR=:7710 sigardapanel agent
 
 # Systemd
 sudo systemctl start sigardapanel-agent
@@ -127,7 +127,7 @@ sudo systemctl enable sigardapanel-agent
 sigardapanel api
 
 # Custom address
-SIGARDAPANEL_API_ADDR=:18080 sigardapanel api
+SIGARDAPANEL_API_ADDR=:7700 sigardapanel api
 ```
 
 ### CLI Commands
@@ -163,7 +163,7 @@ sigardapanel version
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SIGARDAPANEL_API_ADDR` | `:7700` | API server address |
-| `SIGARDAPANEL_AGENT_ADDR` | `:7790` | Agent address |
+| `SIGARDAPANEL_AGENT_ADDR` | `:7710` | Agent address |
 | `SIGARDAPANEL_AGENT_TOKEN` | - | Agent auth token |
 | `SIGARDAPANEL_DB_PATH` | `./sigardapanel.db` | Database path |
 

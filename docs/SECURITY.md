@@ -47,76 +47,91 @@ This document defines the security baseline for the SigardaPanel VPS management 
 
 ## Authentication
 
-- Passwords must use strong hashing: Argon2id or bcrypt
-- Session tokens must be cryptographically random and expire
-- API tokens must be stored hashed, not in plaintext
-- Tokens are displayed only once at creation time
-- 2FA/TOTP support planned for Beta/Stable releases
-- Rate limiting on login, token creation, and password reset endpoints
+### Implemented
+
+- **Password hashing:** Argon2id or bcrypt
+- **Session tokens:** Cryptographically random, expire after configured period
+- **Service tokens:** Stored hashed, for agent-to-panel communication
+- **Token display:** Shown only once at creation time
+- **2FA/TOTP:** Fully implemented with recovery codes
+- **Rate limiting:** Login (10 attempts/15min per IP), API (100 req/min per IP)
+- **Dev mode bypass:** Rate limiters disabled when `SIGARDAPANEL_DEV=true`
 
 ## Role-Based Access Control
 
-### Default Roles
+### Implemented Roles
 
 | Role | Description |
 |------|-------------|
-| `super_admin` | Full system access |
+| `super_admin` | Full system access, sees all sites and users |
 | `admin` | Manage servers, sites, users (except owner actions) |
-| `user` | Deploy, restart, view logs for assigned sites |
+| `user` | Deploy, restart, view logs for owned/assigned sites |
 
-### Granular Permissions
+### Site Isolation Model
 
-- `server.read`, `server.create`, `server.delete`
-- `site.read`, `site.create`, `site.update`, `site.delete`, `site.deploy`, `site.logs`
-- `ssl.manage`
-- `backup.create`, `backup.restore`
-- `user.manage`
-- `audit.read`
+- **Owner-based:** User who creates a site becomes the owner
+- **Assignment:** Owner can assign other users with `read`, `write`, or `admin` permission
+- **Linux user:** Each panel user gets a matching Linux system user
+- **Per-site terminal:** SSH terminal runs as `system_user` (not root)
 
-All permissions are validated by the backend before job creation. The agent must not accept tasks without valid signature/token from the backend.
+### Permission Matrix
+
+| Action | super_admin | Owner | admin (assigned) | write (assigned) | read (assigned) |
+|--------|:-----------:|:-----:|:----------------:|:----------------:|:---------------:|
+| View site | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Edit config | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Deploy | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Delete site | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Manage users | ✅ | ✅ | ❌ | ❌ | ❌ |
 
 ## Agent Security
 
-- Agent must authenticate all panel requests
-- Use mTLS or strong tokens with rotation plan
+### Implemented
+
+- Agent must authenticate all panel requests via registration token
 - Agent exposes endpoints only to required networks
-- Agent must validate task schema
-- Agent must enforce allowed paths
-- Agent must enforce allowed operations
-- Agent must not execute raw shell strings from user input
-- Agent must have per-operation timeouts
-- Agent must log operation IDs and job IDs
+- Agent validates task schema
+- Agent enforces allowed paths
+- Agent enforces allowed operations
+- Agent does not execute raw shell strings from user input
+- Agent has per-operation timeouts
+- Agent logs operation IDs and job IDs
 
 ## Command Execution
 
+### Implemented
+
 - Use `exec` with argument arrays, not `sh -c`, unless absolutely necessary
 - If shell is required, use internal templates with validated variables
-- Validate domains with strict parsers/regex
-- Validate usernames, database names, and service names with character allowlists
-- Validate paths using canonical path resolution and prefix checks against allowed roots
-- Custom build commands must be disabled by default or require approval/allowlist
-- Never interpolate user input into Nginx/Caddy configuration without escaping or safe templates
+- Domains validated with strict regex
+- Usernames, database names, service names validated with character allowlists
+- Paths validated using canonical path resolution and prefix checks
+- Custom build commands require approval/allowlist
+- Nginx configuration uses safe templates with escaped variables
 
 ## Path Safety
 
-- All file operations for a site must occur under the site root
-- Reject symlink escapes if the file manager supports symlinks
-- Reject `..`, null bytes, and absolute paths from user input
-- Use canonical paths before destructive operations
-- Delete operations must target registered resources, not arbitrary paths
+### Implemented
+
+- All file operations for a site occur under the site root
+- Symlink escapes rejected
+- `..`, null bytes, and absolute paths rejected from user input
+- Canonical paths used before destructive operations
+- Delete operations target registered resources, not arbitrary paths
 
 ## Secret Handling
 
-- Secrets must be encrypted at rest when possible
-- At minimum, never store secrets in plaintext in logs, audit, or jobs
-- Mask secrets in UI and CLI: show only short prefix/suffix
-- Site environment variables must not be fully exposed after storage
-- Deploy tokens and Git tokens must be scoped and revocable
-- Backup secrets and configurations must be encrypted or stored separately
+### Implemented
+
+- Secrets encrypted at rest when possible
+- Secrets never stored in plaintext in logs, audit, or jobs
+- Masked in UI and CLI: show only short prefix/suffix
+- Deploy tokens and Git tokens scoped and revocable
+- Backup secrets and configurations stored separately
 
 ## Audit Logging
 
-### Mandatory Audit Events
+### Mandatory Events (Implemented)
 
 - Login failures and successes
 - User creation, update, and deletion
@@ -127,7 +142,6 @@ All permissions are validated by the backend before job creation. The agent must
 - SSL issuance, renewal, and failures
 - Backup and restore operations
 - Service restart and reload
-- API token creation and revocation
 
 ### Audit Payload Safety
 
@@ -137,28 +151,40 @@ All permissions are validated by the backend before job creation. The agent must
 
 ## Dashboard Security
 
-- Enforce CSRF protection when using cookie sessions
-- Set cookies with `HttpOnly`, `Secure`, and `SameSite` attributes
-- Escape all user-generated output
-- Never trust client-provided role/permission values
-- Implement security headers
-- Avoid storing long-term tokens in localStorage when possible
+### Implemented
+
+- CSRF protection via cookie sessions
+- Cookies set with `HttpOnly`, `Secure`, and `SameSite` attributes
+- All user-generated output escaped
+- Client-provided role/permission values never trusted
+- Security headers set
 
 ## Backup and Restore Security
 
+### Implemented
+
 - Restore operations require specific permissions
-- Overwrite restores require explicit confirmation
-- Backup archives must be validated before extraction
-- Extraction must prevent zip-slip and tar path traversal
-- Remote backup credentials must be masked
+- Backup archives validated before extraction
+- Remote backup credentials masked
+- Deduplication prevents concurrent backup conflicts
+- Stuck jobs (>30min) auto-marked as failed
 
 ## Network Security
 
-- Panel HTTPS is mandatory for production
-- Agent endpoints should not be publicly exposed
-- IP allowlist support for admin/agent endpoints planned for future
-- Webhook endpoints must have secret/signature validation
-- Prevent SSRF from URL inputs with allowlists and private network blocking
+### Implemented
+
+- Agent endpoints not publicly exposed
+- Webhook endpoints have secret/signature validation
+- IP restrictions per site
+- Basic auth per site
+- Blocked IPs per site
+
+## IP Restrictions
+
+### Implemented
+
+- Per-site IP restrictions (CRUD)
+- Block/allow specific IPs per site
 
 ## Secure Defaults
 
@@ -168,3 +194,10 @@ All permissions are validated by the backend before job creation. The agent must
 - Site isolation enabled by default
 - Secret masking enabled by default
 - Audit logging enabled by default
+
+## License & Feature Gating
+
+- Feature flags per tier (free, pro, etc.)
+- License activation/deactivation
+- Server limits per license tier
+- Feature-gated endpoints (planned)

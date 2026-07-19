@@ -32,7 +32,7 @@ sigardapanel api
 **Agent (Target VPS):**
 
 ```bash
-export SIGARDAPANEL_AGENT_ADDR=:7790
+export SIGARDAPANEL_AGENT_ADDR=:7710
 export SIGARDAPANEL_AGENT_TOKEN=your_token
 
 sigardapanel agent
@@ -63,12 +63,13 @@ bash install-agent.sh --panel-url http://panel.yourdomain.com --token YOUR_TOKEN
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SIGARDAPANEL_API_ADDR` | `:7700` | API server address |
-| `SIGARDAPANEL_AGENT_ADDR` | `:7790` | Agent address |
+| `SIGARDAPANEL_AGENT_ADDR` | `:7710` | Agent address |
 | `SIGARDAPANEL_DB_PATH` | `sigardapanel.db` | Database file path |
 | `SIGARDAPANEL_API_URL` | `http://localhost:7700` | Panel API URL |
 | `SIGARDAPANEL_TOKEN` | - | API token from login |
 | `SIGARDAPANEL_AGENT_TOKEN` | - | Agent authentication token |
-| `SIGARDAPANEL_OUTPUT` | `json` | Output format: `json`, `table`, `yaml` |
+| `SIGARDAPANEL_OUTPUT` | `table` | Output format: `table`, `json`, `yaml` |
+| `SIGARDAPANEL_DEV` | `false` | Dev mode (hot reload, no rate limiters) |
 
 ## Systemd Services
 
@@ -88,6 +89,14 @@ sudo systemctl start sigardapanel-agent
 sudo systemctl enable sigardapanel-agent
 ```
 
+## Port Reference
+
+| Service | Default Port | Description |
+|---------|-------------|-------------|
+| API | `:7700` | Panel API server |
+| Agent | `:7710` | Agent service |
+| Frontend | `:7720` | SvelteKit dashboard |
+
 ## Verify Installation
 
 ```bash
@@ -98,16 +107,8 @@ sigardapanel doctor
 curl http://localhost:7700/api/v1/health
 
 # Check agent health
-curl http://localhost:7790/health
+curl http://localhost:7710/health
 ```
-
-## Port Reference
-
-| Service | Default Port | Description |
-|---------|--------------|-------------|
-| API | `:7700` | Panel API server |
-| Agent | `:7790` | Agent service |
-| Web UI | `:7780` | Dashboard (Enterprise) |
 
 ## Troubleshooting
 
@@ -122,7 +123,7 @@ curl http://localhost:7790/health
 
 1. Verify domain DNS points to server
 2. Check port 80 is accessible for ACME challenge
-3. Run: `sigardapanel ssl status --domain yourdomain.com`
+3. Run: `sigardapanel ssl status --site yourdomain.com`
 
 ### Database Issues
 

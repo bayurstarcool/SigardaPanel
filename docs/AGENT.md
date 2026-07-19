@@ -16,61 +16,26 @@ The agent is a Go service that runs on target servers to execute operations safe
 
 ## Communication
 
-### Priority Order
+### Current Implementation
 
-1. **HTTPS/mTLS** — between backend and agent (preferred)
-2. **Signed token requests** — with rotation plan
-3. **SSH mode** — only for bootstrap or fallback when requested
+- **Signed token requests** — agent authenticates with panel using registration token
+- Panel communicates with agent via HTTP on port `:7710`
+
+### Future
+
+- **HTTPS/mTLS** between backend and agent (planned)
+- **SSH mode** — only for bootstrap or fallback when requested
 
 ## Agent Registration
 
 ### Flow
 
-1. Backend creates bootstrap token
-2. User runs installer on target VPS
-3. Installer sends token to agent setup
-4. Agent registers with backend
-5. Backend stores agent fingerprint
-6. Agent sends capability report
-7. Backend marks server online after valid heartbeat
-
-## Capability Report
-
-The agent must report:
-
-| Capability | Description |
-|------------|-------------|
-| OS name/version | Operating system information |
-| Architecture | CPU architecture |
-| Agent version | Current agent version |
-| Hostname | Server hostname |
-| CPU/RAM/disk | Resource summary |
-| Reverse proxy | Available: nginx, caddy |
-| Runtimes | Available: node, go, php, python, docker |
-| Systemd | Systemd availability |
-| ACME/SSL | SSL certificate capability |
-| Allowed roots | Permitted directory roots |
-
-### Example Response
-
-```json
-{
-  "agent_version": "0.1.0",
-  "os": "ubuntu",
-  "os_version": "24.04",
-  "arch": "amd64",
-  "capabilities": {
-    "systemd": true,
-    "nginx": true,
-    "caddy": false,
-    "node": true,
-    "go": true,
-    "php": false,
-    "python": true,
-    "docker": false
-  }
-}
-```
+1. Admin creates registration token via API (`POST /api/v1/agents/tokens`)
+2. User runs installer on target VPS with token
+3. Installer sends token to panel API (`POST /api/v1/agents/register`)
+4. Panel validates token, registers agent
+5. Agent begins heartbeat reporting
+6. Panel marks server online after valid heartbeat
 
 ## Agent Endpoints
 
@@ -83,8 +48,15 @@ The agent must report:
 | `/tasks/site/deploy` | `POST` | Deploy site |
 | `/tasks/ssl/issue` | `POST` | Issue SSL certificate |
 | `/tasks/service/reload` | `POST` | Reload service |
+| `/tasks/fail2ban/*` | `POST` | Fail2ban management |
+| `/tasks/firewall/*` | `POST` | Firewall management |
+| `/tasks/docker/*` | `POST/GET` | Docker management |
+| `/tasks/pm2/*` | `POST` | PM2 management |
+| `/tasks/redis/*` | `GET/POST` | Redis management |
+| `/tasks/bot-blocker/*` | `POST` | Bot blocker management |
 | `/logs` | `GET` | Retrieve logs |
-| `/metrics` | `GET` | Retrieve metrics |
+| `/metrics` | `POST` | Receive metrics from agent |
+| `/ws/terminal` | `WS` | WebSocket PTY terminal |
 
 All mutation endpoints require authenticated requests from the backend.
 
@@ -119,7 +91,7 @@ The agent must reject tasks without `task_id`, `job_id`, `action`, or valid auth
 ### Steps
 
 1. Validate domain and site_id
-2. Create site directory in allowed root
+2. Create site directory under `/home/{system_user}/htdocs/{domain}`
 3. Create user/group per site if isolation enabled
 4. Generate runtime configuration
 5. Generate reverse proxy configuration
@@ -157,11 +129,6 @@ The agent must reject tasks without `task_id`, `job_id`, `action`, or valid auth
 - Run `nginx -t` before reload
 - Reload only if test succeeds
 
-### Caddy
-
-- Generate Caddyfile or JSON configuration
-- Validate configuration before reload if available
-
 ## Systemd Service
 
 For Node.js, Go, and Python applications:
@@ -173,6 +140,52 @@ For Node.js, Go, and Python applications:
 | WorkingDirectory | Site current release |
 | EnvironmentFile | Site environment file path |
 | Restart policy | `on-failure` |
+
+## WebSocket PTY Terminal
+
+- Full TUI support (htop, vim, nano, tmux)
+- Session persistence across reconnects
+- 64KB pending buffer when no client attached
+- Per-site terminal runs as `system_user` (not root)
+- Sticky keyboard shortcuts (Ctrl+C/Z/D/L/U, Tab, Esc, arrows)
+- Mobile-optimized input handling
+
+## Docker Management
+
+- Container lifecycle (list, create, start, stop, restart, remove)
+- Container logs and exec
+- Image management (list, search, pull, remove)
+- Docker Compose (up/down)
+- Volume management (list, create, remove)
+- Network management (list, create, remove)
+- Docker info and disk usage
+
+## Firewall (UFW)
+
+- Status check
+- Enable/disable
+- Allow/deny/delete rules
+- List rules
+- Reset
+
+## Fail2ban
+
+- Status and jail list
+- Ban/unban IPs
+- Enable/disable jails
+
+## Redis
+
+- Stats and info
+- Flush all/DB keys
+
+## PM2
+
+- Process management (start, stop, restart, delete, list)
+
+## Bot Blocker
+
+- Manage bot blocking rules
 
 ## Logs
 
@@ -192,16 +205,16 @@ The agent must support reading:
 
 ## Metrics
 
-### MVP Metrics
+### Implemented Metrics
 
 - CPU usage
-- RAM usage
-- Disk usage
-- Load average
-- Service status
-- Site process status
+- RAM usage (used/total)
+- Disk usage (used/total)
+- Swap usage (used/total)
+- Network I/O (bytes in/out)
+- GPU metrics (when available)
 
-Metrics must be lightweight. Avoid excessive polling frequency.
+Metrics must be lightweight. Agent pushes to panel via `POST /api/v1/servers/:id/metrics`.
 
 ## Safety Guards
 
