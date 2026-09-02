@@ -1,0 +1,23 @@
+# Go
+*.exe
+*.test
+*.out
+/tmp/
+cmd/hashpw/
+cmd/verifytest/
+cmd/totpcode/
+
+# Web
+web/node_modules/
+web/.svelte-kit/
+web/build/
+web/.env
+web/.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+*.log

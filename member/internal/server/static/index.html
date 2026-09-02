@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SigardaPanel Member Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+    @keyframes float { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-20px) scale(1.02); } }
+    @keyframes float2 { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(20px); } }
+    @keyframes float3 { 0%, 100% { transform: translateY(0) translateX(0); } 33% { transform: translateY(-15px) translateX(10px); } 66% { transform: translateY(10px) translateX(-5px); } }
+    @keyframes pulse-glow { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.8; } }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes gradient-shift { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+    @keyframes spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    @keyframes particle-float { 0% { transform: translateY(100vh) rotate(0deg); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translateY(-10vh) rotate(720deg); opacity: 0; } }
+    .float1 { animation: float 8s ease-in-out infinite; }
+    .float2 { animation: float2 10s ease-in-out infinite reverse; }
+    .float3 { animation: float3 12s ease-in-out infinite; }
+    .fade-in { animation: fade-in 0.6s ease-out both; }
+    .fade-in-1 { animation: fade-in 0.6s ease-out 0.1s both; }
+    .fade-in-2 { animation: fade-in 0.6s ease-out 0.2s both; }
+    .fade-in-3 { animation: fade-in 0.6s ease-out 0.3s both; }
+    .gradient-text { background-size: 200% 200%; animation: gradient-shift 6s ease infinite; }
+    .glow { box-shadow: 0 0 20px rgba(56,189,248,0.3), 0 0 60px rgba(56,189,248,0.1); }
+    .glow-hover:hover { box-shadow: 0 0 30px rgba(56,189,248,0.4), 0 0 80px rgba(56,189,248,0.15); }
+    .particle { animation: particle-float linear infinite; }
+    .glass { background: rgba(13, 21, 38, 0.8); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.06); }
+    .card-hover { transition: all 0.3s ease; }
+    .card-hover:hover { transform: translateY(-4px); box-shadow: 0 20px 40px rgba(0,0,0,0.3); }
+    input:focus, button:focus { outline: none; }
+    .input-glow:focus { box-shadow: 0 0 0 3px rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.4); }
+  </style>
+</head>
+<body class="min-h-screen bg-[#060d1f] text-white">
+  <!-- Animated Background -->
+  <div class="fixed inset-0 pointer-events-none overflow-hidden">
+    <div class="float1 absolute -top-32 -left-32 w-[600px] h-[600px] rounded-full blur-[120px] bg-sky-500/5"></div>
+    <div class="float2 absolute -bottom-40 -right-40 w-[700px] h-[700px] rounded-full blur-[120px] bg-indigo-500/5"></div>
+    <div class="float3 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full blur-[100px] bg-violet-500/3"></div>
+    <!-- Particles -->
+    <div id="particles"></div>
+    <!-- Grid -->
+    <div class="absolute inset-0 opacity-[0.02]" style="background-image: radial-gradient(rgba(255,255,255,0.04) 1px, transparent 1px); background-size: 40px 40px;"></div>
+  </div>
+
+  <div class="relative z-10" id="app"></div>
+
+  <script>
+    // Create particles
+    const particles = document.getElementById('particles');
+    for (let i = 0; i < 15; i++) {
+      const p = document.createElement('div');
+      p.className = 'particle absolute w-1 h-1 rounded-full bg-white/10';
+      p.style.cssText = `left:${Math.random()*100}%;animation-duration:${20+Math.random()*20}s;animation-delay:${Math.random()*10}s;`;
+      particles.appendChild(p);
+    }
+
+    const API = '';
+    let token = localStorage.getItem('member_token');
+    let member = JSON.parse(localStorage.getItem('member') || 'null');
+    const app = document.getElementById('app');
+
+    function render() {
+      const path = window.location.pathname;
+      if (path === '/register') renderRegister();
+      else if (path === '/login') renderLogin();
+      else if (path === '/dashboard' && token) renderDashboard();
+      else if (path === '/pricing') renderPricing();
+      else renderLanding();
+    }
+
+    function navigate(path) {
+      window.history.pushState({}, '', path);
+      render();
+    }
+
+    // SPA routing
+    window.addEventListener('popstate', render);
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest('a[data-link]');
+      if (a) {
+        e.preventDefault();
+        navigate(a.getAttribute('href'));
+      }
+    });
+
+    function nav() {
+      const path = window.location.pathname;
+      return `
+        <nav class="fixed top-0 left-0 right-0 z-50 bg-[#060d1f]/70 backdrop-blur-xl border-b border-white/[0.06]">
+          <div class="flex items-center justify-between px-6 py-3.5 max-w-7xl mx-auto">
+            <!-- Logo -->
+            <a href="/" data-link class="flex items-center gap-3 group">
+              <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-indigo-500 flex items-center justify-center shadow-[0_4px_20px_rgba(56,189,248,0.3)] group-hover:shadow-[0_4px_30px_rgba(56,189,248,0.5)] transition-shadow">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+              </div>
+              <span class="font-bold text-sm tracking-tight hidden sm:block">SigardaPanel</span>
+            </a>
+
+            <!-- Center Nav -->
+            <div class="hidden md:flex items-center gap-1">
+              <a href="/" data-link class="px-3 py-2 rounded-lg text-sm transition-all ${path === '/' ? 'text-white bg-white/[0.08]' : 'text-slate-400 hover:text-white hover:bg-white/[0.05]'}">Home</a>
+              <a href="/pricing" data-link class="px-3 py-2 rounded-lg text-sm transition-all ${path === '/pricing' ? 'text-white bg-white/[0.08]' : 'text-slate-400 hover:text-white hover:bg-white/[0.05]'}">Pricing</a>
+              ${token ? `<a href="/dashboard" data-link class="px-3 py-2 rounded-lg text-sm transition-all ${path === '/dashboard' ? 'text-white bg-white/[0.08]' : 'text-slate-400 hover:text-white hover:bg-white/[0.05]'}">Dashboard</a>` : ''}
+              <a href="https://panel.sigarda.dev" target="_blank" class="px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-white/[0.05] transition-all flex items-center gap-1.5">
+                Panel
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+              </a>
+            </div>
+
+            <!-- Right Actions -->
+            <div class="flex items-center gap-2">
+              ${token ? `
+                <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.04]">
+                  <div class="w-6 h-6 rounded-full bg-gradient-to-br from-sky-400 to-indigo-400 flex items-center justify-center text-[0.6rem] font-bold">${(member?.name || 'U')[0].toUpperCase()}</div>
+                  <span class="text-xs text-slate-300 hidden lg:block">${member?.name || 'User'}</span>
+                </div>
+                <button onclick="localStorage.clear();navigate('/login')" class="px-4 py-2 rounded-xl text-xs font-semibold bg-white/[0.06] border border-white/[0.1] text-slate-300 hover:bg-white/[0.1] hover:text-white transition-all flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"/></svg>
+                  Logout
+                </button>
+              ` : `
+                <a href="/login" data-link class="px-4 py-2 rounded-xl text-sm text-slate-300 hover:text-white hover:bg-white/[0.05] transition-all">Sign In</a>
+                <a href="/register" data-link class="px-4 py-2 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#040a14] hover:shadow-[0_4px_20px_rgba(56,189,248,0.3)] transition-all hover:scale-105">Get Started</a>
+              `}
+            </div>
+          </div>
+        </nav>
+        <div class="h-16"></div>`;
+    }
+
+    function renderLanding() {
+      app.innerHTML = nav() + `
+        <section class="max-w-5xl mx-auto px-6 py-20 text-center fade-in">
+          <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-sky-400/20 bg-sky-400/5 text-sky-300 text-xs font-medium mb-8">
+            <span class="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse"></span>
+            Member Portal
+          </div>
+          <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight mb-6">
+            <span class="bg-gradient-to-r from-white via-sky-200 to-indigo-300 bg-clip-text text-transparent gradient-text">SigardaPanel</span>
+          </h1>
+          <p class="text-lg text-slate-400 max-w-xl mx-auto mb-10 leading-relaxed">
+            Manage your account, license, and API access. Start deploying in minutes.
+          </p>
+          <div class="flex flex-wrap justify-center gap-4 fade-in-1">
+            <a href="/register" data-link class="group relative px-8 py-3.5 rounded-xl text-sm font-semibold text-[#040a14] transition-all duration-300 hover:scale-105">
+              <div class="absolute inset-0 bg-gradient-to-r from-sky-400 to-indigo-400 rounded-xl"></div>
+              <div class="absolute inset-0 shadow-[0_4px_24px_rgba(56,189,248,0.3)] group-hover:shadow-[0_8px_40px_rgba(56,189,248,0.5)] transition-shadow rounded-xl"></div>
+              <span class="relative z-10 flex items-center gap-2">Get Started
+                <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+              </span>
+            </a>
+            <a href="/login" data-link class="px-8 py-3.5 rounded-xl text-sm font-medium text-slate-300 border border-white/10 bg-white/[0.04] hover:bg-white/[0.08] hover:border-white/20 transition-all duration-300">
+              Sign In
+            </a>
+          </div>
+          <div class="flex flex-wrap items-center justify-center gap-3 mt-12 fade-in-2">
+            ${['Go', 'PostgreSQL', 'REST API', 'License Key', 'Cloudflare'].map(t => `<span class="px-3 py-1 rounded-full text-[0.65rem] font-medium text-slate-500 border border-white/[0.06] bg-white/[0.02]">${t}</span>`).join('')}
+          </div>
+        </section>
+
+        <section class="max-w-6xl mx-auto px-6 py-16 fade-in-3">
+          <div class="text-center mb-12">
+            <h2 class="text-2xl sm:text-3xl font-extrabold mb-3"><span class="bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">Why SigardaPanel?</span></h2>
+            <p class="text-sm text-slate-500">Everything you need to manage your infrastructure.</p>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-5">
+            ${[
+              { icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>', title: 'License Management', desc: 'Automatic license key generation and validation.' },
+              { icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>', title: 'API Access', desc: 'Secure API tokens for CLI and integrations.' },
+              { icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z"/></svg>', title: 'Plan Management', desc: 'Community, Premium, Enterprise tiers.' }
+            ].map((f, i) => `
+              <div class="p-6 rounded-2xl border border-white/[0.06] bg-white/[0.02] card-hover" style="animation-delay:${i*0.1}s">
+                <div class="text-2xl mb-3">${f.icon}</div>
+                <h3 class="text-sm font-bold text-white mb-2">${f.title}</h3>
+                <p class="text-xs text-slate-500 leading-relaxed">${f.desc}</p>
+              </div>
+            `).join('')}
+          </div>
+        </section>`;
+    }
+
+    function renderRegister() {
+      app.innerHTML = nav() + `
+        <div class="max-w-md mx-auto py-16 px-4 fade-in">
+          <div class="text-center mb-8">
+            <h1 class="text-2xl font-bold">Create Account</h1>
+            <p class="text-sm text-slate-500 mt-1">Get your license key and API token</p>
+          </div>
+          <div class="glass rounded-2xl p-8">
+            <div id="reg-error" class="mb-4 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl p-3 hidden"></div>
+            <form id="reg-form" class="space-y-4">
+              <div><label class="block text-xs text-slate-500 mb-1.5 uppercase tracking-wider">Name</label><input id="r-name" class="w-full rounded-xl px-4 py-3 text-sm bg-white/[0.03] border border-white/[0.08] text-white placeholder-slate-500 input-glow transition-all" required></div>
+              <div><label class="block text-xs text-slate-500 mb-1.5 uppercase tracking-wider">Email</label><input id="r-email" type="email" class="w-full rounded-xl px-4 py-3 text-sm bg-white/[0.03] border border-white/[0.08] text-white placeholder-slate-500 input-glow transition-all" required></div>
+              <div><label class="block text-xs text-slate-500 mb-1.5 uppercase tracking-wider">Password</label><input id="r-pass" type="password" class="w-full rounded-xl px-4 py-3 text-sm bg-white/[0.03] border border-white/[0.08] text-white placeholder-slate-500 input-glow transition-all" placeholder="Min 8 characters" required></div>
+              <div><label class="block text-xs text-slate-500 mb-1.5 uppercase tracking-wider">Company (optional)</label><input id="r-company" class="w-full rounded-xl px-4 py-3 text-sm bg-white/[0.03] border border-white/[0.08] text-white placeholder-slate-500 input-glow transition-all"></div>
+              <div><label class="block text-xs text-slate-500 mb-1.5 uppercase tracking-wider">Plan</label>
+                <div class="grid grid-cols-3 gap-2">
+                  ${[{ id: 'community', label: 'Community', price: 'Free' }, { id: 'premium', label: 'Premium', price: '$29/mo' }, { id: 'enterprise', label: 'Enterprise', price: '$99/mo' }].map(p => `
+                    <button type="button" onclick="selectPlan('${p.id}')" id="p-${p.id}" class="p-3 rounded-xl border ${p.id==='community'?'border-sky-400/40 bg-sky-400/10':'border-white/[0.06] bg-white/[0.02]'} text-center card-hover">
+                      <div class="text-xs font-semibold ${p.id==='community'?'text-sky-400':'text-white'}">${p.label}</div>
+                      <div class="text-[0.6rem] text-slate-500 mt-0.5">${p.price}</div>
+                    </button>
+                  `).join('')}
+                </div>
+              </div>
+              <button type="submit" class="mt-4 w-full py-3 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#040a14] glow-hover transition-all duration-300 hover:scale-[1.02]">Create Account</button>
+            </form>
+            <p class="text-center text-xs text-slate-500 mt-6">Already have an account? <a href="/login" data-link class="text-sky-400/60 hover:text-sky-400 transition-colors">Sign in</a></p>
+          </div>
+        </div>`;
+      document.getElementById('reg-form').onsubmit = async (e) => {
+        e.preventDefault();
+        const errDiv = document.getElementById('reg-error');
+        errDiv.classList.add('hidden');
+        try {
+          const res = await fetch(API + '/api/register', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              name: document.getElementById('r-name').value,
+              email: document.getElementById('r-email').value,
+              password: document.getElementById('r-pass').value,
+              company: document.getElementById('r-company').value,
+              plan: selectedPlan
+            })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Registration failed');
+          alert('Account created! License Key: ' + (data.data.license_key || 'N/A'));
+          navigate('/login');
+        } catch (e) { errDiv.textContent = e.message; errDiv.classList.remove('hidden'); }
+      };
+    }
+
+    let selectedPlan = 'community';
+    function selectPlan(p) {
+      selectedPlan = p;
+      ['community','premium','enterprise'].forEach(x => {
+        const el = document.getElementById('p-'+x);
+        el.className = 'p-3 rounded-xl border text-center card-hover ' + (x===p ? 'border-sky-400/40 bg-sky-400/10' : 'border-white/[0.06] bg-white/[0.02]');
+        el.querySelector('div').className = 'text-xs font-semibold ' + (x===p ? 'text-sky-400' : 'text-white');
+      });
+    }
+
+    function renderLogin() {
+      app.innerHTML = nav() + `
+        <div class="max-w-md mx-auto py-16 px-4 fade-in">
+          <div class="text-center mb-8">
+            <h1 class="text-2xl font-bold">Welcome back</h1>
+            <p class="text-sm text-slate-500 mt-1">Sign in to your member account</p>
+          </div>
+          <div class="glass rounded-2xl p-8">
+            <div id="login-error" class="mb-4 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl p-3 hidden"></div>
+            <form id="login-form" class="space-y-4">
+              <div><label class="block text-xs text-slate-500 mb-1.5 uppercase tracking-wider">Email</label><input id="l-email" type="email" class="w-full rounded-xl px-4 py-3 text-sm bg-white/[0.03] border border-white/[0.08] text-white placeholder-slate-500 input-glow transition-all" required></div>
+              <div><label class="block text-xs text-slate-500 mb-1.5 uppercase tracking-wider">Password</label><input id="l-pass" type="password" class="w-full rounded-xl px-4 py-3 text-sm bg-white/[0.03] border border-white/[0.08] text-white placeholder-slate-500 input-glow transition-all" required></div>
+              <button type="submit" class="mt-4 w-full py-3 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#040a14] glow-hover transition-all duration-300 hover:scale-[1.02]">Sign In</button>
+            </form>
+            <p class="text-center text-xs text-slate-500 mt-6">Don't have an account? <a href="/register" data-link class="text-sky-400/60 hover:text-sky-400 transition-colors">Create one</a></p>
+          </div>
+        </div>`;
+      document.getElementById('login-form').onsubmit = async (e) => {
+        e.preventDefault();
+        const errDiv = document.getElementById('login-error');
+        errDiv.classList.add('hidden');
+        try {
+          const res = await fetch(API + '/api/login', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ email: document.getElementById('l-email').value, password: document.getElementById('l-pass').value })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Login failed');
+          token = data.data.token;
+          member = data.data.member;
+          localStorage.setItem('member_token', token);
+          localStorage.setItem('member', JSON.stringify(member));
+          navigate('/dashboard');
+        } catch (e) { errDiv.textContent = e.message; errDiv.classList.remove('hidden'); }
+      };
+    }
+
+    function renderDashboard() {
+      app.innerHTML = nav() + `
+        <div class="max-w-4xl mx-auto py-10 px-4 fade-in">
+          <h1 class="text-2xl font-bold mb-1">Welcome, ${member?.name || 'User'}</h1>
+          <p class="text-sm text-slate-500 mb-8">${member?.email || ''}</p>
+
+          <!-- Plan Card -->
+          <div class="relative p-6 rounded-2xl border border-sky-400/20 bg-gradient-to-br from-sky-400/[0.06] to-indigo-400/[0.04] mb-6 overflow-hidden">
+            <div class="absolute top-0 right-0 w-32 h-32 bg-sky-400/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+            <div class="relative">
+              <div class="text-sm font-semibold text-sky-400 mb-2">Plan: ${member?.plan || 'community'}</div>
+              ${member?.license_key ? `
+                <div class="mt-3 p-3 rounded-xl bg-black/20 border border-white/[0.06] flex items-center gap-2">
+                  <code class="flex-1 text-xs font-mono text-sky-300 truncate">${member.license_key}</code>
+                  <button onclick="navigator.clipboard.writeText('${member.license_key}');this.innerHTML='<span class=text-emerald-400>Copied!</span>'" class="text-xs text-slate-400 hover:text-white transition-colors">Copy</button>
+                </div>
+                <div class="mt-2 text-xs text-slate-500">Use this license key in SigardaPanel to activate your plan.</div>
+              ` : '<div class="mt-2 text-xs text-slate-500">Free plan — no license key required.</div>'}
+            </div>
+          </div>
+
+          <!-- API Token -->
+          <div class="p-6 rounded-2xl border border-white/[0.06] bg-white/[0.02] mb-6">
+            <h2 class="text-sm font-semibold text-white mb-3">API Token</h2>
+            <div class="flex items-center gap-2">
+              <code class="flex-1 text-xs font-mono text-slate-400 bg-black/20 rounded-xl px-4 py-3 truncate border border-white/[0.04]">${token || ''}</code>
+              <button onclick="navigator.clipboard.writeText('${token}');this.innerHTML='<span class=text-emerald-400>✓</span>'" class="px-4 py-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] transition-all text-slate-400 hover:text-white">Copy</button>
+            </div>
+            <div class="mt-3 p-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+              <p class="text-[0.65rem] text-slate-500 mb-1">CLI Quick Start</p>
+              <code class="text-xs font-mono text-emerald-400/70">sigardapanel login --api-url https://panel.sigarda.dev</code>
+            </div>
+          </div>
+
+          <!-- Quick Links -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <a href="/pricing" data-link class="p-5 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12] card-hover">
+              <div class="text-2xl mb-2">💳</div>
+              <h3 class="text-sm font-semibold text-white mb-1">Upgrade Plan</h3>
+              <p class="text-xs text-slate-500">View plans and upgrade your account.</p>
+            </a>
+            <a href="https://panel.sigarda.dev" target="_blank" class="p-5 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12] card-hover">
+              <div class="text-2xl mb-2">🖥️</div>
+              <h3 class="text-sm font-semibold text-white mb-1">Open Panel</h3>
+              <p class="text-xs text-slate-500">Access SigardaPanel dashboard.</p>
+            </a>
+          </div>
+        </div>`;
+    }
+
+    function renderPricing() {
+      app.innerHTML = nav() + `
+        <div class="max-w-5xl mx-auto py-16 px-4 fade-in">
+          <div class="text-center mb-12">
+            <h1 class="text-3xl sm:text-4xl font-extrabold mb-3"><span class="bg-gradient-to-r from-white via-sky-200 to-indigo-300 bg-clip-text text-transparent gradient-text">Simple Pricing</span></h1>
+            <p class="text-sm text-slate-500">Start free, upgrade when you need enterprise features.</p>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            ${[
+              { name: 'Community', price: 'Free', desc: 'Self-hosted, open source', color: 'emerald', features: ['Single server', 'Unlimited sites', 'Docker, Firewall, Redis', 'SSL auto-renewal', 'Community support'] },
+              { name: 'Premium', price: '$29', period: '/mo', desc: 'Managed panel with priority support', color: 'sky', popular: true, features: ['Everything in Community', 'Multi-server', 'Managed updates', 'Priority support', 'White-label'] },
+              { name: 'Enterprise', price: '$99', period: '/mo', desc: 'For business and critical production', color: 'violet', features: ['Everything in Premium', 'SLA 99.99%', 'Priority support (<4h)', 'Dedicated manager', 'Source code access'] }
+            ].map((p, i) => `
+              <div class="relative p-6 rounded-2xl border ${p.popular ? 'border-sky-400/30 bg-sky-400/[0.04]' : 'border-white/[0.06] bg-white/[0.02]'} card-hover" style="animation-delay:${i*0.1}s">
+                ${p.popular ? '<div class="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 px-3 py-1 rounded-full bg-sky-400 text-[0.65rem] font-bold text-[#040a14]">Popular</div>' : ''}
+                <div class="text-xs font-bold uppercase tracking-wider text-${p.color}-400 mb-2">${p.name}</div>
+                <div class="text-3xl font-extrabold text-white mb-1">${p.price}${p.period ? `<span class="text-sm text-slate-500">${p.period}</span>` : ''}</div>
+                <p class="text-xs text-slate-500 mb-4">${p.desc}</p>
+                <a href="/register" data-link class="block w-full text-center py-2.5 rounded-xl text-xs font-semibold ${p.popular ? 'bg-gradient-to-r from-sky-400 to-indigo-400 text-[#040a14]' : 'border border-white/10 bg-white/[0.04] text-white'} mb-4 glow-hover transition-all hover:scale-[1.02]">
+                  ${p.popular ? 'Get Started' : 'Choose Plan'}
+                </a>
+                <div class="space-y-2">
+                  ${p.features.map(f => `
+                    <div class="flex items-center gap-2 text-xs text-slate-400">
+                      <svg class="w-4 h-4 text-${p.color}-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                      ${f}
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>`;
+    }
+
+    render();
+  </script>
+</body>
+</html>
