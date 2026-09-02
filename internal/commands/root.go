@@ -20,7 +20,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const Version = "0.5.5"
+const Version = "1.0.0"
 
 type App struct {
 	stdout io.Writer
