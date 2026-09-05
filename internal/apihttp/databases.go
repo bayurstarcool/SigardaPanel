@@ -1308,7 +1308,27 @@ func (h *dbHandler) pmaCredentials(c echo.Context) error {
 		}
 	}
 
-	// Fallback: phpmyadmin control user from config-db.php
+	// 2. Fallback: generate a dedicated temporary login for this database
+	if database.Type == "mysql" {
+		suffix := make([]byte, 4)
+		_, _ = rand.Read(suffix)
+		username := fmt.Sprintf("pma_%d_%s", database.ID, hex.EncodeToString(suffix))
+		password := generateDBPassword()
+		if err := h.execMySQL(func(conn *dbserver.MySQLConn) error {
+			return conn.CreateUser(c.Request().Context(), username, password, "localhost", database.Name, "ALL")
+		}); err == nil {
+			return c.JSON(http.StatusOK, httpjson.Success{
+				Data: map[string]any{
+					"username": username,
+					"password": password,
+					"host":     "localhost",
+				},
+				RequestID: rid,
+			})
+		}
+	}
+
+	// 3. Fallback: phpmyadmin control user from config-db.php
 	configData, err := os.ReadFile("/etc/phpmyadmin/config-db.php")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "phpmyadmin config not found")

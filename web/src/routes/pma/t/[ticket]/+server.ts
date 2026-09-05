@@ -8,7 +8,7 @@ function encryptionKey(): Buffer | null {
   return secret && secret.length >= 32 ? createHash('sha256').update(secret).digest() : null;
 }
 
-export const GET: RequestHandler = async ({ params, cookies }) => {
+export const GET: RequestHandler = async ({ params, cookies, request }) => {
   const key = encryptionKey();
   if (!key) return new Response(null, { status: 503 });
 
@@ -41,11 +41,13 @@ export const GET: RequestHandler = async ({ params, cookies }) => {
       maxAge: 3600
     });
 
+    const host = request.headers.get('host') || 'cp.sigarda.dev';
+    const proto = request.headers.get('x-forwarded-proto') || 'https';
     const urlToken = `sg_${createHash('sha256').update(sessionTicket).digest('base64url')}`;
     return new Response(null, {
       status: 302,
       headers: {
-        Location: `https://panel.sigarda.dev/pma/index.php?token=${urlToken}`,
+        Location: `${proto}://${host}/pma/index.php?token=${urlToken}`,
         'Cache-Control': 'no-store',
         'Referrer-Policy': 'no-referrer'
       }
