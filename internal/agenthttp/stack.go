@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -280,7 +281,17 @@ func (r *Router) detectGo() StackInfo {
 	if err != nil {
 		return StackInfo{Name: "go", Status: "missing"}
 	}
-	ver := extractVersion(string(out))
+	ver := "unknown"
+	fields := strings.Fields(string(out))
+	for _, f := range fields {
+		if strings.HasPrefix(f, "go1.") || strings.HasPrefix(f, "go2.") {
+			ver = strings.TrimPrefix(f, "go")
+			break
+		}
+	}
+	if ver == "unknown" {
+		ver = extractVersion(string(out))
+	}
 	path, _ := exec.LookPath("go")
 	return StackInfo{Name: "go", Version: ver, Status: "installed", Path: path}
 }
@@ -406,16 +417,19 @@ func (r *Router) managePHP(ctx context.Context, action, version, pm string) (str
 		return "all packages installed", nil
 	case "uninstall":
 		// apt-get does not expand globs: "remove -y php8.1*" either errors
-		// (exit 100) or matches nothing. Enumerate installed php* packages
-		// via dpkg-query and remove them exactly.
+		// (exit 100) or matches nothing. Enumerate installed packages for
+		// the targeted version (or all php versions if version == "") and remove them.
 		if pm == "apt" || pm == "apt-get" {
-			out, err := r.executor.RunShell(ctx, "bash", "-c",
-				`dpkg-query -W -f='${Package}
-' 'php*' 2>/dev/null | grep -E '^php[0-9.]' | sort -u | tr '\n' ' '`)
+			pattern := "php[0-9.]"
+			if version != "" {
+				pattern = fmt.Sprintf("^php%s(-|$)", regexp.QuoteMeta(version))
+			}
+			cmd := fmt.Sprintf(`dpkg-query -W -f='${Package}\n' 'php*' 2>/dev/null | grep -E '%s' | sort -u | tr '\n' ' '`, pattern)
+			out, err := r.executor.RunShell(ctx, "bash", "-c", cmd)
 			if err == nil && strings.TrimSpace(out) != "" {
 				return r.executor.RunShell(ctx, pm, append([]string{"remove", "-y"}, strings.Fields(out)...)...)
 			}
-			return "no PHP packages installed", nil
+			return fmt.Sprintf("no packages found for %s", phpPkg), nil
 		}
 		return r.executor.RunShell(ctx, pm, "remove", "-y", phpPkg)
 	case "restart":
@@ -569,6 +583,9 @@ func (r *Router) manageRedis(ctx context.Context, action, version, pm string) (s
 	case "install", "update":
 		return r.executor.RunShell(ctx, pm, "install", "-y", "redis-server")
 	case "uninstall":
+		if pm == "apt" || pm == "apt-get" {
+			return r.executor.RunShell(ctx, pm, "remove", "-y", "redis-server", "redis-tools")
+		}
 		return r.executor.RunShell(ctx, pm, "remove", "-y", "redis-server")
 	case "restart":
 		return r.executor.RunShell(ctx, "systemctl", "restart", "redis-server")
@@ -666,20 +683,25 @@ func extractVersion(output string) string {
 	output = strings.TrimSpace(output)
 	parts := strings.Fields(output)
 	for _, p := range parts {
+		if strings.HasPrefix(p, "v=") {
+			return strings.TrimPrefix(p, "v=")
+		}
 		p = strings.TrimPrefix(p, "v")
 		p = strings.TrimPrefix(p, "V")
+		p = strings.TrimSuffix(p, ",")
 		if len(p) >= 3 && p[0] >= '0' && p[0] <= '9' {
 			return p
 		}
 		if idx := strings.IndexByte(p, '/'); idx >= 0 {
 			ver := p[idx+1:]
+			ver = strings.TrimSuffix(ver, ",")
 			if len(ver) >= 3 {
 				return ver
 			}
 		}
 	}
 	if len(parts) > 0 {
-		return parts[len(parts)-1]
+		return strings.TrimSuffix(parts[len(parts)-1], ",")
 	}
 	return "unknown"
 }
