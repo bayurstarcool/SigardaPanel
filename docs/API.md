@@ -82,19 +82,19 @@ Service tokens (machine-to-machine) use the same header with scoped permissions.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/servers/:id/stack/action` | user | Install/restart/stop/update package |
-| POST | `/servers/:id/stack/restart` | user | Restart all stack |
+| POST | `/servers/:id/stack/action` | user | Install/restart/stop/update package, or manage versions (`list-versions`, `list-available`) |
+| POST | `/servers/:id/stack/restart` | user | Restart stack component |
 
 Supported packages: `nginx`, `php` (with `version` field), `node`, `python`, `go`, `docker`, `certbot`, `mariadb`/`mysql`, `redis`, `memcached`, `supervisor`
 
-Actions: `install`, `update`, `uninstall`, `restart`, `start`, `stop`, `switch-version` (php only)
+Actions: `install`, `update`, `uninstall`, `restart`, `start`, `stop`, `switch-version`, `list-versions`, `list-available`
 
 ## Sites
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/sites` | user | List (filtered by owner if not admin) |
-| POST | `/sites` | user | Create site |
+| POST | `/sites` | user | Create site (supports `runtime`: `static`, `php` with `php_version`, `node`, `python`, `go`, `proxy`, `docker`) |
 | GET | `/sites/:id` | owner | Get site |
 | PATCH | `/sites/:id/config` | owner | Update site config |
 | DELETE | `/sites/:id` | owner | Delete |
@@ -172,10 +172,11 @@ Actions: `install`, `update`, `uninstall`, `restart`, `start`, `stop`, `switch-v
 | GET | `/servers/:id/firewall/rules` | user | List rules |
 | POST | `/servers/:id/firewall/reset` | user | Reset all rules |
 
-## Fail2ban (per-server)
+## Fail2ban & Security (per-server)
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
+| GET | `/servers/:id/security/overview` | user | Live security status (UFW, DDoS protection, banned attackers, DB/file integrity) |
 | GET | `/servers/:id/fail2ban/status` | user | Status |
 | GET | `/servers/:id/fail2ban/jail` | user | Jail status (query: `?name=sshd`) |
 | POST | `/servers/:id/fail2ban/unban` | user | Unban IP |

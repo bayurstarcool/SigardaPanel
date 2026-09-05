@@ -58,11 +58,12 @@ Referrer-Policy: no-referrer-when-downgrade
 Strict-Transport-Security: max-age=31536000; includeSubDomains
 ```
 
-### Network
+### Network & Anti-DDoS
 
-- **All services bind 127.0.0.1** — only nginx exposes 80/443
+- **All backend services bind 127.0.0.1** — only nginx exposes 80/443
 - **UFW** default deny, allows 22/80/443
 - **fail2ban** with 3 jails: sshd, nginx-http-auth, nginx-botsearch
+- **Anti-DDoS & Slowloris:** SYN-cookies enabled (`net.ipv4.tcp_syncookies=1`), Nginx client timeouts (15s), per-IP connection limits (50 max), and request rate limiting
 - **Anti-loop:** HTTP → HTTPS redirect skipped when `CF-Ray` header present
 
 ### System Hardening

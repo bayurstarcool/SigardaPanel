@@ -99,7 +99,7 @@ WantedBy=multi-user.target
 [Unit]
 Description=SigardaPanel Web
 After=sigardapanel-api.service
-Requires=sigardapanel-api.service
+Wants=sigardapanel-api.service
 
 [Service]
 Type=simple
@@ -109,10 +109,10 @@ WorkingDirectory=/opt/sigardapanel/web
 Environment=NODE_ENV=production
 Environment=HOST=127.0.0.1
 Environment=PORT=7720
-Environment=ORIGIN=https://your.domain.com
+Environment=ORIGIN=https://panel.example.com
 Environment=SIGARDAPANEL_API_URL=http://127.0.0.1:7700
 ExecStart=/usr/bin/node /opt/sigardapanel/web/index.js
-Restart=on-failure
+Restart=always
 RestartSec=3
 LimitNOFILE=65536
 

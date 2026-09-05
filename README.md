@@ -22,7 +22,8 @@ Manage nginx, PHP, Node, databases, SSL, backups, firewall from one web UI.
 | **Docker** | Container management per-server |
 | **Firewall** | UFW rules per-server, fail2ban integration |
 | **Redis** | Stats, info, flush, keyspace |
-| **Stack** | Detect/install/restart nginx, PHP (8.0-8.5), Node, Go, Docker, MariaDB, Redis |
+| **Stack** | Detect/install/restart nginx, PHP (8.0-8.5), Node, Go, Docker, MariaDB, Redis — per-service version manager |
+| **Security Shield** | Anti-DDoS, SYN-cookie defense, Fail2ban monitor, web malware & DB exposure scanner |
 | **Alerts** | Channel notifications, history |
 | **Audit** | Per-user action log |
 | **2FA** | TOTP with QR provisioning, recovery codes |
