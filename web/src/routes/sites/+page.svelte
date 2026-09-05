@@ -11,7 +11,8 @@
   let totalCount = $state(0);
   let loading = $state(true);
   let showCreate = $state(false);
-  let form = $state({ server_id: 0, name: '', domain: '', runtime: 'static', root_path: '', proxy_pass_url: '', docker_image: '', docker_language: '', docker_name: '', docker_ports: '', docker_env: '', docker_volume: '', docker_restart: 'unless-stopped' });
+  let form = $state({ server_id: 0, name: '', domain: '', runtime: 'static', php_version: '8.3', root_path: '', proxy_pass_url: '', docker_image: '', docker_language: '', docker_name: '', docker_ports: '', docker_env: '', docker_volume: '', docker_restart: 'unless-stopped' });
+  let phpVersions = ['8.5', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4'];
 
   // Docker language presets
   const dockerPresets = [
@@ -195,11 +196,15 @@
 
   async function createSite() {
     if (!form.name || !form.domain || form.server_id <= 0) return;
+    if (form.runtime === 'proxy' && !form.proxy_pass_url.trim()) {
+      toasts.error('Proxy Pass URL is required for proxy runtime');
+      return;
+    }
     busy = true;
     try {
       await apiFetch(auth.token, 'POST', 'sites', { ...form, cloudflare_provision: cfEnabled });
       showCreate = false;
-      form = { server_id: 0, name: '', domain: '', runtime: 'static', root_path: '', proxy_pass_url: '', docker_image: '', docker_language: '', docker_name: '', docker_ports: '', docker_env: '', docker_volume: '', docker_restart: 'unless-stopped' };
+      form = { server_id: 0, name: '', domain: '', runtime: 'static', php_version: '8.3', root_path: '', proxy_pass_url: '', docker_image: '', docker_language: '', docker_name: '', docker_ports: '', docker_env: '', docker_volume: '', docker_restart: 'unless-stopped' };
       selectedPreset = '';
       showDockerConfig = false;
       fetchSites();
@@ -264,9 +269,17 @@
             {#each ['static', 'php', 'node', 'python', 'go', 'proxy', 'docker'] as r}<option value={r}>{r}</option>{/each}
           </select>
         </div>
+        {#if form.runtime === 'php'}
+          <div>
+            <label class="block text-xs text-slate-500 mb-1.5">PHP Version</label>
+            <select bind:value={form.php_version} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 font-mono">
+              {#each phpVersions as v}<option value={v}>PHP {v}</option>{/each}
+            </select>
+          </div>
+        {/if}
         <div>
           <label class="block text-xs text-slate-500 mb-1.5">Root Path</label>
-          <input bind:value={form.root_path} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40" placeholder="/home/user/htdocs/example.com" />
+          <input bind:value={form.root_path} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40" placeholder="/home/user/htdocs/example.com (auto if empty)" />
         </div>
         <div class="flex items-end">
           <label class="flex items-center gap-2 cursor-pointer">
@@ -363,7 +376,7 @@
           </div>
         </div>
       {/if}
-      {#if form.runtime === 'proxy' && form.runtime !== 'docker'}
+      {#if form.runtime === 'proxy'}
         <div class="grid grid-cols-1 gap-4 mt-4 pt-4 border-t border-white/[0.05]">
           <div>
             <label class="block text-xs text-slate-500 mb-1.5">Proxy Pass URL <span class="text-red-400">*</span></label>
@@ -380,7 +393,7 @@
             {busy ? 'Creating...' : showDockerConfig ? 'Create' : 'Pilih bahasa dulu ↓'}
           </button>
         {:else}
-          <button onclick={createSite} disabled={busy || !form.name || !form.domain || form.server_id <= 0}
+          <button onclick={createSite} disabled={busy || !form.name || !form.domain || form.server_id <= 0 || (form.runtime === 'proxy' && !form.proxy_pass_url.trim())}
             class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition disabled:opacity-40 cursor-pointer border-0">
             {busy ? 'Creating...' : 'Create'}
           </button>

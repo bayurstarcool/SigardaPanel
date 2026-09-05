@@ -120,9 +120,9 @@ func (s *SQLiteSiteStore) Create(ctx context.Context, site *Site) error {
 	}
 
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO sites (server_id, name, domain, runtime, root_path, status, owner_id, ssl_status, managed_by, system_user, conf_file, proxy_pass_url, app_port, app_command, app_status, app_memory_max) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO sites (server_id, name, domain, runtime, root_path, status, owner_id, ssl_status, managed_by, system_user, conf_file, proxy_pass_url, app_port, app_command, app_status, app_memory_max, php_version, php_ini) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		site.ServerID, site.Name, site.Domain, site.Runtime, site.RootPath, site.Status, site.OwnerID, site.SSLStatus,
-		site.ManagedBy, site.SystemUser, site.ConfFile, site.ProxyPassURL, site.AppPort, site.AppCommand, site.AppStatus, site.AppMemoryMax,
+		site.ManagedBy, site.SystemUser, site.ConfFile, site.ProxyPassURL, site.AppPort, site.AppCommand, site.AppStatus, site.AppMemoryMax, site.PHPVersion, site.PHPIni,
 	)
 	if err != nil {
 		return fmt.Errorf("insert site: %w", err)

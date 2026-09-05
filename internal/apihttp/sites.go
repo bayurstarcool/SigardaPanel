@@ -172,6 +172,7 @@ func (h *siteHandler) create(c echo.Context) error {
 		SystemUser    string `json:"system_user,omitempty"`
 		ConfFile      string `json:"conf_file,omitempty"`
 		ProxyPassURL  string `json:"proxy_pass_url,omitempty"`
+		PHPVersion    string `json:"php_version,omitempty"`
 		DockerImage   string `json:"docker_image,omitempty"`
 		DockerLanguage string `json:"docker_language,omitempty"`
 		DockerName    string `json:"docker_name,omitempty"`
@@ -192,6 +193,7 @@ func (h *siteHandler) create(c echo.Context) error {
 	body.SystemUser = strings.TrimSpace(body.SystemUser)
 	body.ConfFile = strings.TrimSpace(body.ConfFile)
 	body.ProxyPassURL = strings.TrimSpace(body.ProxyPassURL)
+	body.PHPVersion = strings.TrimSpace(body.PHPVersion)
 	if body.ManagedBy == "" {
 		body.ManagedBy = "sigardapanel"
 	}
@@ -279,6 +281,7 @@ func (h *siteHandler) create(c echo.Context) error {
 		SystemUser:   sql.NullString{String: body.SystemUser, Valid: body.SystemUser != ""},
 		ConfFile:     sql.NullString{String: body.ConfFile, Valid: body.ConfFile != ""},
 		ProxyPassURL: sql.NullString{String: body.ProxyPassURL, Valid: body.ProxyPassURL != ""},
+		PHPVersion:   sql.NullString{String: body.PHPVersion, Valid: body.PHPVersion != ""},
 	}
 
 	// ── App process management ──
@@ -329,6 +332,7 @@ func (h *siteHandler) create(c echo.Context) error {
 		"root_path":      site.RootPath,
 		"port":           port,
 		"proxy_pass_url": body.ProxyPassURL,
+		"php_version":    body.PHPVersion,
 		"docker_image":    body.DockerImage,
 		"docker_language": body.DockerLanguage,
 		"docker_name":     body.DockerName,
