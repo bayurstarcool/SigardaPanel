@@ -9,7 +9,7 @@
     ArrowLeft, RefreshCw, Download, Trash2, Play, Square, RotateCw,
     CheckCircle2, XCircle, AlertCircle, Loader2, Settings, Terminal
   } from 'lucide-svelte';
-  import PhpManager from './PhpManager.svelte';
+  import ServiceManagerModal from './ServiceManagerModal.svelte';
 
   const serverId = $derived($page.params.id);
 
@@ -22,19 +22,19 @@
   let osInfo = $state('');
   let showOutput = $state(false);
   let lastOutput = $state('');
-  let showPhpManager = $state(false);
+  let activeManagePkg = $state<any>(null);
 
   const knownPackages = [
-    { name: 'nginx', label: 'Nginx', icon: Globe, color: 'emerald', desc: 'Web server & reverse proxy' },
-    { name: 'php', label: 'PHP', icon: FileCode, color: 'indigo', desc: 'PHP-FPM runtime + extensions' },
-    { name: 'node', label: 'Node.js', icon: Code2, color: 'green', desc: 'JavaScript runtime + npm' },
-    { name: 'python', label: 'Python', icon: Terminal, color: 'yellow', desc: 'Python 3 + pip + venv' },
-    { name: 'go', label: 'Go', icon: Box, color: 'cyan', desc: 'Go programming language' },
-    { name: 'docker', label: 'Docker', icon: Box, color: 'sky', desc: 'Container runtime' },
-    { name: 'certbot', label: 'Certbot', icon: Lock, color: 'amber', desc: 'SSL/TLS certificates' },
-    { name: 'mariadb', label: 'MariaDB', icon: Database, color: 'purple', desc: 'MySQL-compatible database' },
-    { name: 'redis', label: 'Redis', icon: Zap, color: 'red', desc: 'In-memory data store' },
-    { name: 'supervisor', label: 'Supervisor', icon: Settings, color: 'slate', desc: 'Process manager' },
+    { name: 'nginx', label: 'Nginx', icon: Globe, color: 'emerald', desc: 'Web server & reverse proxy', multiVersion: false, availableVersions: ['1.26.0', '1.24.0'] },
+    { name: 'php', label: 'PHP', icon: FileCode, color: 'indigo', desc: 'PHP-FPM runtime + extensions', multiVersion: true, availableVersions: ['8.5', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4'] },
+    { name: 'node', label: 'Node.js', icon: Code2, color: 'green', desc: 'JavaScript runtime + npm', multiVersion: true, availableVersions: ['22', '20', '18'] },
+    { name: 'python', label: 'Python', icon: Terminal, color: 'yellow', desc: 'Python 3 + pip + venv', multiVersion: false, availableVersions: ['3.12', '3.11'] },
+    { name: 'go', label: 'Go', icon: Box, color: 'cyan', desc: 'Go programming language', multiVersion: true, availableVersions: ['1.24.0', '1.23.6', '1.22.12'] },
+    { name: 'docker', label: 'Docker', icon: Box, color: 'sky', desc: 'Container runtime', multiVersion: false },
+    { name: 'certbot', label: 'Certbot', icon: Lock, color: 'amber', desc: 'SSL/TLS certificates', multiVersion: false },
+    { name: 'mariadb', label: 'MariaDB', icon: Database, color: 'purple', desc: 'MySQL-compatible database', multiVersion: false },
+    { name: 'redis', label: 'Redis', icon: Zap, color: 'red', desc: 'In-memory data store', multiVersion: false },
+    { name: 'supervisor', label: 'Supervisor', icon: Settings, color: 'slate', desc: 'Process manager', multiVersion: false },
   ];
 
   function loadServer() {
@@ -277,25 +277,27 @@
 
           <!-- Actions -->
           <div class="px-5 pb-5 pt-2 border-t border-white/[0.04]">
-            {#if pkg.name === 'php'}
-              <!-- PHP: Show Manage button for multiple versions -->
+            <div class="mb-2">
               <button
-                onclick={() => showPhpManager = true}
-                class="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white text-sm font-medium hover:from-indigo-400 hover:to-purple-400 transition-all shadow-lg shadow-indigo-500/20 no-underline cursor-pointer border-0">
-                <Settings size={14} />
-                Manage PHP Versions
+                onclick={() => activeManagePkg = pkg}
+                class="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/[0.06] text-xs font-medium transition cursor-pointer"
+              >
+                <Settings size={13} />
+                Manage Service & Versions
               </button>
-            {:else if status === 'missing'}
+            </div>
+
+            {#if status === 'missing'}
               <button
                 onclick={() => doAction(pkg.name, 'install')}
                 disabled={actionPending !== ''}
-                class="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-500 text-white text-sm font-medium hover:from-sky-400 hover:to-indigo-400 transition-all shadow-lg shadow-sky-500/20 disabled:opacity-50 cursor-pointer border-0"
+                class="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-500 text-white text-xs font-medium hover:from-sky-400 hover:to-indigo-400 transition-all shadow-lg shadow-sky-500/20 disabled:opacity-50 cursor-pointer border-0"
               >
                 {#if isActive}
-                  <Loader2 size={14} class="animate-spin" />
+                  <Loader2 size={13} class="animate-spin" />
                   Installing...
                 {:else}
-                  <Download size={14} />
+                  <Download size={13} />
                   Install {pkg.label}
                 {/if}
               </button>
@@ -305,7 +307,8 @@
                   <button
                     onclick={() => doAction(pkg.name, 'start')}
                     disabled={actionPending !== ''}
-                    class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 text-xs font-medium transition-all disabled:opacity-40 cursor-pointer"
+                    title="Start"
+                    class="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 text-xs font-medium transition disabled:opacity-40 cursor-pointer"
                   >
                     {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<Play size={12} />{/if}
                     Start
@@ -315,7 +318,8 @@
                   <button
                     onclick={() => doAction(pkg.name, 'stop')}
                     disabled={actionPending !== ''}
-                    class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 border border-yellow-500/20 text-xs font-medium transition-all disabled:opacity-40 cursor-pointer"
+                    title="Stop"
+                    class="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 border border-yellow-500/20 text-xs font-medium transition disabled:opacity-40 cursor-pointer"
                   >
                     {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<Square size={12} />{/if}
                     Stop
@@ -324,7 +328,8 @@
                 <button
                   onclick={() => doAction(pkg.name, 'restart')}
                   disabled={actionPending !== ''}
-                  class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] border border-white/[0.06] text-xs font-medium transition-all disabled:opacity-40 cursor-pointer"
+                  title="Restart"
+                  class="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] border border-white/[0.06] text-xs font-medium transition disabled:opacity-40 cursor-pointer"
                 >
                   {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<RotateCw size={12} />{/if}
                   Restart
@@ -332,7 +337,8 @@
                 <button
                   onclick={() => doAction(pkg.name, 'update')}
                   disabled={actionPending !== ''}
-                  class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] border border-white/[0.06] text-xs font-medium transition-all disabled:opacity-40 cursor-pointer"
+                  title="Update"
+                  class="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] border border-white/[0.06] text-xs font-medium transition disabled:opacity-40 cursor-pointer"
                 >
                   {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<RefreshCw size={12} />{/if}
                   Update
@@ -340,7 +346,8 @@
                 <button
                   onclick={() => { if (confirm(`Uninstall ${pkg.label}?`)) doAction(pkg.name, 'uninstall'); }}
                   disabled={actionPending !== ''}
-                  class="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-red-500/5 text-red-400/60 hover:bg-red-500/10 hover:text-red-400 border border-red-500/10 text-xs font-medium transition-all disabled:opacity-40 cursor-pointer"
+                  title="Uninstall"
+                  class="flex items-center justify-center p-1.5 rounded-lg bg-red-500/5 text-red-400/60 hover:bg-red-500/10 hover:text-red-400 border border-red-500/10 text-xs font-medium transition disabled:opacity-40 cursor-pointer"
                 >
                   <Trash2 size={12} />
                 </button>
@@ -353,4 +360,10 @@
   {/if}
 </DashboardLayout>
 
-<PhpManager open={showPhpManager} serverId={serverId} onClose={() => showPhpManager = false} onInstall={(ver) => { loadStack(); }} />
+<ServiceManagerModal
+  open={activeManagePkg !== null}
+  pkg={activeManagePkg}
+  serverId={serverId || ''}
+  onClose={() => activeManagePkg = null}
+  onChanged={() => loadStack()}
+/>

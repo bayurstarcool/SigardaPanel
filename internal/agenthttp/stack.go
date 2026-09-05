@@ -89,12 +89,12 @@ func (r *Router) stackInstallTask(c echo.Context) error {
 		req.Action = "install"
 	}
 
-	// Handle special PHP actions
-	if req.Package == "php" && req.Action == "list-versions" {
-		return r.listPHPVersions(c)
+	// Handle special version listing actions
+	if req.Action == "list-versions" {
+		return r.listPackageVersions(c, req.Package)
 	}
-	if req.Package == "php" && req.Action == "list-available" {
-		return r.listAvailablePHPVersions(c)
+	if req.Action == "list-available" {
+		return r.listPackageAvailableVersions(c, req.Package)
 	}
 
 	pm := detectPackageManager()
@@ -502,7 +502,7 @@ func (r *Router) manageGo(ctx context.Context, action, version, pm string) (stri
 	case "install", "update":
 		ver := version
 		if ver == "" {
-			ver = "1.22.4"
+			ver = "1.24.0"
 		}
 		arch := "amd64"
 		if runtime.GOARCH == "arm64" {
@@ -704,6 +704,108 @@ func extractVersion(output string) string {
 		return strings.TrimSuffix(parts[len(parts)-1], ",")
 	}
 	return "unknown"
+}
+
+type packageVersionItem struct {
+	Version   string `json:"version"`
+	Status    string `json:"status,omitempty"` // running, stopped, installed, missing
+	Path      string `json:"path,omitempty"`
+	Installed bool   `json:"installed"`
+}
+
+func (r *Router) listPackageVersions(c echo.Context, pkg string) error {
+	switch pkg {
+	case "php":
+		return r.listPHPVersions(c)
+	case "go":
+		info := r.detectGo()
+		var versions []packageVersionItem
+		if info.Status != "missing" && info.Version != "" && info.Version != "unknown" {
+			versions = append(versions, packageVersionItem{
+				Version:   info.Version,
+				Status:    info.Status,
+				Path:      info.Path,
+				Installed: true,
+			})
+		}
+		return c.JSON(http.StatusOK, httpjson.Success{
+			Data: map[string]any{"versions": versions, "count": len(versions)},
+		})
+	case "node":
+		info := r.detectNode()
+		var versions []packageVersionItem
+		if info.Status != "missing" && info.Version != "" {
+			versions = append(versions, packageVersionItem{
+				Version:   info.Version,
+				Status:    info.Status,
+				Path:      info.Path,
+				Installed: true,
+			})
+		}
+		return c.JSON(http.StatusOK, httpjson.Success{
+			Data: map[string]any{"versions": versions, "count": len(versions)},
+		})
+	default:
+		info := r.detectPackage(pkg)
+		var versions []packageVersionItem
+		if info.Status != "missing" && info.Version != "" {
+			versions = append(versions, packageVersionItem{
+				Version:   info.Version,
+				Status:    info.Status,
+				Path:      info.Path,
+				Installed: true,
+			})
+		}
+		return c.JSON(http.StatusOK, httpjson.Success{
+			Data: map[string]any{"versions": versions, "count": len(versions)},
+		})
+	}
+}
+
+func (r *Router) listPackageAvailableVersions(c echo.Context, pkg string) error {
+	switch pkg {
+	case "php":
+		return r.listAvailablePHPVersions(c)
+	case "go":
+		known := []string{"1.24.0", "1.23.6", "1.22.12", "1.22.4", "1.21.13"}
+		info := r.detectGo()
+		var versions []packageVersionItem
+		for _, v := range known {
+			versions = append(versions, packageVersionItem{
+				Version:   v,
+				Installed: info.Version == v,
+			})
+		}
+		return c.JSON(http.StatusOK, httpjson.Success{
+			Data: map[string]any{"versions": versions, "count": len(versions)},
+		})
+	case "node":
+		known := []string{"22", "20", "18"}
+		info := r.detectNode()
+		var versions []packageVersionItem
+		for _, v := range known {
+			inst := strings.HasPrefix(info.Version, "v"+v) || strings.HasPrefix(info.Version, v)
+			versions = append(versions, packageVersionItem{
+				Version:   v,
+				Installed: inst,
+			})
+		}
+		return c.JSON(http.StatusOK, httpjson.Success{
+			Data: map[string]any{"versions": versions, "count": len(versions)},
+		})
+	default:
+		info := r.detectPackage(pkg)
+		var versions []packageVersionItem
+		if info.Version != "" {
+			versions = append(versions, packageVersionItem{
+				Version:   info.Version,
+				Installed: info.Status != "missing",
+			})
+		}
+		return c.JSON(http.StatusOK, httpjson.Success{
+			Data: map[string]any{"versions": versions, "count": len(versions)},
+		})
+	}
 }
 
 // listPHPVersions returns all installed PHP versions
