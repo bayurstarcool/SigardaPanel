@@ -1,10 +1,14 @@
 package apihttp
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/labstack/echo/v4"
+	"sigardapanel/internal/auth"
 	"sigardapanel/internal/store"
 )
 
@@ -18,11 +22,38 @@ func newIPRestrictionHandler(s *store.Store) *ipRestrictionHandler {
 	return &ipRestrictionHandler{store: s}
 }
 
+func (h *ipRestrictionHandler) canAccess(ctx context.Context, sess *store.Session, site *store.Site) bool {
+	if sess == nil || site == nil {
+		return false
+	}
+	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
+	if user == nil {
+		return false
+	}
+	if user.Role == auth.RoleSuperAdmin {
+		return true
+	}
+	if site.OwnerID.Valid && site.OwnerID.Int64 == sess.UserID {
+		return true
+	}
+	hasAccess, _ := h.store.UserSites.HasAccess(ctx, sess.UserID, site.ID)
+	return hasAccess
+}
+
 // list returns all IP restrictions for a site.
 func (h *ipRestrictionHandler) list(c echo.Context) error {
 	siteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
+	if err != nil || siteID <= 0 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid site id"})
+	}
+
+	site, err := h.store.Sites.GetByID(c.Request().Context(), siteID)
+	if err != nil || site == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
+	}
+	sess := sessionFromEcho(c)
+	if !h.canAccess(c.Request().Context(), sess, site) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
 	}
 
 	restrictions, err := h.store.IPRestrictions.List(c.Request().Context(), siteID)
@@ -38,8 +69,17 @@ func (h *ipRestrictionHandler) list(c echo.Context) error {
 // create adds a new IP restriction rule.
 func (h *ipRestrictionHandler) create(c echo.Context) error {
 	siteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
+	if err != nil || siteID <= 0 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid site id"})
+	}
+
+	site, err := h.store.Sites.GetByID(c.Request().Context(), siteID)
+	if err != nil || site == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
+	}
+	sess := sessionFromEcho(c)
+	if !h.canAccess(c.Request().Context(), sess, site) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
 	}
 
 	var body struct {
@@ -51,9 +91,18 @@ func (h *ipRestrictionHandler) create(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 	}
 
+	body.IP = strings.TrimSpace(body.IP)
 	if body.IP == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "ip is required"})
 	}
+
+	// Validate valid IP or valid CIDR
+	if net.ParseIP(body.IP) == nil {
+		if _, _, err := net.ParseCIDR(body.IP); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid IP address or CIDR notation"})
+		}
+	}
+
 	if body.Action != "allow" && body.Action != "deny" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "action must be 'allow' or 'deny'"})
 	}
@@ -62,7 +111,7 @@ func (h *ipRestrictionHandler) create(c echo.Context) error {
 		SiteID: siteID,
 		IP:     body.IP,
 		Action: body.Action,
-		Reason: body.Reason,
+		Reason: strings.TrimSpace(body.Reason),
 	}
 
 	if err := h.store.IPRestrictions.Create(c.Request().Context(), restriction); err != nil {
@@ -77,8 +126,23 @@ func (h *ipRestrictionHandler) create(c echo.Context) error {
 // delete removes an IP restriction rule.
 func (h *ipRestrictionHandler) delete(c echo.Context) error {
 	id, err := strconv.ParseInt(c.Param("restriction_id"), 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid restriction id"})
+	}
+
+	siteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || siteID <= 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid site id"})
+	}
+
+	// Authz is mandatory: if the site cannot be resolved, refuse to delete.
+	site, err := h.store.Sites.GetByID(c.Request().Context(), siteID)
+	if err != nil || site == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
+	}
+	sess := sessionFromEcho(c)
+	if !h.canAccess(c.Request().Context(), sess, site) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
 	}
 
 	if err := h.store.IPRestrictions.Delete(c.Request().Context(), id); err != nil {

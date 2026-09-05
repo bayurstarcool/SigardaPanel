@@ -119,7 +119,7 @@
         <button onclick={fmSaveFile} disabled={fmEditSaving} class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 transition-all duration-150 disabled:opacity-50 whitespace-nowrap">{#if fmEditSaving}<Loader2 size={11} class="animate-spin" />{:else}<Save size={11} />{/if} <span>{fmEditSaving ? 'Saving...' : 'Save'}</span></button>
       </div>
     </div>
-    <div class="w-full overflow-hidden"><CodeEditor content={fmEditContent} onChange={(v) => fmEditContent = v} language={fmDetectLang(fmEditFile)} height="calc(100dvh - 280px)" hideHeader={true} hideFooter={true} /></div>
+    <div class="w-full overflow-hidden"><CodeEditor content={fmEditContent} onChange={(v: string) => fmEditContent = v} language={fmDetectLang(fmEditFile)} height="calc(100dvh - 280px)" hideHeader={true} hideFooter={true} /></div>
     <div class="flex items-center justify-between px-5 py-2 border-t border-white/[0.05] bg-white/[0.02] text-xs text-slate-500">
       <span>Lines: {fmEditContent.split('\n').length}</span><span>Chars: {fmEditContent.length.toLocaleString()}</span>
       {#if fmEditContent !== fmEditOriginal}<span class="text-amber-400 flex items-center gap-1"><AlertTriangle size={12} /> Unsaved</span>{:else}<span class="text-emerald-400 flex items-center gap-1"><Check size={12} /> Saved</span>{/if}

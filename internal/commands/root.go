@@ -259,12 +259,12 @@ func syncAgentTokenToDB(token string) error {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return fmt.Errorf("database not found at %s", dbPath)
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)")
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	_, err = db.Exec("UPDATE servers SET agent_token = ? WHERE id = 1 AND agent_token != ?", token, token)
+	_, err = db.Exec("UPDATE servers SET agent_token = ? WHERE id = 1 AND (agent_token IS NULL OR agent_token != ?)", token, token)
 	if err != nil {
 		return fmt.Errorf("update agent_token: %w", err)
 	}

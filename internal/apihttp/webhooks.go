@@ -3,6 +3,7 @@ package apihttp
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/store"
+	"strings"
 )
 
 type webhookHandler struct {
@@ -38,30 +40,54 @@ func (h *webhookHandler) deploy(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"ok": true})
 	}
 
-	// Verify HMAC-SHA256 (GitHub style)
-	sig := c.Request().Header.Get("X-Hub-Signature-256")
-	if sig != "" {
-		body, err := io.ReadAll(c.Request().Body)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "read body")
+	// Verify signature / token (GitHub / Gitea / GitLab).
+	// A site without a configured secret must NEVER accept deploys, regardless
+	// of which signature headers are present.
+	body, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "read body")
+	}
+
+	secret := site.WebhookSecret.String
+	if secret == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{"ok": false, "message": "webhook secret not configured"})
+	}
+
+	gitHubSig := c.Request().Header.Get("X-Hub-Signature-256")
+	giteaSig := c.Request().Header.Get("X-Gitea-Signature")
+	gitlabToken := c.Request().Header.Get("X-Gitlab-Token")
+
+	if gitHubSig != "" {
+		expected := computeHMAC(body, secret) // "sha256=" + hex
+		if !hmac.Equal([]byte(expected), []byte(gitHubSig)) {
+			return c.JSON(http.StatusUnauthorized, map[string]any{"ok": false, "message": "invalid signature"})
 		}
-		expected := computeHMAC(body, site.WebhookSecret.String)
-		if !hmac.Equal([]byte(expected), []byte(sig)) {
-			return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "ignored"})
+	} else if giteaSig != "" {
+		// Gitea sends the bare hex digest without the "sha256=" prefix.
+		expected := strings.TrimPrefix(computeHMAC(body, secret), "sha256=")
+		if !hmac.Equal([]byte(expected), []byte(strings.ToLower(strings.TrimSpace(giteaSig)))) {
+			return c.JSON(http.StatusUnauthorized, map[string]any{"ok": false, "message": "invalid signature"})
 		}
-		// Re-bind from body bytes since we already consumed the reader
-		var payload struct{ Ref string `json:"ref"` }
-		if err := json.Unmarshal(body, &payload); err == nil {
-			branch := site.GitBranch.String
-			if branch == "" {
-				branch = "main"
-			}
-			if payload.Ref != "" && payload.Ref != "refs/heads/"+branch {
-				return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "branch mismatch"})
-			}
+	} else if gitlabToken != "" {
+		if subtle.ConstantTimeCompare([]byte(gitlabToken), []byte(secret)) != 1 {
+			return c.JSON(http.StatusUnauthorized, map[string]any{"ok": false, "message": "invalid token"})
 		}
 	} else {
 		return c.JSON(http.StatusUnauthorized, map[string]any{"ok": false, "message": "missing signature"})
+	}
+
+	// Verify branch if ref is present in payload
+	var payload struct {
+		Ref string `json:"ref"`
+	}
+	if err := json.Unmarshal(body, &payload); err == nil && payload.Ref != "" {
+		branch := site.GitBranch.String
+		if branch == "" {
+			branch = "main"
+		}
+		if payload.Ref != "refs/heads/"+branch {
+			return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "branch mismatch"})
+		}
 	}
 
 	branch := site.GitBranch.String

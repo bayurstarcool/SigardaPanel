@@ -74,17 +74,17 @@ func TestDeployWebhook_InvalidSignature(t *testing.T) {
 
 	body := []byte(`{"ref":"refs/heads/main"}`)
 	rec := doRequestWithHeaders(t, e, "POST", "/api/v1/webhooks/deploy/"+strconv.FormatInt(site.ID, 10), body, token, map[string]string{"X-Hub-Signature-256": "sha256=badbadbad"})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
 	}
 
 	var result map[string]any
 	json.NewDecoder(rec.Body).Decode(&result)
-	if result["ok"] != true {
-		t.Fatalf("expected ok true, got %v", result["ok"])
+	if result["ok"] != false {
+		t.Fatalf("expected ok false, got %v", result["ok"])
 	}
-	if result["message"] != "ignored" {
-		t.Fatalf("expected ignored, got %v", result["message"])
+	if result["message"] != "invalid signature" {
+		t.Fatalf("expected invalid signature, got %v", result["message"])
 	}
 }
 

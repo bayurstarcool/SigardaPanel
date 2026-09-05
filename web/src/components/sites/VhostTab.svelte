@@ -109,7 +109,7 @@
     {#if vhostLoading}
       <div class="p-6 space-y-3">{#each Array(10) as _, i}<div class="h-3 bg-gradient-to-r from-white/[0.03] via-white/[0.06] to-white/[0.03] rounded animate-pulse" style="width: {55 + i * 3}%"></div>{/each}</div>
     {:else}
-      <div class="p-1"><CodeEditor content={vhostConfig} onChange={(v) => vhostConfig = v} language="text" height="500px" /></div>
+      <div class="p-1"><CodeEditor content={vhostConfig} onChange={(v: string) => vhostConfig = v} language="text" height="500px" /></div>
       <div class="px-3 sm:px-4 lg:px-5 py-2 sm:py-2.5 lg:py-3 border-t border-white/[0.05] flex items-center justify-between gap-2">
         <div class="flex items-center gap-2 sm:gap-3 text-[0.65rem] sm:text-xs text-slate-500 min-w-0">
           <span class="flex items-center gap-1 shrink-0"><FileText size={10} /> {vhostConfig.split('\n').length} lines</span>

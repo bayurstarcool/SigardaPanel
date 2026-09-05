@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { theme } from '$lib/theme.svelte';
-  import { Server, Globe, Database, HardDrive, Shield, Activity, Box, ShieldCheck, Zap, GitBranch, Search, Bell, Mail, ExternalLink, Github, ArrowRight, Sun, Moon } from 'lucide-svelte';
+  import { Server, Globe, Database, HardDrive, Shield, Activity, Box, ShieldCheck, Zap, GitBranch, Search, Bell, Mail, ExternalLink, ArrowRight, Sun, Moon } from 'lucide-svelte';
 
   let visible = $state(false);
   let countersVisible = $state(false);

@@ -205,7 +205,9 @@
           Save
         </button>
       </div>
-      <CodeEditor content={openFile.content} onChange={(v) => openFile.content = v} language={getLang(openFile.name)} />
+      {#if openFile}
+        <CodeEditor content={openFile.content} onChange={(v: string) => { if (openFile) openFile.content = v; }} language={getLang(openFile.name)} />
+      {/if}
     </div>
   {:else}
     <!-- Toolbar -->

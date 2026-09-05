@@ -13,6 +13,9 @@
   let fmEntries = $state<any[]>([]);
   let fmLoading = $state(false);
   let fmSearch = $state('');
+  let fmFilteredEntries = $derived(
+    fmSearch ? fmEntries.filter((e: any) => e.name.toLowerCase().includes(fmSearch.toLowerCase())) : fmEntries
+  );
 
   // File editor
   let fmEditFile = $state('');
