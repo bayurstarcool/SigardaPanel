@@ -405,7 +405,19 @@ func (r *Router) managePHP(ctx context.Context, action, version, pm string) (str
 		}
 		return "all packages installed", nil
 	case "uninstall":
-		return r.executor.RunShell(ctx, pm, "remove", "-y", phpPkg+"*")
+		// apt-get does not expand globs: "remove -y php8.1*" either errors
+		// (exit 100) or matches nothing. Enumerate installed php* packages
+		// via dpkg-query and remove them exactly.
+		if pm == "apt" || pm == "apt-get" {
+			out, err := r.executor.RunShell(ctx, "bash", "-c",
+				`dpkg-query -W -f='${Package}
+' 'php*' 2>/dev/null | grep -E '^php[0-9.]' | sort -u | tr '\n' ' '`)
+			if err == nil && strings.TrimSpace(out) != "" {
+				return r.executor.RunShell(ctx, pm, append([]string{"remove", "-y"}, strings.Fields(out)...)...)
+			}
+			return "no PHP packages installed", nil
+		}
+		return r.executor.RunShell(ctx, pm, "remove", "-y", phpPkg)
 	case "restart":
 		return r.executor.RunShell(ctx, "systemctl", "restart", resolvePHPFPMService(phpPkg))
 	case "stop":
@@ -502,7 +514,14 @@ func (r *Router) manageDocker(ctx context.Context, action, version, pm string) (
 		}
 		return r.executor.RunShell(ctx, pm, "install", "-y", "docker", "docker-compose")
 	case "uninstall":
-		return r.executor.RunShell(ctx, pm, "remove", "-y", "docker", "docker-compose")
+		// Ubuntu/Debian ships docker as "docker.io" (binary /usr/bin/docker);
+		// "docker" alone is a dummy/transitional package, so removing it did
+		// nothing. Remove the real packages plus container runtime bits.
+		pkgs := []string{
+			"docker.io", "docker-ce", "docker-ce-cli", "containerd",
+			"docker-compose", "docker-compose-v2", "docker-doc", "podman-docker",
+		}
+		return r.executor.RunShell(ctx, pm, append([]string{"remove", "-y"}, pkgs...)...)
 	case "restart":
 		return r.executor.RunShell(ctx, "systemctl", "restart", "docker")
 	case "stop":
