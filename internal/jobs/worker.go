@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"math/rand"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -122,8 +123,8 @@ func (w *Worker) processOne(ctx context.Context) {
 			_ = w.store.Backups.UpdateStatus(ctx, payloadData.BackupID, "running")
 		}
 
-		// Concurrency limit: max 5 concurrent backup jobs per server
-		const maxConcurrentBackups = 5
+		// Concurrency limit: max 1 concurrent backup job per server to save disk I/O and RAM
+		const maxConcurrentBackups = 1
 		if job.ServerID.Valid && job.ServerID.Int64 > 0 {
 			running, _ := w.store.Jobs.CountRunningByServer(ctx, job.ServerID.Int64)
 			if running >= maxConcurrentBackups {
@@ -349,6 +350,13 @@ func (w *Worker) processOne(ctx context.Context) {
 					}
 				}
 			}
+
+			sender := notify.NewSender(w.store)
+			backupTypeStr := "Site Files"
+			if job.Type == jobmodel.TypeDBBackupCreate {
+				backupTypeStr = "Database"
+			}
+			sender.Send(ctx, "info", "Backup Completed", fmt.Sprintf("Backup #%d (%s) completed successfully (size: %d bytes)", payloadData.BackupID, backupTypeStr, size))
 		}
 		// Auto-retention: keep only latest 7 per site+type after successful backup
 		if job.SiteID.Valid && result != nil && (result.S3UploadError == "" || result.S3Path != "") {
@@ -356,10 +364,23 @@ func (w *Worker) processOne(ctx context.Context) {
 			if err != nil {
 				slog.Warn("worker: cleanup old backups failed", "site_id", job.SiteID.Int64, "error", err)
 			} else if len(deleted) > 0 {
-				// Also clean up S3 files for the deleted backups
+				// Clean up S3 files and local files for the deleted backups
+				site, _ := w.store.Sites.GetByID(ctx, job.SiteID.Int64)
+				var provider *store.BackupStorageProvider
+				if site != nil && site.BackupProviderID.Valid && site.BackupProviderID.Int64 > 0 {
+					provider, _ = w.store.BackupProviders.GetByID(ctx, site.BackupProviderID.Int64)
+				}
+				if provider == nil {
+					provider, _ = w.store.BackupProviders.GetDefault(ctx)
+				}
+
 				for _, b := range deleted {
-					if b.S3Path.Valid && b.S3Path.String != "" {
+					if b.S3Path.Valid && b.S3Path.String != "" && provider != nil {
 						slog.Info("worker: deleting S3 file for expired backup", "backup_id", b.ID, "s3_path", b.S3Path.String)
+						w.deleteS3Object(ctx, provider, b.S3Path.String)
+					}
+					if b.StoragePath.Valid && b.StoragePath.String != "" && !strings.HasPrefix(b.StoragePath.String, "s3://") {
+						_ = os.Remove(b.StoragePath.String)
 					}
 				}
 			}
@@ -395,6 +416,27 @@ func (w *Worker) processOne(ctx context.Context) {
 	}
 
 	slog.Info("worker: job succeeded", "id", job.ID)
+}
+
+func (w *Worker) deleteS3Object(ctx context.Context, provider *store.BackupStorageProvider, s3Path string) {
+	if provider == nil || s3Path == "" {
+		return
+	}
+	endpoint := provider.Endpoint
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		endpoint = "https://" + endpoint
+	}
+	cmd := exec.CommandContext(ctx, "aws", "s3", "rm", s3Path,
+		"--endpoint-url", endpoint, "--region", provider.Region)
+	cmd.Env = append(os.Environ(),
+		"AWS_ACCESS_KEY_ID="+provider.AccessKey,
+		"AWS_SECRET_ACCESS_KEY="+provider.SecretKey,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		slog.Warn("worker: failed to delete S3 object", "s3_path", s3Path, "error", err, "output", strings.TrimSpace(string(out)))
+	} else {
+		slog.Info("worker: deleted S3 object", "s3_path", s3Path)
+	}
 }
 
 func (w *Worker) agentForJob(ctx context.Context, job *jobmodel.Job) (*agentclient.Client, error) {
