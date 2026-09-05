@@ -91,7 +91,7 @@ func (e *Executor) RunToFileEnv(ctx context.Context, env []string, outPath, name
 
 	timeout := e.Timeout
 	if timeout <= 0 {
-		timeout = 60 * time.Second
+		timeout = 15 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

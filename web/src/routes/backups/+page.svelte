@@ -51,6 +51,35 @@
     } finally { loading = false; }
   }
 
+  function downloadBackup(id: number) {
+    window.location.href = `/api/proxy/backups/${id}/download`;
+  }
+
+  async function restoreBackup(id: number) {
+    if (!confirm(`Restore backup #${id}? This will overwrite current site files/database.`)) return;
+    try {
+      await apiFetch(auth.token, 'POST', `backups/${id}/restore`);
+      toasts.success('Restore job queued');
+      await load();
+    } catch (e: any) {
+      toasts.error(e.message || 'Restore failed');
+    }
+  }
+
+  async function deleteBackup(id: number) {
+    deletingId = id;
+    try {
+      await apiFetch(auth.token, 'DELETE', `backups/${id}`);
+      backups = backups.filter(b => b.id !== id);
+      confirmDelete = null;
+      toasts.success('Backup deleted');
+    } catch (e: any) {
+      toasts.error(e.message || 'Delete failed');
+    } finally {
+      deletingId = null;
+    }
+  }
+
   async function loadProviders() {
     try {
       const resp = await apiFetch(auth.token, 'GET', 'backup-providers');
@@ -173,7 +202,13 @@
     } catch (e: any) { toasts.error(e.message); }
   }
 
-  let filtered = $derived(
+  let showManualBackup = $state(false);
+  let manualSiteId = $state<number>(0);
+  let manualType = $state<'files' | 'database' | 'both'>('both');
+  let manualProviderId = $state<number>(0);
+  let manualBusy = $state(false);
+
+  const filtered = $derived(
     activeTab === 'all' ? backups : backups.filter(b => b.backup_type === activeTab)
   );
 
@@ -184,6 +219,30 @@
     running: backups.filter(b => b.status === 'running' || b.status === 'archiving').length,
     totalSize: backups.reduce((s, b) => s + (b.size_bytes || 0), 0),
   });
+
+  async function triggerManualBackup() {
+    if (!manualSiteId) {
+      toasts.error('Please select a site');
+      return;
+    }
+    manualBusy = true;
+    try {
+      const endpoint = manualType === 'database'
+        ? `sites/${manualSiteId}/backups/database`
+        : `sites/${manualSiteId}/backups`;
+      const body: any = { backup_type: manualType };
+      if (manualProviderId > 0) body.provider_id = manualProviderId;
+
+      const res = await apiFetch(auth.token, 'POST', endpoint, body);
+      toasts.success(`Backup job #${res?.job_id || ''} queued`);
+      showManualBackup = false;
+      await load();
+    } catch (e: any) {
+      toasts.error(e.message || 'Failed to trigger backup');
+    } finally {
+      manualBusy = false;
+    }
+  }
 
   function statusConfig(s: string) {
     if (s === 'completed') return { color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20', icon: CheckCircle2 };
@@ -209,10 +268,16 @@
       <h1 class="text-xl font-bold text-white">Backups</h1>
       <p class="text-sm text-slate-400 mt-0.5">Manage, configure, and monitor backups</p>
     </div>
-    <button onclick={load}
-      class="px-4 py-2 rounded-xl text-xs font-medium bg-white/[0.04] border border-white/[0.08] text-slate-300 hover:bg-white/[0.08] hover:text-white transition-all duration-200 cursor-pointer flex items-center gap-1.5">
-      <RefreshCw size={12} class={loading ? 'animate-spin' : ''} /> Refresh
-    </button>
+    <div class="flex items-center gap-2">
+      <button onclick={() => { showManualBackup = true; loadSites(); loadProviders(); }}
+        class="px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-amber-400 to-orange-400 text-[#0a1628] hover:-translate-y-0.5 transition-all shadow-sm cursor-pointer flex items-center gap-1.5 border-0">
+        <Plus size={13} /> + Create Backup
+      </button>
+      <button onclick={load}
+        class="px-4 py-2 rounded-xl text-xs font-medium bg-white/[0.04] border border-white/[0.08] text-slate-300 hover:bg-white/[0.08] hover:text-white transition-all duration-200 cursor-pointer flex items-center gap-1.5">
+        <RefreshCw size={12} class={loading ? 'animate-spin' : ''} /> Refresh
+      </button>
+    </div>
   </div>
 
   <!-- View Toggle: History | Settings -->
@@ -807,6 +872,73 @@
         <button onclick={saveConfig} disabled={saving}
           class="flex-1 px-4 py-2.5 rounded-xl text-xs font-medium bg-gradient-to-r from-amber-400 to-orange-400 text-[#0a1628] hover:shadow-lg hover:shadow-amber-400/20 transition-all disabled:opacity-50 cursor-pointer border-0">
           {saving ? 'Saving...' : editingConfig?.id ? 'Update' : 'Create'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Manual Backup Modal -->
+{#if showManualBackup}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onclick={() => showManualBackup = false} role="presentation">
+    <div class="bg-[#0f1117] border border-white/[0.08] rounded-2xl p-6 w-full max-w-md shadow-2xl" onclick={(e) => e.stopPropagation()} role="dialog">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-semibold text-white">Create Manual Backup</h3>
+        <button onclick={() => showManualBackup = false} class="text-slate-500 hover:text-white p-1 cursor-pointer border-0 bg-transparent">
+          <X size={14} />
+        </button>
+      </div>
+      <p class="text-xs text-slate-400 mb-5">Trigger an immediate backup for a specific site</p>
+      <div class="space-y-4">
+        <div>
+          <label class="text-xs text-slate-400 mb-1.5 block">Select Site <span class="text-red-400">*</span></label>
+          <select bind:value={manualSiteId}
+            class="w-full px-3 py-2 rounded-xl bg-white/[0.05] border border-white/[0.1] text-xs text-white focus:outline-none focus:border-amber-400/40">
+            <option value={0}>Select a site...</option>
+            {#each allSites as s}
+              <option value={s.id}>{s.domain || s.name || `Site #${s.id}`}</option>
+            {/each}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs text-slate-400 mb-1.5 block">Backup Type</label>
+          <div class="grid grid-cols-3 gap-2">
+            {#each [
+              { id: 'both', label: 'Full (Files+DB)' },
+              { id: 'files', label: 'Files Only' },
+              { id: 'database', label: 'DB Only' },
+            ] as t}
+              <button
+                type="button"
+                onclick={() => manualType = t.id as any}
+                class="px-2 py-2 rounded-xl text-xs font-medium border transition-all cursor-pointer {manualType === t.id ? 'bg-amber-400/15 border-amber-400/30 text-amber-300' : 'bg-white/[0.03] border-white/[0.06] text-slate-400 hover:text-white'}">
+                {t.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <div>
+          <label class="text-xs text-slate-400 mb-1.5 block">Storage Destination</label>
+          <select bind:value={manualProviderId}
+            class="w-full px-3 py-2 rounded-xl bg-white/[0.05] border border-white/[0.1] text-xs text-white focus:outline-none focus:border-amber-400/40">
+            <option value={0}>Default Provider / Local</option>
+            {#each providers as p}
+              <option value={p.id}>{p.name} ({p.provider_type})</option>
+            {/each}
+          </select>
+        </div>
+      </div>
+
+      <div class="flex gap-3 mt-6">
+        <button onclick={() => showManualBackup = false}
+          class="flex-1 px-4 py-2.5 rounded-xl text-xs font-medium bg-white/[0.05] border border-white/[0.08] text-slate-300 hover:bg-white/[0.08] transition cursor-pointer">
+          Cancel
+        </button>
+        <button onclick={triggerManualBackup} disabled={manualBusy || !manualSiteId}
+          class="flex-1 px-4 py-2.5 rounded-xl text-xs font-medium bg-gradient-to-r from-amber-400 to-orange-400 text-[#0a1628] hover:shadow-lg hover:shadow-amber-400/20 transition-all disabled:opacity-50 cursor-pointer border-0 font-semibold">
+          {manualBusy ? 'Queueing...' : 'Start Backup'}
         </button>
       </div>
     </div>

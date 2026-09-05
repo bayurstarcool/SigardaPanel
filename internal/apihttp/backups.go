@@ -211,7 +211,13 @@ func (h *backupHandler) restore(c echo.Context) error {
 	}
 	// If backup is on S3, include s3_config so agent can download first
 	if strings.HasPrefix(backupPath, "s3://") && backup.StorageType != "local" {
-		provider, _ := h.store.BackupProviders.GetDefault(c.Request().Context())
+		var provider *store.BackupStorageProvider
+		if site.BackupProviderID.Valid && site.BackupProviderID.Int64 > 0 {
+			provider, _ = h.store.BackupProviders.GetByID(c.Request().Context(), site.BackupProviderID.Int64)
+		}
+		if provider == nil {
+			provider, _ = h.store.BackupProviders.GetDefault(c.Request().Context())
+		}
 		if provider != nil {
 			payloadMap["s3_config"] = map[string]string{
 				"bucket":     provider.Bucket,
@@ -582,7 +588,13 @@ func (h *backupHandler) download(c echo.Context) error {
 
 	// S3 path — return S3 config for frontend to construct download URL
 	if strings.HasPrefix(path, "s3://") {
-		provider, _ := h.store.BackupProviders.GetDefault(c.Request().Context())
+		var provider *store.BackupStorageProvider
+		if site.BackupProviderID.Valid && site.BackupProviderID.Int64 > 0 {
+			provider, _ = h.store.BackupProviders.GetByID(c.Request().Context(), site.BackupProviderID.Int64)
+		}
+		if provider == nil {
+			provider, _ = h.store.BackupProviders.GetDefault(c.Request().Context())
+		}
 		if provider == nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "S3 provider not configured")
 		}
