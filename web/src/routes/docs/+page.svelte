@@ -233,10 +233,57 @@ sigardapanel server add --name "Production" --hostname prod.example.com --ip 1.2
 
         <h2 class="text-xl font-semibold text-white mb-4">Supported Runtimes</h2>
         <div class="flex flex-wrap gap-2 mb-6">
-          {#each ['Static', 'PHP', 'Node.js', 'Python', 'Go', 'Docker'] as runtime}
+          {#each ['Static', 'PHP (Multi-Version 7.4 - 8.5)', 'Node.js', 'Python', 'Go', 'Proxy', 'Docker'] as runtime}
             <span class="px-3 py-1 rounded-lg text-xs bg-white/[0.05] text-slate-300">{runtime}</span>
           {/each}
         </div>
+      </section>
+
+      <!-- Databases -->
+      <section id="databases" class="mb-16">
+        <h1 class="text-3xl font-bold text-white mb-2">Databases</h1>
+        <p class="text-slate-400 mb-8">Manage MariaDB/MySQL & PostgreSQL databases, users, and integrated phpMyAdmin.</p>
+
+        <h2 class="text-xl font-semibold text-white mb-4">phpMyAdmin Web Access</h2>
+        <p class="text-sm text-slate-300 mb-3">SigardaPanel provides direct integrated phpMyAdmin with single-click authentication.</p>
+        <div class="bg-[#0d1526] rounded-xl border border-white/[0.08] p-4 mb-4">
+          <pre class="text-sm font-mono text-slate-300 overflow-x-auto"><code># Access via panel URL:
+https://cp.sigarda.dev/pma/
+
+# Or click "phpMyAdmin" on any database in the Databases dashboard for auto-login ticket.</code></pre>
+        </div>
+      </section>
+
+      <!-- Backup System -->
+      <section id="backups" class="mb-16">
+        <h1 class="text-3xl font-bold text-white mb-2">Backup System</h1>
+        <p class="text-slate-400 mb-8">Manual and scheduled backups with local storage and cloud provider support (S3, Cloudflare R2, Backblaze B2, Wasabi).</p>
+
+        <h2 class="text-xl font-semibold text-white mb-4">Manual Backup</h2>
+        <div class="bg-[#0d1526] rounded-xl border border-white/[0.08] p-4 mb-4">
+          <pre class="text-sm font-mono text-slate-300 overflow-x-auto"><code># Trigger site backup via CLI:
+sigardapanel backup create --site 1
+
+# Or click "+ Create Backup" on the Backups page to select Full, Files-only, or DB-only.</code></pre>
+        </div>
+
+        <h2 class="text-xl font-semibold text-white mb-4">Auto-Retention & Cloud Cleanup</h2>
+        <p class="text-sm text-slate-300 mb-3">Backup retention automatically keeps the latest 7 backups per site, removing expired archives from local disk and cloud S3 buckets simultaneously to prevent storage overflow.</p>
+      </section>
+
+      <!-- Security -->
+      <section id="security" class="mb-16">
+        <h1 class="text-3xl font-bold text-white mb-2">Security & DDoS Defense</h1>
+        <p class="text-slate-400 mb-8">Hardened OS, Fail2ban intrusion detection, kernel SYN flood defense, and malware monitoring.</p>
+
+        <h2 class="text-xl font-semibold text-white mb-4">Active Protections</h2>
+        <ul class="list-disc pl-5 space-y-2 text-sm text-slate-300 mb-4">
+          <li><strong>Firewall (UFW):</strong> Default-deny incoming policy, only ports 22, 80, 443 permitted.</li>
+          <li><strong>Anti-DDoS Shield:</strong> Kernel SYN-cookies (<code>net.ipv4.tcp_syncookies=1</code>), Slowloris timeout mitigation (15s client timeouts), per-IP connection limits.</li>
+          <li><strong>Fail2ban:</strong> Real-time monitoring and IP ban for SSH bruteforce and Nginx bot searches.</li>
+          <li><strong>DB Isolation:</strong> Database ports (3306, 5432, 6379, 8081) bound strictly to <code>127.0.0.1</code> (localhost only).</li>
+          <li><strong>Web Integrity:</strong> Automated detection of PHP webshell signatures in site webroots.</li>
+        </ul>
       </section>
 
       <!-- Docker -->
