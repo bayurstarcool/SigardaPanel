@@ -10,6 +10,7 @@
   let servers = $state<any[]>([]);
   let sites = $state<any[]>([]);
   let jobs = $state<any[]>([]);
+  let securityStatus = $state<any>(null);
   let loading = $state(true);
   let refreshedAt = $state<Date | null>(null);
 
@@ -68,6 +69,14 @@
       servers = [...nextServers];
       sites = siteData?.sites || [];
       jobs = jobData?.jobs || [];
+
+      if (nextServers.length > 0 && nextServers[0]?.id) {
+        try {
+          const sec = await apiFetch(auth.token, 'GET', `servers/${nextServers[0].id}/security/overview`);
+          securityStatus = sec?.data || sec || null;
+        } catch {}
+      }
+
       refreshedAt = new Date();
     } catch (e: any) {
       if (e.message === 'session expired') return;
@@ -192,6 +201,81 @@
         {/each}
       </div>
     </section>
+
+    {#if securityStatus}
+      <!-- Security & Threat Shield Monitor -->
+      <section class="mb-8">
+        <div class="mb-4 flex items-end justify-between">
+          <div>
+            <h2 class="dashboard-section-title text-sm font-semibold uppercase tracking-[0.14em] text-slate-300 flex items-center gap-2">
+              <Shield size={16} class="text-sky-400" /> Security & Threat Shield
+            </h2>
+            <p class="dashboard-section-subtitle mt-1 text-xs text-slate-500">Live protection against DDoS, intrusions, malware & unauthorized access</p>
+          </div>
+          <a href="/fail2ban" class="dashboard-section-link text-xs text-sky-400 transition hover:text-sky-300">View firewall & rules <ArrowRight size={13} class="inline" /></a>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <!-- Firewall UFW Status -->
+          <div class="p-4 rounded-xl bg-white/[0.025] border border-white/[0.06] flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl {securityStatus.firewall_active ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'} flex items-center justify-center shrink-0">
+              <Shield size={18} />
+            </div>
+            <div class="min-w-0">
+              <div class="text-xs font-semibold text-white">Firewall (UFW)</div>
+              <div class="text-[0.7rem] font-medium {securityStatus.firewall_active ? 'text-emerald-400' : 'text-rose-400'}">
+                {securityStatus.firewall_active ? 'Active & Enforcing' : 'Disabled / Off'}
+              </div>
+            </div>
+          </div>
+
+          <!-- Anti-DDoS / SYN Defense -->
+          <div class="p-4 rounded-xl bg-white/[0.025] border border-white/[0.06] flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl {securityStatus.ddos_syn_defense ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'} flex items-center justify-center shrink-0">
+              <Zap size={18} />
+            </div>
+            <div class="min-w-0">
+              <div class="text-xs font-semibold text-white">Anti-DDoS Shield</div>
+              <div class="text-[0.7rem] font-medium {securityStatus.ddos_syn_defense ? 'text-sky-400' : 'text-amber-400'}">
+                {securityStatus.ddos_syn_defense ? 'SYN-Cookies & Rate Limit Active' : 'Standard Protection'}
+              </div>
+            </div>
+          </div>
+
+          <!-- Intrusion & Bruteforce (Fail2ban) -->
+          <div class="p-4 rounded-xl bg-white/[0.025] border border-white/[0.06] flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center shrink-0">
+              <AlertTriangle size={18} />
+            </div>
+            <div class="min-w-0">
+              <div class="text-xs font-semibold text-white">Blocked Attackers</div>
+              <div class="text-[0.7rem] font-medium text-slate-300">
+                <span class="text-amber-400 font-bold tabular-nums">{securityStatus.banned_ips_count}</span> IP(s) banned by Fail2ban
+              </div>
+            </div>
+          </div>
+
+          <!-- Database & Web Root Integrity -->
+          <div class="p-4 rounded-xl bg-white/[0.025] border border-white/[0.06] flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl {securityStatus.threats_detected === 0 && !securityStatus.db_exposed_public ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'} flex items-center justify-center shrink-0">
+              <CheckCircle2 size={18} />
+            </div>
+            <div class="min-w-0">
+              <div class="text-xs font-semibold text-white">DB & File Integrity</div>
+              <div class="text-[0.7rem] font-medium {securityStatus.threats_detected === 0 && !securityStatus.db_exposed_public ? 'text-emerald-400' : 'text-rose-400'}">
+                {#if securityStatus.db_exposed_public}
+                  Database exposed!
+                {:else if securityStatus.threats_detected > 0}
+                  {securityStatus.threats_detected} suspicious file(s)
+                {:else}
+                  DB Localhost · Web Clean
+                {/if}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    {/if}
 
     {#if servers.length > 0}
       <section class="mb-8">

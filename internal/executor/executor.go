@@ -198,6 +198,7 @@ var allowedCommands = map[string]bool{
 	"cp":              true,
 	"mv":              true,
 	"find":            true,
+	"sysctl":          true,
 	"du":              true,
 	"cat":             true,
 	"wc":              true,

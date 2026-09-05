@@ -393,6 +393,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// ─── Fail2ban Management ──
 	e.GET("/api/v1/servers/:id/fail2ban/status", stackH.fail2banStatus, RequireAuth(s))
+	e.GET("/api/v1/servers/:id/security/overview", stackH.securityOverview, RequireAuth(s))
 	e.GET("/api/v1/servers/:id/fail2ban/jail", stackH.fail2banJail, RequireAuth(s))
 	e.POST("/api/v1/servers/:id/fail2ban/unban", stackH.fail2banUnban, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/servers/:id/fail2ban/ban", stackH.fail2banBan, RequireAuth(s), RequireAdmin(s))

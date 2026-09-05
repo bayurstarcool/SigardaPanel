@@ -791,6 +791,42 @@ func agentRequest(method, url, token string, body any) (*http.Response, error) {
 
 // ─── Fail2ban Management Proxy Handlers ──────────────────────────────────────
 
+// securityOverview proxies to agent GET /tasks/security/overview.
+func (h *stackHandler) securityOverview(c echo.Context) error {
+	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid server id")
+	}
+
+	server, err := h.store.Servers.GetByID(c.Request().Context(), id)
+	if err != nil || server == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "server not found")
+	}
+	if !server.AgentURL.Valid || server.AgentURL.String == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "agent URL not configured")
+	}
+
+	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/security/overview"
+	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return echo.NewHTTPError(resp.StatusCode, "agent error: "+string(body))
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "invalid agent response")
+	}
+
+	return c.JSON(http.StatusOK, httpjson.Success{Data: result, RequestID: rid})
+}
+
 // fail2banStatus proxies to agent GET /tasks/fail2ban/status.
 func (h *stackHandler) fail2banStatus(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
