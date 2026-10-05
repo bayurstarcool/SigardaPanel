@@ -564,25 +564,12 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		r.executor.RunShell(ctx, "bash", "/root/SigardaPanel-Enterprise/scripts/regenerate-ssl.sh")
 	}
 
-	// 3b. Generate logrotate config for this site
-	logrotateDir := "/etc/logrotate.d"
-	logrotatePath := filepath.Join(logrotateDir, "sigarda_"+payload.Domain)
-	logrotateContent := fmt.Sprintf(`/var/log/nginx/%s.access.log /var/log/nginx/%s.error.log {
-    daily
-    missingok
-    rotate 14
-    compress
-    delaycompress
-    notifempty
-    create 0640 www-data adm
-    sharedscripts
-    postrotate
-        [ -f /var/run/nginx.pid ] && kill -USR1 $(cat /var/run/nginx.pid)
-    endscript
-}
-`, payload.Domain, payload.Domain)
-	r.executor.Mkdir(ctx, logrotateDir)
-	r.executor.WriteFile(ctx, logrotatePath, logrotateContent, 0644)
+	// 3b. logrotate: the distro default /etc/logrotate.d/nginx already rotates
+	// /var/log/nginx/*.log. A per-domain file duplicates those log entries and
+	// makes logrotate abort the WHOLE run ("duplicate log entry" → every
+	// logrotate.service invocation FAILS). So only clean up legacy files here.
+	logrotatePath := filepath.Join("/etc/logrotate.d", "sigarda_"+payload.Domain)
+	r.executor.RunShell(ctx, "rm", "-f", logrotatePath)
 
 	// 4. Test nginx config
 	output, err := r.executor.RunShell(ctx, "nginx", "-t")
