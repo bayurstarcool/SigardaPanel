@@ -23,6 +23,14 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+	// Only trust X-Real-IP when it comes from the local nginx proxy; a client
+	// must not be able to spoof its IP via X-Forwarded-For to dodge rate limits
+	// or poison audit logs.
+	e.IPExtractor = echo.ExtractIPFromRealIPHeader(
+		echo.TrustLoopback(true),
+		echo.TrustLinkLocal(false),
+		echo.TrustPrivateNet(false),
+	)
 	e.Use(middleware.BodyLimit("32M"))
 
 	// Request ID middleware — Echo built-in

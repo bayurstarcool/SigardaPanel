@@ -1,6 +1,7 @@
 package apihttp
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -11,9 +12,9 @@ import (
 )
 
 const (
-	sessionKey          = "session"
-	userIDKey           = "user_id"
-	roleKey             = "role"
+	sessionKey            = "session"
+	userIDKey             = "user_id"
+	roleKey               = "role"
 	serviceTokenScopesKey = "service_token_scopes"
 )
 
@@ -45,7 +46,7 @@ func RequireAuth(s *store.Store) echo.MiddlewareFunc {
 					return echo.NewHTTPError(http.StatusUnauthorized, "service token expired")
 				}
 				// Update last_used_at (fire-and-forget)
-				go s.ServiceTokens.UpdateLastUsed(c.Request().Context(), serviceToken.ID)
+				go s.ServiceTokens.UpdateLastUsed(context.Background(), serviceToken.ID)
 				// Store scopes in context for downstream role checks
 				c.Set(serviceTokenScopesKey, serviceToken.Scopes)
 				c.Set(sessionKey, &store.Session{ID: serviceToken.ID, UserID: 0})
@@ -200,12 +201,12 @@ func RequireFeature(s *store.Store, feature string) echo.MiddlewareFunc {
 			// Uses the same logic as features.HasFeature
 			if !featureHasAccess(currentTier, feature) {
 				return c.JSON(http.StatusForbidden, map[string]interface{}{
-					"error":        "feature_not_available",
-					"feature":      feature,
+					"error":         "feature_not_available",
+					"feature":       feature,
 					"required_tier": featureMinTier(feature),
-					"current_tier": currentTier,
-					"upgrade_url":  "/settings/billing",
-					"request_id":   rid,
+					"current_tier":  currentTier,
+					"upgrade_url":   "/settings/billing",
+					"request_id":    rid,
 				})
 			}
 			return next(c)
@@ -227,11 +228,11 @@ func RequireTier(s *store.Store, minTier string) echo.MiddlewareFunc {
 
 			if tierLevelNum(currentTier) < tierLevelNum(minTier) {
 				return c.JSON(http.StatusForbidden, map[string]interface{}{
-					"error":        "tier_not_sufficient",
+					"error":         "tier_not_sufficient",
 					"required_tier": minTier,
-					"current_tier": currentTier,
-					"upgrade_url":  "/settings/billing",
-					"request_id":   rid,
+					"current_tier":  currentTier,
+					"upgrade_url":   "/settings/billing",
+					"request_id":    rid,
 				})
 			}
 			return next(c)

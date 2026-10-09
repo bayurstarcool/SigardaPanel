@@ -44,16 +44,18 @@ export const GET: RequestHandler = async ({ params, cookies, request }) => {
       });
     }
 
-    // Set cookie without Secure flag for localhost HTTP access
+    const proto = request.headers.get("x-forwarded-proto") || "https";
+    // Lax is enough (same-site navigation + nginx auth_request); Secure is
+    // only dropped for plain-HTTP localhost access.
     cookies.set("pma_ticket", sessionTicket, {
       path: "/",
       httpOnly: true,
-      sameSite: "none",
+      sameSite: "lax",
+      secure: proto === "https",
       maxAge: 3600,
     });
 
     const host = request.headers.get("host") || "cp.sigarda.dev";
-    const proto = request.headers.get("x-forwarded-proto") || "https";
     const urlToken = `sg_${createHash("sha256").update(sessionTicket).digest("base64url")}`;
     return new Response(null, {
       status: 302,

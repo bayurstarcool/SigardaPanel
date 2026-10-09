@@ -83,14 +83,44 @@ func safePath(root, rel string) (string, error) {
 		return "", echo.NewHTTPError(http.StatusBadRequest, "invalid path")
 	}
 	full := filepath.Join(root, rel)
-	cleanRoot := filepath.Clean(root)
 	// Ensure full path is within root (use trailing separator to avoid prefix collisions
 	// e.g., /home/user/htdocs/example.com should NOT match /home/user/htdocs/example.com-backup)
-	cleanRoot = filepath.Clean(root) + string(filepath.Separator)
-	if !strings.HasPrefix(full+string(filepath.Separator), cleanRoot) && full != filepath.Clean(root) {
+	cleanRoot := filepath.Clean(root)
+	if full != cleanRoot && !strings.HasPrefix(full, cleanRoot+string(filepath.Separator)) {
 		return "", echo.NewHTTPError(http.StatusBadRequest, "path traversal not allowed")
 	}
+	// Resolve symlinks so a link inside the site root cannot point outside it.
+	if err := ensureNoSymlinkEscape(cleanRoot, full); err != nil {
+		return "", err
+	}
 	return full, nil
+}
+
+// ensureNoSymlinkEscape resolves symlinks on the deepest existing ancestor of
+// full and verifies the result stays inside the (resolved) root.
+func ensureNoSymlinkEscape(root, full string) error {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "site root not accessible")
+	}
+	probe := full
+	for {
+		resolved, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			if resolved != realRoot && !strings.HasPrefix(resolved, realRoot+string(filepath.Separator)) {
+				return echo.NewHTTPError(http.StatusBadRequest, "path traversal not allowed")
+			}
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid path")
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid path")
+		}
+		probe = parent
+	}
 }
 
 // GET /sites/:id/files?path=.
@@ -232,7 +262,7 @@ func (h *fileManagerHandler) writeFile(c echo.Context) error {
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:       map[string]any{"status": "success", "message": "File saved"},
+		Data:      map[string]any{"status": "success", "message": "File saved"},
 		RequestID: rid,
 	})
 }
@@ -275,7 +305,7 @@ func (h *fileManagerHandler) createEntry(c echo.Context) error {
 	})
 
 	return c.JSON(http.StatusCreated, httpjson.Success{
-		Data:       map[string]any{"status": "success", "message": "Created"},
+		Data:      map[string]any{"status": "success", "message": "Created"},
 		RequestID: rid,
 	})
 }
@@ -317,7 +347,7 @@ func (h *fileManagerHandler) deleteEntry(c echo.Context) error {
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:       map[string]any{"status": "success", "message": "Deleted"},
+		Data:      map[string]any{"status": "success", "message": "Deleted"},
 		RequestID: rid,
 	})
 }
@@ -371,7 +401,7 @@ func (h *fileManagerHandler) renameEntry(c echo.Context) error {
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:       map[string]any{"status": "success", "message": "Renamed"},
+		Data:      map[string]any{"status": "success", "message": "Renamed"},
 		RequestID: rid,
 	})
 }
