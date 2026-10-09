@@ -1,8 +1,6 @@
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
-import { env } from "$env/dynamic/private";
-
-const API_URL = env.SIGARDAPANEL_API_URL || "http://localhost:7700";
+import { API_URL, clientIpHeaders } from "$lib/server/upstream";
 
 function buildUrl(base: string, request: Request): string {
   const url = new URL(request.url);
@@ -15,6 +13,7 @@ export const GET: RequestHandler = async ({ params, request }) => {
   const headers: Record<string, string> = {};
   const auth = request.headers.get("Authorization");
   if (auth) headers["Authorization"] = auth;
+  Object.assign(headers, clientIpHeaders(request));
 
   try {
     const res = await fetch(url, { headers, cache: "no-store" });
@@ -35,6 +34,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
   };
   const auth = request.headers.get("Authorization");
   if (auth) headers["Authorization"] = auth;
+  Object.assign(headers, clientIpHeaders(request));
 
   try {
     const body = await request.text();
@@ -61,6 +61,7 @@ export const PUT: RequestHandler = async ({ params, request }) => {
   };
   const auth = request.headers.get("Authorization");
   if (auth) headers["Authorization"] = auth;
+  Object.assign(headers, clientIpHeaders(request));
 
   try {
     const body = await request.text();
@@ -87,6 +88,7 @@ export const PATCH: RequestHandler = async ({ params, request }) => {
   };
   const auth = request.headers.get("Authorization");
   if (auth) headers["Authorization"] = auth;
+  Object.assign(headers, clientIpHeaders(request));
 
   try {
     const body = await request.text();
@@ -111,6 +113,7 @@ export const DELETE: RequestHandler = async ({ params, request }) => {
   const headers: Record<string, string> = {};
   const auth = request.headers.get("Authorization");
   if (auth) headers["Authorization"] = auth;
+  Object.assign(headers, clientIpHeaders(request));
 
   try {
     const res = await fetch(url, {

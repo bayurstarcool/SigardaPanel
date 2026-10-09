@@ -1,14 +1,16 @@
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
-
-const API_URL = "http://localhost:7700";
+import { API_URL, clientIpHeaders } from "$lib/server/upstream";
 
 export const POST: RequestHandler = async ({ request }) => {
   try {
     const body = await request.text();
     const res = await fetch(`${API_URL}/api/v1/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...clientIpHeaders(request),
+      },
       body,
     });
     const data = await res.json();

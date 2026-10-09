@@ -158,15 +158,27 @@ function createAuthStore() {
     username: string,
     password: string,
     remember_me?: boolean,
+    second_factor?: { totp_code?: string; recovery_code?: string },
   ) {
     log("login() called for:", username, "remember_me:", remember_me);
     const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, remember_me }),
+      body: JSON.stringify({
+        username,
+        password,
+        remember_me,
+        ...second_factor,
+      }),
     });
     const json = await res.json();
-    if (json.error) throw new Error(json.error.message || json.error.code);
+    if (json.error) {
+      const err = new Error(json.error.message || json.error.code) as Error & {
+        code?: string;
+      };
+      err.code = json.error.code;
+      throw err;
+    }
     const t = json.data.token;
     const u = json.data.user as User;
     token = t;

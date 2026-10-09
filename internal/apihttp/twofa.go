@@ -2,9 +2,7 @@ package apihttp
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base32"
-	"encoding/hex"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -63,13 +61,13 @@ func (h *TwoFactorHandler) setup2FA(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"secret":     secretBase32,
-		"qr_url":     key.URL(),
-		"issuer":     "SigardaPanel",
-		"account":    user.Email,
-		"period":     30,
-		"digits":     6,
-		"algorithm":  "SHA1",
+		"secret":    secretBase32,
+		"qr_url":    key.URL(),
+		"issuer":    "SigardaPanel",
+		"account":   user.Email,
+		"period":    30,
+		"digits":    6,
+		"algorithm": "SHA1",
 	})
 }
 
@@ -116,8 +114,8 @@ func (h *TwoFactorHandler) enable2FA(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"message":  "2FA enabled successfully",
-		"enabled":  true,
+		"message": "2FA enabled successfully",
+		"enabled": true,
 	})
 }
 
@@ -164,8 +162,8 @@ func (h *TwoFactorHandler) disable2FA(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"message":  "2FA disabled successfully",
-		"enabled":  false,
+		"message": "2FA disabled successfully",
+		"enabled": false,
 	})
 }
 
@@ -223,8 +221,8 @@ func (h *TwoFactorHandler) status2FA(c echo.Context) error {
 	secret, _ := h.store.TwoFactor.GetTOTPSecret(c.Request().Context(), userID)
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"enabled":  enabled,
-		"setup":    secret != "",
+		"enabled": enabled,
+		"setup":   secret != "",
 	})
 }
 
@@ -244,11 +242,15 @@ func (h *TwoFactorHandler) generateRecoveryCodes(c echo.Context) error {
 	codes := make([]string, 10)
 	codeHashes := make([]string, 10)
 	for i := 0; i < 10; i++ {
-		code := make([]byte, 4)
-		rand.Read(code)
-		codes[i] = base32.StdEncoding.EncodeToString(code)[:8]
-		h := sha256.Sum256([]byte(codes[i]))
-		codeHashes[i] = hex.EncodeToString(h[:])
+		raw := make([]byte, 10) // 80 bits of entropy per code
+		if _, err := rand.Read(raw); err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]any{
+				"error": "failed to generate recovery codes",
+			})
+		}
+		enc := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw) // 16 chars
+		codes[i] = enc[0:4] + "-" + enc[4:8] + "-" + enc[8:12] + "-" + enc[12:16]
+		codeHashes[i] = hashRecoveryCode(codes[i])
 	}
 
 	// Store hashed recovery codes in database

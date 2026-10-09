@@ -116,11 +116,12 @@ SIGARDAPANEL_LOG_DIR=/var/log/sigardapanel
 SIGARDAPANEL_AGENT_URL=http://127.0.0.1:7710
 SIGARDAPANEL_AGENT_TOKEN=$AGENT_TOKEN
 SIGARDAPANEL_ENCRYPTION_KEY=$ENCRYPTION_KEY
-MEMBER_DB_HOST=127.0.0.1
-MEMBER_DB_PORT=3306
-MEMBER_DB_USER=sigardapanel
-MEMBER_DB_PASSWORD=$(openssl rand -hex 16)
-MEMBER_DB_NAME=sigardapanel_member
+# Optional member area (PostgreSQL). Uncomment and fill in to enable:
+# MEMBER_DB_HOST=127.0.0.1
+# MEMBER_DB_PORT=5432
+# MEMBER_DB_USER=sigardapanel
+# MEMBER_DB_PASSWORD=
+# MEMBER_DB_NAME=sigardapanel_member
 EOF
 chmod 600 /etc/sigardapanel/*.env
 ok "Env files (mode 600) created"
@@ -235,9 +236,9 @@ server {
     server_name _;
     client_max_body_size 100M;
     if ($http_cf_ray = "") { return 301 https://$host$request_uri; }
-    location / { proxy_pass http://127.0.0.1:7720; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
+    location / { proxy_pass http://127.0.0.1:7720; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-Proto $scheme; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
     location ^~ /api/v1/ { proxy_pass http://127.0.0.1:7700; proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
-    location /api/ { proxy_pass http://127.0.0.1:7720; proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
+    location /api/ { proxy_pass http://127.0.0.1:7720; proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-Proto $scheme; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
 }
 
 # HTTPS — self-signed by default; replace with Let's Encrypt
@@ -251,9 +252,9 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Strict-Transport-Security "max-age=31536000" always;
-    location / { proxy_pass http://127.0.0.1:7720; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
+    location / { proxy_pass http://127.0.0.1:7720; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-Proto $scheme; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
     location ^~ /api/v1/ { proxy_pass http://127.0.0.1:7700; proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
-    location /api/ { proxy_pass http://127.0.0.1:7720; proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
+    location /api/ { proxy_pass http://127.0.0.1:7720; proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-Proto $scheme; proxy_buffers 8 16k; proxy_buffer_size 16k; proxy_read_timeout 900s; }
 }
 NGINX
 

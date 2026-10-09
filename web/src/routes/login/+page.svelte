@@ -12,6 +12,10 @@
   let showPass = $state(false);
   let shake = $state(false);
   let mounted = $state(false);
+  // Second step, shown when the account has 2FA enabled
+  let needs2fa = $state(false);
+  let useRecovery = $state(false);
+  let code = $state('');
 
   onMount(() => {
     if (auth.token) window.location.href = '/dashboard';
@@ -23,9 +27,21 @@
     err = '';
     busy = true;
     try {
-      await auth.login(u, p, rm);
+      const factor = !needs2fa
+        ? undefined
+        : useRecovery
+          ? { recovery_code: code.trim() }
+          : { totp_code: code.trim() };
+      await auth.login(u, p, rm, factor);
       window.location.href = '/dashboard';
     } catch (e: any) {
+      if (e.code === '2fa_required') {
+        needs2fa = true;
+        err = '';
+        busy = false;
+        return;
+      }
+      if (e.code === 'invalid_2fa_code') code = '';
       err = e.message;
       shake = true;
       setTimeout(() => shake = false, 500);
@@ -155,6 +171,24 @@
                   </button>
                 </div>
               </div>
+
+              {#if needs2fa}
+                <div>
+                  <label for="login-2fa" class="block text-xs font-medium text-[var(--text-muted)] mb-2 uppercase tracking-wider">
+                    {useRecovery ? 'Recovery code' : 'Authentication code'}
+                  </label>
+                  <input id="login-2fa" bind:value={code}
+                    inputmode={useRecovery ? 'text' : 'numeric'}
+                    autocomplete="one-time-code"
+                    maxlength={useRecovery ? 24 : 6}
+                    class="login-input dark:bg-white/[0.03] dark:border-[var(--border-primary)] w-full rounded-xl px-4 py-3 text-sm tracking-widest text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none transition-all duration-200 focus:border-sky-400/40 focus:shadow-[0_0_0_3px_rgba(56,189,248,0.08)]"
+                    placeholder={useRecovery ? 'XXXX-XXXX-XXXX-XXXX' : '123456'} required />
+                  <button type="button" onclick={() => { useRecovery = !useRecovery; code = ''; }}
+                    class="mt-2 text-xs text-sky-500 dark:text-sky-400/70 hover:text-sky-400 transition-colors">
+                    {useRecovery ? 'Use authenticator app instead' : 'Lost your device? Use a recovery code'}
+                  </button>
+                </div>
+              {/if}
             </div>
 
             <label for="remember-me" class="flex items-center gap-3 mt-6 cursor-pointer group/select">
@@ -183,7 +217,7 @@
     <!-- Footer -->
     <div class="login-fade-delay2 mt-8 text-center">
       <p class="text-xs text-[var(--text-muted)]">
-        &&copy; {new Date().getFullYear()} <a href="https://sigarda.com" target="_blank" class="text-sky-500 dark:text-sky-400/60 hover:text-sky-400 transition-colors">sigarda.com</a> &middot; <a href="https://github.com/bayurstarcool/SigardaPanel/issues" target="_blank" class="text-sky-500 dark:text-sky-400/60 hover:text-sky-400 transition-colors">Support</a>&copy; {new Date().getFullYear()} <a href="https://sigarda.com" target="_blank" class="text-sky-500 dark:text-sky-400/60 hover:text-sky-400 transition-colors">sigarda.com</a> &middot; <a href="https://github.com/bayurstarcool/SigardaPanel/issues" target="_blank" class="text-sky-500 dark:text-sky-400/60 hover:text-sky-400 transition-colors">Support</a>
+        &copy; {new Date().getFullYear()} <a href="https://sigarda.com" target="_blank" rel="noopener" class="text-sky-500 dark:text-sky-400/60 hover:text-sky-400 transition-colors">sigarda.com</a> &middot; <a href="https://github.com/bayurstarcool/SigardaPanel/issues" target="_blank" rel="noopener" class="text-sky-500 dark:text-sky-400/60 hover:text-sky-400 transition-colors">Support</a>
         <span class="mx-2 text-[var(--text-muted)]/40">&middot;</span>
         VPS control plane
       </p>

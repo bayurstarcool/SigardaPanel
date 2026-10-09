@@ -89,24 +89,32 @@ func Run(ctx context.Context) error {
 		}
 	}()
 
-	// Open member database (PostgreSQL, separate from panel)
-	memberDB, err := member.ConnectPostgreSQL(
-		Getenv("MEMBER_DB_HOST", "localhost"),
-		Getenv("MEMBER_DB_PORT", "5432"),
-		Getenv("MEMBER_DB_USER", "sigardapanel"),
-		Getenv("MEMBER_DB_PASSWORD", "sigardapanel123"),
-		Getenv("MEMBER_DB_NAME", "sigardapanel_member"),
-	)
-	if err != nil {
-		return err
-	}
-	defer memberDB.Close()
+	// Member area (PostgreSQL, separate from the panel DB) is optional: it is
+	// enabled only when MEMBER_DB_HOST is set. Once configured, a connection
+	// failure is fatal so a misconfiguration is never silently ignored.
+	var memberDB *sql.DB
+	if host := Getenv("MEMBER_DB_HOST", ""); host != "" {
+		dbName := Getenv("MEMBER_DB_NAME", "sigardapanel_member")
+		memberDB, err = member.ConnectPostgreSQL(
+			host,
+			Getenv("MEMBER_DB_PORT", "5432"),
+			Getenv("MEMBER_DB_USER", "sigardapanel"),
+			Getenv("MEMBER_DB_PASSWORD", ""),
+			dbName,
+		)
+		if err != nil {
+			return err
+		}
+		defer memberDB.Close()
 
-	memberStore := member.NewStore(memberDB)
-	if err := memberStore.Migrate(); err != nil {
-		return err
+		memberStore := member.NewStore(memberDB)
+		if err := memberStore.Migrate(); err != nil {
+			return err
+		}
+		slog.Info("member database connected", "host", host, "db", dbName)
+	} else {
+		slog.Info("member database not configured (MEMBER_DB_HOST unset), member area disabled")
 	}
-	slog.Info("member database connected", "host", "localhost", "db", "sigardapanel_member")
 
 	server := &http.Server{
 		Addr:         cfg.Addr,

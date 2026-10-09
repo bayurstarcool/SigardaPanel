@@ -112,24 +112,18 @@ func (s *SQLiteTwoFactorStore) StoreRecoveryCodes(ctx context.Context, userID in
 
 // VerifyRecoveryCode checks if a recovery code hash is valid and unused, then marks it used.
 func (s *SQLiteTwoFactorStore) VerifyRecoveryCode(ctx context.Context, userID int64, codeHash string) (bool, error) {
-	var id int64
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id FROM two_factor_recovery_codes WHERE user_id = ? AND code_hash = ? AND used = 0`,
-		userID, codeHash).Scan(&id)
+	// Single atomic UPDATE so two concurrent logins cannot both spend one code.
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE two_factor_recovery_codes SET used = 1 WHERE user_id = ? AND code_hash = ? AND used = 0`,
+		userID, codeHash)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return false, nil
-		}
 		return false, fmt.Errorf("verify recovery code: %w", err)
 	}
-
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE two_factor_recovery_codes SET used = 1 WHERE id = ?`, id)
+	n, err := res.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("mark recovery code used: %w", err)
+		return false, fmt.Errorf("verify recovery code: %w", err)
 	}
-
-	return true, nil
+	return n == 1, nil
 }
 
 // DeleteRecoveryCodes removes all recovery codes for a user.

@@ -1,10 +1,14 @@
 package apihttp
 
 import (
-	"os"
-	"log/slog"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +21,7 @@ import (
 )
 
 // DefaultSessionTTL is the default session token lifetime.
-const DefaultSessionTTL = 7 * 24 * time.Hour // 7 days
+const DefaultSessionTTL = 7 * 24 * time.Hour     // 7 days
 const RememberMeSessionTTL = 90 * 24 * time.Hour // 90 days
 
 // rateLimiter implements a simple per-IP login attempt limiter.
@@ -62,19 +66,113 @@ func (rl *rateLimiter) allow(ip string) bool {
 	return true
 }
 
+// failureTracker counts failed logins per account so a distributed attacker
+// (many IPs, one username) is throttled even though each IP stays under the
+// per-IP limit. Successful logins reset the counter.
+type failureTracker struct {
+	mu     sync.Mutex
+	fails  map[string][]time.Time
+	limit  int
+	window time.Duration
+}
+
+func newFailureTracker(limit int, window time.Duration) *failureTracker {
+	return &failureTracker{fails: make(map[string][]time.Time), limit: limit, window: window}
+}
+
+func (f *failureTracker) prune(key string, now time.Time) []time.Time {
+	cutoff := now.Add(-f.window)
+	var valid []time.Time
+	for _, t := range f.fails[key] {
+		if t.After(cutoff) {
+			valid = append(valid, t)
+		}
+	}
+	if len(valid) == 0 {
+		delete(f.fails, key)
+	} else {
+		f.fails[key] = valid
+	}
+	return valid
+}
+
+func (f *failureTracker) blocked(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.prune(key, time.Now())) >= f.limit
+}
+
+func (f *failureTracker) fail(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now()
+	f.fails[key] = append(f.prune(key, now), now)
+}
+
+func (f *failureTracker) reset(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, key)
+}
+
+// usedTOTP remembers accepted TOTP codes so a code sniffed within its validity
+// window cannot be replayed.
+type usedTOTP struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+func (u *usedTOTP) markUsed(userID int64, code string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	now := time.Now()
+	for k, t := range u.seen {
+		if now.Sub(t) > 2*time.Minute {
+			delete(u.seen, k)
+		}
+	}
+	key := strconv.FormatInt(userID, 10) + ":" + code
+	if _, dup := u.seen[key]; dup {
+		return false
+	}
+	if u.seen == nil {
+		u.seen = make(map[string]time.Time)
+	}
+	u.seen[key] = now
+	return true
+}
+
+// dummyPasswordHash is verified when the username does not exist so the
+// response time does not reveal which accounts are real.
+var dummyPasswordHash, _ = auth.HashPassword("sigardapanel-dummy-password")
+
+// normalizeRecoveryCode makes "abcd-efgh 1234" and "ABCDEFGH1234" equivalent.
+func normalizeRecoveryCode(code string) string {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	return strings.NewReplacer("-", "", " ", "").Replace(code)
+}
+
+func hashRecoveryCode(code string) string {
+	h := sha256.Sum256([]byte(normalizeRecoveryCode(code)))
+	return hex.EncodeToString(h[:])
+}
+
 type authHandler struct {
-	store       *store.Store
-	audit       *audit.Recorder
-	rateLimiter *rateLimiter
-	sessionTTL  time.Duration
+	store        *store.Store
+	audit        *audit.Recorder
+	rateLimiter  *rateLimiter
+	userFailures *failureTracker
+	usedTOTP     usedTOTP
+	sessionTTL   time.Duration
 }
 
 func newAuthHandler(s *store.Store, a *audit.Recorder) *authHandler {
 	return &authHandler{
-		store:       s,
-		audit:       a,
-		rateLimiter: newRateLimiter(10, 15*time.Minute),
-		sessionTTL:  DefaultSessionTTL,
+		store:        s,
+		audit:        a,
+		rateLimiter:  newRateLimiter(10, 15*time.Minute),
+		userFailures: newFailureTracker(20, 15*time.Minute),
+		sessionTTL:   DefaultSessionTTL,
 	}
 }
 
@@ -86,13 +184,19 @@ func (ah *authHandler) login(c echo.Context) error {
 	}
 
 	var body struct {
-		Username   string `json:"username"`
-		Password   string `json:"password"`
-		TOTPCode   string `json:"totp_code"`   // 2FA code
-		RememberMe bool   `json:"remember_me"`
+		Username     string `json:"username"`
+		Password     string `json:"password"`
+		TOTPCode     string `json:"totp_code"`     // 2FA code
+		RecoveryCode string `json:"recovery_code"` // one-time 2FA recovery code
+		RememberMe   bool   `json:"remember_me"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+
+	failKey := strings.ToLower(strings.TrimSpace(body.Username))
+	if ah.userFailures.blocked(failKey) {
+		return echo.NewHTTPError(http.StatusTooManyRequests, "too many failed attempts for this account, try again later")
 	}
 
 	user, err := ah.store.Users.GetByUsername(c.Request().Context(), body.Username)
@@ -101,7 +205,12 @@ func (ah *authHandler) login(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if user == nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, "invalid credentials")
+		_, _ = auth.VerifyPassword(dummyPasswordHash, body.Password)
+		ah.userFailures.fail(failKey)
+		return c.JSON(http.StatusUnauthorized, httpjson.ErrorBody{
+			Error:     httpjson.APIError{Code: "invalid_credentials", Message: "invalid credentials"},
+			RequestID: rid,
+		})
 	}
 
 	ok, err := auth.VerifyPassword(user.PasswordHash, body.Password)
@@ -110,6 +219,7 @@ func (ah *authHandler) login(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if !ok {
+		ah.userFailures.fail(failKey)
 		return c.JSON(http.StatusUnauthorized, httpjson.ErrorBody{
 			Error:     httpjson.APIError{Code: "invalid_credentials", Message: "invalid credentials"},
 			RequestID: rid,
@@ -118,25 +228,37 @@ func (ah *authHandler) login(c echo.Context) error {
 
 	// Check if 2FA is enabled for this user
 	if user.TOTPEnabled {
-		if body.TOTPCode == "" {
+		if body.TOTPCode == "" && body.RecoveryCode == "" {
 			return c.JSON(http.StatusUnauthorized, httpjson.ErrorBody{
 				Error:     httpjson.APIError{Code: "2fa_required", Message: "Two-factor authentication code required"},
 				RequestID: rid,
 			})
 		}
 
-		// Validate TOTP code
 		valid := false
-		if user.TOTPSecret != "" {
-			valid = totp.Validate(body.TOTPCode, user.TOTPSecret)
+		if body.RecoveryCode != "" {
+			// One-time recovery code (e.g. lost authenticator device).
+			used, err := ah.store.TwoFactor.VerifyRecoveryCode(c.Request().Context(), user.ID, hashRecoveryCode(body.RecoveryCode))
+			if err != nil {
+				slog.Error("login: verify recovery code", "error", err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+			}
+			valid = used
+			if valid {
+				ah.audit.RecordAction(c.Request().Context(), user.ID, "2fa_recovery_code_used", audit.ResourceSession, 0, map[string]any{"ip": ip})
+			}
+		} else if user.TOTPSecret != "" {
+			valid = totp.Validate(body.TOTPCode, user.TOTPSecret) && ah.usedTOTP.markUsed(user.ID, body.TOTPCode)
 		}
 		if !valid {
+			ah.userFailures.fail(failKey)
 			return c.JSON(http.StatusUnauthorized, httpjson.ErrorBody{
 				Error:     httpjson.APIError{Code: "invalid_2fa_code", Message: "Invalid two-factor authentication code"},
 				RequestID: rid,
 			})
 		}
 	}
+	ah.userFailures.reset(failKey)
 
 	token, err := auth.NewToken()
 	if err != nil {
@@ -304,7 +426,7 @@ func (ah *authHandler) me(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:     data,
+		Data:      data,
 		RequestID: rid,
 	})
 }
