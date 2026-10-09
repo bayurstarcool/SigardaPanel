@@ -2,7 +2,7 @@ export interface User {
   id: number;
   username: string;
   email: string;
-  role: 'super_admin' | 'admin' | 'user';
+  role: "super_admin" | "admin" | "user";
 }
 
 export interface ImpersonatorInfo {

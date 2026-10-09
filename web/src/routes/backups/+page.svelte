@@ -8,7 +8,7 @@
     Package, RefreshCw, RotateCcw, Download, Trash2,
     Database, HardDrive, Calendar, Cloud, Loader2,
     CheckCircle2, XCircle, Clock, AlertCircle, Archive,
-    Settings, Plus, Edit3, Globe, Key, Play,
+    Settings, Plus, Edit3, Globe, Key, Play, X,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
 

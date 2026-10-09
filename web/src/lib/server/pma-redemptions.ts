@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto';
+import { randomBytes } from "crypto";
 
 type Redemption = { sessionTicket: string; expiresAt: number };
 
@@ -10,9 +10,12 @@ function pruneExpired(now = Date.now()) {
   }
 }
 
-export function createPmaRedemption(sessionTicket: string, expiresAt: number): string {
+export function createPmaRedemption(
+  sessionTicket: string,
+  expiresAt: number,
+): string {
   pruneExpired();
-  const token = randomBytes(32).toString('base64url');
+  const token = randomBytes(32).toString("base64url");
   redemptions.set(token, { sessionTicket, expiresAt });
   return token;
 }
