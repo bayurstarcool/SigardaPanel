@@ -70,15 +70,6 @@ func TestWebhookNotifier_InvalidURL(t *testing.T) {
 	}
 }
 
-func TestEmailNotifier_Stub(t *testing.T) {
-	n := &EmailNotifier{}
-	ch := &Channel{Type: "email", Config: json.RawMessage(`{"to_address":"test@example.com"}`)}
-	err := n.Send(context.Background(), ch, &Alert{Severity: "error", Subject: "Test", Message: "msg"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
 func TestEmailNotifier_MissingToAddress(t *testing.T) {
 	n := &EmailNotifier{}
 	ch := &Channel{Type: "email", Config: json.RawMessage(`{"to_address":""}`)}

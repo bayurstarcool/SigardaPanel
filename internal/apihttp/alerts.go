@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/mail"
+	"net/url"
 	"strconv"
 
 	"github.com/labstack/echo/v4"
@@ -188,12 +190,27 @@ func validateChannelConfig(channelType string, config json.RawMessage) error {
 	case "email":
 		var cfg struct {
 			ToAddress string `json:"to_address"`
+			From      string `json:"from_address"`
+			TLS       string `json:"smtp_tls"`
 		}
 		if err := json.Unmarshal(config, &cfg); err != nil {
 			return fmt.Errorf("invalid config: %w", err)
 		}
 		if cfg.ToAddress == "" {
 			return fmt.Errorf("email config requires to_address")
+		}
+		if _, err := mail.ParseAddressList(cfg.ToAddress); err != nil {
+			return fmt.Errorf("email config: invalid to_address")
+		}
+		if cfg.From != "" {
+			if _, err := mail.ParseAddress(cfg.From); err != nil {
+				return fmt.Errorf("email config: invalid from_address")
+			}
+		}
+		switch cfg.TLS {
+		case "", "starttls", "ssl", "none":
+		default:
+			return fmt.Errorf("email config: smtp_tls must be starttls, ssl or none")
 		}
 	case "webhook":
 		var cfg struct {
@@ -215,11 +232,52 @@ func alertChannelToMap(ch *store.AlertChannel) map[string]any {
 		"name":       ch.Name,
 		"type":       ch.Type,
 		"enabled":    ch.Enabled,
-		"config":     ch.Config,
+		"config":     redactChannelConfig(ch.Config),
 		"created_at": ch.CreatedAt,
 		"updated_at": ch.UpdatedAt,
 	}
 	return m
+}
+
+// channelSecretKeys are config fields that must never be echoed back to the UI.
+var channelSecretKeys = map[string]bool{
+	"bot_token":     true,
+	"smtp_password": true,
+	"password":      true,
+	"secret":        true,
+	"token":         true,
+	"webhook_url":   true,
+	"url":           true,
+}
+
+// redactChannelConfig masks secret values in a stored channel config. A
+// webhook URL usually embeds its credential, so it is masked down to the host.
+func redactChannelConfig(raw string) string {
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return "{}"
+	}
+	for k, v := range cfg {
+		if !channelSecretKeys[k] {
+			continue
+		}
+		str, _ := v.(string)
+		if str == "" {
+			continue
+		}
+		if k == "webhook_url" || k == "url" {
+			if u, err := url.Parse(str); err == nil && u.Host != "" {
+				cfg[k] = u.Scheme + "://" + u.Host + "/********"
+				continue
+			}
+		}
+		cfg[k] = "********"
+	}
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return "{}"
+	}
+	return string(out)
 }
 
 func alertToMap(a store.Alert) map[string]any {

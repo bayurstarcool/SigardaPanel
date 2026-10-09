@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // TelegramNotifier sends alerts via Telegram Bot API.
@@ -31,8 +33,8 @@ func (t *TelegramNotifier) Send(ctx context.Context, channel *Channel, alert *Al
 		"parse_mode": "Markdown",
 	})
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", config.BotToken)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", config.BotToken)
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -40,6 +42,12 @@ func (t *TelegramNotifier) Send(ctx context.Context, channel *Channel, alert *Al
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		// *url.Error embeds the request URL, which contains the bot token;
+		// keep it out of stored alert errors.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
 		return fmt.Errorf("telegram request: %w", err)
 	}
 	defer resp.Body.Close()

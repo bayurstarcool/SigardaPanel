@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"sigardapanel/internal/store"
@@ -162,5 +163,22 @@ func TestAlertsList_RequiresAuth(t *testing.T) {
 	rec := doRequest(t, e, "GET", "/api/v1/alerts", nil, "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestRedactChannelConfig(t *testing.T) {
+	got := redactChannelConfig(`{"bot_token":"123:abc","chat_id":"42","smtp_password":"pw","webhook_url":"https://discord.com/api/webhooks/1/SECRET","to_address":"a@b.c"}`)
+	for _, leak := range []string{"123:abc", `"pw"`, "SECRET"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("redacted config still contains %q: %s", leak, got)
+		}
+	}
+	for _, keep := range []string{"42", "a@b.c", "discord.com"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("redacted config lost non-secret %q: %s", keep, got)
+		}
+	}
+	if redactChannelConfig("not json") != "{}" {
+		t.Error("invalid JSON must redact to {}")
 	}
 }
