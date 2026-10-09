@@ -99,7 +99,8 @@ func (e *Executor) RunToFileEnv(ctx context.Context, env []string, outPath, name
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	// O_EXCL: never follow a symlink pre-planted at outPath (root truncates it otherwise).
+	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return "", fmt.Errorf("open output file: %w", err)
 	}

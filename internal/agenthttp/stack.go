@@ -88,6 +88,10 @@ func (r *Router) stackInstallTask(c echo.Context) error {
 	if req.Action == "" {
 		req.Action = "install"
 	}
+	// Versions end up in apt arguments and shell snippets run as root.
+	if req.Version != "" && !stackVersionRe.MatchString(req.Version) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid version")
+	}
 
 	// Handle special version listing actions
 	if req.Action == "list-versions" {
@@ -357,6 +361,11 @@ func (r *Router) detectSupervisor() StackInfo {
 
 // --- Manage helpers ---
 
+var (
+	stackVersionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+:~_\-]{0,63}$`)
+	goVersionRe    = regexp.MustCompile(`^[0-9]+\.[0-9]+(\.[0-9]+)?$`)
+)
+
 func (r *Router) manageNginx(ctx context.Context, action, version, pm string) (string, error) {
 	switch action {
 	case "install", "update":
@@ -504,13 +513,16 @@ func (r *Router) manageGo(ctx context.Context, action, version, pm string) (stri
 		if ver == "" {
 			ver = "1.24.0"
 		}
+		if !goVersionRe.MatchString(ver) {
+			return "", fmt.Errorf("invalid go version %q", ver)
+		}
 		arch := "amd64"
 		if runtime.GOARCH == "arm64" {
 			arch = "arm64"
 		}
 		url := fmt.Sprintf("https://go.dev/dl/go%s.linux-%s.tar.gz", ver, arch)
 		return r.executor.RunShell(ctx, "sh", "-c",
-			fmt.Sprintf(`set -eu; curl -fsSL %s -o /tmp/go.tar.gz; rm -rf /usr/local/go; tar -C /usr/local -xzf /tmp/go.tar.gz; rm -f /tmp/go.tar.gz; ln -sfn /usr/local/go/bin/go /usr/local/bin/go; ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt; printf '%%s\n' 'export PATH=/usr/local/go/bin:$PATH' 'export GOROOT=/usr/local/go' > /etc/profile.d/sigardapanel-go.sh; chmod 0644 /etc/profile.d/sigardapanel-go.sh`, url))
+			fmt.Sprintf(`set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; curl -fsSL %s -o "$d/go.tar.gz"; rm -rf /usr/local/go; tar -C /usr/local -xzf "$d/go.tar.gz"; ln -sfn /usr/local/go/bin/go /usr/local/bin/go; ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt; printf '%%s\n' 'export PATH=/usr/local/go/bin:$PATH' 'export GOROOT=/usr/local/go' > /etc/profile.d/sigardapanel-go.sh; chmod 0644 /etc/profile.d/sigardapanel-go.sh`, url))
 	case "uninstall":
 		return r.executor.RunShell(ctx, "sh", "-c", "set -eu; rm -rf /usr/local/go; if [ \"$(readlink /usr/local/bin/go 2>/dev/null || true)\" = /usr/local/go/bin/go ]; then rm -f /usr/local/bin/go; fi; if [ \"$(readlink /usr/local/bin/gofmt 2>/dev/null || true)\" = /usr/local/go/bin/gofmt ]; then rm -f /usr/local/bin/gofmt; fi; rm -f /etc/profile.d/sigardapanel-go.sh")
 	default:

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1069,7 +1070,7 @@ func (h *siteHandler) gitBranches(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/branches?root_path=" + site.RootPath
+	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/branches?root_path=" + url.QueryEscape(site.RootPath)
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
@@ -1092,7 +1093,7 @@ func (h *siteHandler) gitLog(c echo.Context) error {
 	if lines == "" {
 		lines = "20"
 	}
-	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/log?root_path=" + site.RootPath + "&lines=" + lines
+	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/log?root_path=" + url.QueryEscape(site.RootPath) + "&lines=" + url.QueryEscape(lines)
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
@@ -1158,6 +1159,11 @@ func (h *siteHandler) resolveSiteAndServer(c echo.Context) (*store.Site, *store.
 	}
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil || site == nil {
+		return nil, nil, echo.NewHTTPError(http.StatusNotFound, "site not found")
+	}
+	// Ownership / assignment check: without it any logged-in user could read
+	// another tenant's repository (branches, history) or roll it back.
+	if !h.canAccess(c.Request().Context(), sessionFromEcho(c), site) {
 		return nil, nil, echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 	server, err := h.store.Servers.GetByID(c.Request().Context(), site.ServerID)

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -580,16 +582,26 @@ func parseSysbenchOutput(output string) CPUBenchScore {
 func runDiskBenchmark(ctx context.Context) DiskBenchmark {
 	bench := DiskBenchmark{}
 
+	// Fixed names in /tmp are predictable: a local user could pre-plant a
+	// symlink and make this root process overwrite any file. Use a private dir.
+	dir, err := os.MkdirTemp("", "sigarda-bench-")
+	if err != nil {
+		return bench
+	}
+	defer os.RemoveAll(dir)
+	diskTest := filepath.Join(dir, "disktest")
+	fioTest := filepath.Join(dir, "fiotest")
+
 	// Sequential write test (512MB)
 	start := time.Now()
-	out, err := exec.CommandContext(ctx, "dd", "if=/dev/zero", "of=/tmp/_sigarda_disktest", "bs=1M", "count=512", "oflag=direct").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "dd", "if=/dev/zero", "of="+diskTest, "bs=1M", "count=512", "oflag=direct").CombinedOutput()
 	elapsed := time.Since(start).Seconds()
 	if err == nil {
 		bench.SeqWriteMBs = 512.0 / elapsed
 	} else {
 		// Fallback without oflag=direct
 		start2 := time.Now()
-		out, err = exec.CommandContext(ctx, "dd", "if=/dev/zero", "of=/tmp/_sigarda_disktest", "bs=1M", "count=512").CombinedOutput()
+		out, err = exec.CommandContext(ctx, "dd", "if=/dev/zero", "of="+diskTest, "bs=1M", "count=512").CombinedOutput()
 		elapsed = time.Since(start2).Seconds()
 		if err == nil {
 			_ = out
@@ -599,20 +611,20 @@ func runDiskBenchmark(ctx context.Context) DiskBenchmark {
 
 	// Sequential read test
 	start = time.Now()
-	_, err = exec.CommandContext(ctx, "dd", "if=/tmp/_sigarda_disktest", "of=/dev/null", "bs=1M").CombinedOutput()
+	_, err = exec.CommandContext(ctx, "dd", "if="+diskTest, "of=/dev/null", "bs=1M").CombinedOutput()
 	elapsed = time.Since(start).Seconds()
 	if err == nil {
 		bench.SeqReadMBs = 512.0 / elapsed
 	}
 
 	// Clean up
-	exec.Command("rm", "-f", "/tmp/_sigarda_disktest").Run()
+	os.Remove(diskTest)
 
 	// Random read IOPS (fio)
 	if _, fioErr := exec.LookPath("fio"); fioErr == nil {
 		fioOut, err := exec.CommandContext(ctx, "fio", "--name=_sigarda_fio", "--ioengine=libaio", "--direct=1",
 			"--bs=4k", "--iodepth=64", "--size=64M", "--rw=randread", "--runtime=5", "--time_based",
-			"--filename=/tmp/_sigarda_fiotest", "--output-format=terse").Output()
+			"--filename="+fioTest, "--output-format=terse").Output()
 		if err == nil {
 			fields := strings.Split(strings.TrimSpace(string(fioOut)), ";")
 			if len(fields) > 48 {
@@ -621,7 +633,7 @@ func runDiskBenchmark(ctx context.Context) DiskBenchmark {
 				bench.RandomReadMBs = bwKB / 1024.0
 			}
 		}
-		exec.Command("rm", "-f", "/tmp/_sigarda_fiotest").Run()
+		os.Remove(fioTest)
 	}
 
 	return bench

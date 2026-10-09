@@ -13,6 +13,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
+	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -227,6 +228,15 @@ func (h *stackHandler) commandExec(c echo.Context) error {
 	if body.Command == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "command is required")
 	}
+	if sess := sessionFromEcho(c); sess != nil {
+		cmd := body.Command
+		if len(cmd) > 500 {
+			cmd = cmd[:500] + "…"
+		}
+		h.audit.RecordAction(c.Request().Context(), sess.UserID, "server_command_exec", audit.ResourceServer, id, map[string]any{
+			"command": cmd, "ip": c.RealIP(),
+		})
+	}
 	agentURL := server.AgentURL.String + "/tasks/command/exec"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, map[string]string{"command": body.Command})
 	if err != nil {
@@ -257,7 +267,86 @@ func (h *stackHandler) dockerContainers(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
+	if allowed, restricted := h.tenantContainerNames(c); restricted {
+		result = filterContainers(result, allowed)
+	}
 	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+}
+
+// tenantContainerNames returns the docker container names a non-admin user may
+// see (the containers of sites they own or are assigned to). restricted is
+// false for admins, who see everything.
+func (h *stackHandler) tenantContainerNames(c echo.Context) (allowed map[string]bool, restricted bool) {
+	sess := sessionFromEcho(c)
+	ctx := c.Request().Context()
+	if sess == nil {
+		return map[string]bool{}, true
+	}
+	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
+	if user != nil && auth.HasRole(user.Role, auth.RoleAdmin) {
+		return nil, false
+	}
+	allowed = map[string]bool{}
+	add := func(site *store.Site) {
+		if site != nil {
+			allowed["site-"+strings.ReplaceAll(site.Name, " ", "-")] = true
+		}
+	}
+	if owned, err := h.store.Sites.List(ctx, store.SiteListFilter{OwnerID: sess.UserID}); err == nil {
+		for i := range owned {
+			add(&owned[i])
+		}
+	}
+	if assigned, err := h.store.UserSites.ListByUser(ctx, sess.UserID); err == nil {
+		for _, us := range assigned {
+			if site, err := h.store.Sites.GetByID(ctx, us.SiteID); err == nil {
+				add(site)
+			}
+		}
+	}
+	return allowed, true
+}
+
+func filterContainers(result map[string]any, allowed map[string]bool) map[string]any {
+	list, _ := result["containers"].([]any)
+	kept := make([]any, 0, len(list))
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok {
+			if name, _ := m["name"].(string); allowed[strings.TrimPrefix(name, "/")] {
+				kept = append(kept, item)
+			}
+		}
+	}
+	return map[string]any{"containers": kept}
+}
+
+// containerBelongsTo asks the agent for the container list and checks that
+// containerID (id or name) resolves to one of the allowed names.
+func (h *stackHandler) containerBelongsTo(server *store.Server, containerID string, allowed map[string]bool) bool {
+	resp, err := agentRequest("GET", strings.TrimRight(server.AgentURL.String, "/")+"/tasks/docker/containers", server.AgentToken, nil)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var result map[string]any
+	body, _ := io.ReadAll(resp.Body)
+	if json.Unmarshal(body, &result) != nil {
+		return false
+	}
+	list, _ := result["containers"].([]any)
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := m["id"].(string)
+		name, _ := m["name"].(string)
+		name = strings.TrimPrefix(name, "/")
+		if allowed[name] && containerID != "" && (containerID == name || (id != "" && (strings.HasPrefix(id, containerID) || strings.HasPrefix(containerID, id)))) {
+			return true
+		}
+	}
+	return false
 }
 
 // dockerContainerStart proxies to agent POST /tasks/docker/container/start.
@@ -297,7 +386,15 @@ func (h *stackHandler) dockerContainerLogs(c echo.Context) error {
 	if lines == "" {
 		lines = "100"
 	}
-	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/docker/container/logs?container_id=" + containerID + "&lines=" + lines
+	if n, err := strconv.Atoi(lines); err != nil || n < 1 || n > 5000 {
+		lines = "100"
+	}
+	if allowed, restricted := h.tenantContainerNames(c); restricted {
+		if !h.containerBelongsTo(server, containerID, allowed) {
+			return echo.NewHTTPError(http.StatusNotFound, "container not found")
+		}
+	}
+	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/docker/container/logs?container_id=" + url.QueryEscape(containerID) + "&lines=" + lines
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())

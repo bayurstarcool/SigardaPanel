@@ -90,6 +90,10 @@ func (mc *MetricsCollector) collectFromAgent(ctx context.Context, srv store.Serv
 		return
 	}
 
+	if srv.AgentToken != "" {
+		req.Header.Set("Authorization", "Bearer "+srv.AgentToken)
+	}
+
 	resp, err := mc.client.Do(req)
 	if err != nil {
 		slog.Warn("metrics: agent unreachable", "server_id", srv.ID, "url", metricsURL, "error", err)

@@ -120,7 +120,8 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	}
 
 	e.GET("/health", healthHandler)
-	e.GET("/metrics", r.metricsHandler)
+	// /metrics forks several processes per call, so it requires the agent token.
+	e.GET("/metrics", r.metricsHandler, r.requireAgentAuth)
 	e.GET("/capabilities", capabilitiesHandler)
 
 	// WebSocket terminal endpoint (auth via query param or header)
@@ -1642,9 +1643,19 @@ func (r *Router) databaseBackupTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid db_name or db_user")
 	}
 
+	if !r.isAllowedSitePath(payload.RootPath) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid root_path")
+	}
 	siteBackupDir := filepath.Join(payload.RootPath, "backup", "db")
 	if err := r.executor.EnsureDir(ctx, siteBackupDir); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "ensure dir failed: "+err.Error())
+	}
+	// backup/db is user-writable: it must not have been swapped for a symlink
+	// that points outside the site root.
+	realRoot, rootErr := filepath.EvalSymlinks(payload.RootPath)
+	realDir, dirErr := filepath.EvalSymlinks(siteBackupDir)
+	if rootErr != nil || dirErr != nil || !siteinput.UnderRoot(realRoot, realDir) {
+		return echo.NewHTTPError(http.StatusBadRequest, "backup directory escapes the site root")
 	}
 
 	dumpName := buildBackupFileName("database_"+sanitizeBackupName(payload.DBName), payload.BackupID, ".sql")

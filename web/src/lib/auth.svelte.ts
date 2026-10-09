@@ -25,7 +25,7 @@ function createAuthStore() {
       if (t && u) {
         token = t;
         user = JSON.parse(u) as User;
-        document.cookie = `panel_token=${t}; path=/; SameSite=Lax; max-age=604800`;
+        // (the legacy JS-readable panel_token cookie is no longer written)
         log(
           "session loaded from localStorage:",
           user?.username,
@@ -185,7 +185,7 @@ function createAuthStore() {
     user = u;
     consecutiveFailures = 0;
     localStorage.setItem("sigarda_token", t);
-    document.cookie = `panel_token=${t}; path=/; SameSite=Lax; max-age=604800`;
+    // (the legacy JS-readable panel_token cookie is no longer written)
     localStorage.setItem("sigarda_user", JSON.stringify(u));
     log("login() success, token:", t.slice(0, 8) + "...");
   }
