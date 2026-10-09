@@ -21,3 +21,11 @@ Thumbs.db
 # Env
 .env
 *.log
+
+# Deps / backups
+node_modules/
+*.orig
+*.rej
+*.bak
+member/web/build/
+member/web/.svelte-kit/
