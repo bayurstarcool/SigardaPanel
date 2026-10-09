@@ -1,0 +1,6 @@
+# Release artifacts are published as GitHub Releases, never committed
+sigardapanel*
+*.db
+*.bak
+__pycache__/
+*.pyc
