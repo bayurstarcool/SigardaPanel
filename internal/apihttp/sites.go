@@ -17,6 +17,7 @@ import (
 	"sigardapanel/internal/cloudflare"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -221,12 +222,56 @@ func (h *siteHandler) create(c echo.Context) error {
 		}
 		body.RootPath = defaultSiteRootPath(username, body.Domain)
 	}
-	if !rootPathRegex.MatchString(body.RootPath) || strings.Contains(body.RootPath, "..") {
+	if err := siteinput.RootPathAllowed(body.RootPath); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid root_path")
 	}
-	if body.SystemUser == "" && userID > 0 {
-		if owner, err := h.store.Users.GetByID(c.Request().Context(), userID); err == nil && owner != nil {
-			body.SystemUser = owner.Username
+
+	// Who is asking? Only admins may pick the unix account / filesystem
+	// location; everyone else is pinned to their own account and home.
+	var requester *store.User
+	if userID > 0 {
+		if u, err := h.store.Users.GetByID(c.Request().Context(), userID); err == nil {
+			requester = u
+		}
+	}
+	privileged := requester != nil && auth.HasRole(requester.Role, auth.RoleAdmin)
+	if privileged {
+		if body.SystemUser == "" {
+			body.SystemUser = requester.Username
+		}
+		if err := siteinput.SystemUser(body.SystemUser); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid system_user")
+		}
+	} else {
+		home := "/home/"
+		body.SystemUser = ""
+		if requester != nil {
+			home = "/home/" + requester.Username + "/"
+			if siteinput.SystemUser(requester.Username) == nil {
+				body.SystemUser = requester.Username
+			}
+		}
+		if !strings.HasPrefix(body.RootPath, home) {
+			return echo.NewHTTPError(http.StatusForbidden, "root_path must be inside your home directory")
+		}
+	}
+	if body.ProxyPassURL != "" {
+		if err := siteinput.ProxyPassURL(body.ProxyPassURL); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+	}
+	if body.PHPVersion != "" {
+		if err := siteinput.PHPVersion(body.PHPVersion); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+	}
+	if body.ConfFile != "" && !privileged {
+		body.ConfFile = "" // informational field, only admins may set it
+	}
+	if body.Runtime == "docker" {
+		if err := siteinput.DockerOptions(body.DockerImage, body.DockerName, body.DockerPorts, body.DockerEnv,
+			body.DockerVolume, body.DockerRestart, body.DockerLanguage, body.RootPath); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 	}
 	if body.ManagedBy != "sigardapanel" && body.ManagedBy != "cloudpanel" && body.ManagedBy != "external" {
@@ -638,6 +683,11 @@ func (h *siteHandler) updateConfig(c echo.Context) error {
 
 	// Update proxy_pass_url — use *string to allow clearing (empty string = clear)
 	if body.ProxyPassURL != nil {
+		if *body.ProxyPassURL != "" {
+			if err := siteinput.ProxyPassURL(*body.ProxyPassURL); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+			}
+		}
 		if err := h.store.Sites.UpdateProxyPassURL(c.Request().Context(), id, *body.ProxyPassURL); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}

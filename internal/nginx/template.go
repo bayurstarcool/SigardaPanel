@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"text/template"
 
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -425,6 +426,11 @@ func GenerateVhost(s *store.Site, port int, security *store.SiteSecurity) (strin
 	if tmplStr == "" {
 		return "", fmt.Errorf("unsupported runtime %q", s.Runtime)
 	}
+	// Every value interpolated into the vhost is validated here, the single
+	// choke point, so no caller can inject nginx directives.
+	if err := validateSiteForVhost(s); err != nil {
+		return "", err
+	}
 
 	t, err := template.New("vhost").Parse(tmplStr)
 	if err != nil {
@@ -545,4 +551,33 @@ func main() {
 	default:
 		return nil
 	}
+}
+
+// validateSiteForVhost rejects site values that could break out of their
+// nginx directive (newlines, ';', '{', '}', quotes, '$' ...).
+func validateSiteForVhost(s *store.Site) error {
+	if err := siteinput.Domain(s.Domain); err != nil {
+		return err
+	}
+	if s.RootPath != "" {
+		if err := siteinput.RootPath(s.RootPath); err != nil {
+			return err
+		}
+	}
+	if s.ProxyPassURL.Valid && s.ProxyPassURL.String != "" {
+		if err := siteinput.ProxyPassURL(s.ProxyPassURL.String); err != nil {
+			return err
+		}
+	}
+	if s.PHPVersion.Valid && s.PHPVersion.String != "" {
+		if err := siteinput.PHPVersion(s.PHPVersion.String); err != nil {
+			return err
+		}
+	}
+	if s.PHPIni.Valid {
+		if err := siteinput.PHPIni(s.PHPIni.String); err != nil {
+			return err
+		}
+	}
+	return nil
 }

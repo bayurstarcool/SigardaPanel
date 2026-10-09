@@ -333,6 +333,23 @@ func (h *siteHandler) updateVhost(c echo.Context) error {
 		nginxConfigPath := filepath.Join(nginxConfDir, site.Domain+".conf")
 		nginxAvailablePath := filepath.Join(nginxConfAvailableDir, site.Domain+".conf")
 
+		// Remember the previous config so a failed `nginx -t` can be rolled
+		// back instead of leaving a broken file that fails every later reload.
+		prevEnabled, prevEnabledErr := os.ReadFile(nginxConfigPath)
+		prevAvailable, prevAvailableErr := os.ReadFile(nginxAvailablePath)
+		restore := func() {
+			if prevEnabledErr == nil {
+				os.WriteFile(nginxConfigPath, prevEnabled, 0644)
+			} else {
+				os.Remove(nginxConfigPath)
+			}
+			if prevAvailableErr == nil {
+				os.WriteFile(nginxAvailablePath, prevAvailable, 0644)
+			} else {
+				os.Remove(nginxAvailablePath)
+			}
+		}
+
 		// Write to sites-enabled directly
 		if writeErr := os.WriteFile(nginxConfigPath, []byte(body.Config), 0644); writeErr != nil {
 			return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
@@ -350,9 +367,10 @@ func (h *siteHandler) updateVhost(c echo.Context) error {
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
+			restore()
 			return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
 				"status":         "saved_nginx_invalid",
-				"message":        "Config saved but nginx -t failed. Check syntax:\n" + stderr.String(),
+				"message":        "nginx -t failed, previous config restored. Check syntax:\n" + stderr.String(),
 				"nginx_error":    stderr.String(),
 				"config_path":    nginxConfigPath,
 				"reload_attempt": false,

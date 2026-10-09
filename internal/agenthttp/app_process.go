@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os/user"
 	"path/filepath"
 	"strings"
 
 	"github.com/labstack/echo/v4"
+	"sigardapanel/internal/siteinput"
 )
 
 // appServiceName returns the systemd unit name for a site app.
@@ -59,11 +61,47 @@ PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
-`, domain, rootPath, shellQuote("exec "+command), userLine, envFileLine, port, memoryMaxMB, memoryHighMB)
+`, domain, rootPath, systemdQuote("exec "+command), userLine, envFileLine, port, memoryMaxMB, memoryHighMB)
 }
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// systemdQuote wraps s in double quotes for a systemd ExecStart= word. systemd
+// unescapes \\ and \" itself and expands %-specifiers and $-variables, so those
+// are escaped here; the shell therefore receives s byte-for-byte.
+func systemdQuote(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`, `$`, `$$`, "\n", `\n`, "\r", `\r`)
+	return `"` + r.Replace(s) + `"`
+}
+
+// validateAppUnitInput guards everything that ends up in the unit file. The
+// unit is written as root, so the account must be a real, non-root user and no
+// field may contain a newline (which would inject extra unit directives).
+func validateAppUnitInput(domain, systemUser, rootPath, command string) error {
+	if !isValidDomain(domain) {
+		return fmt.Errorf("invalid domain")
+	}
+	if err := siteinput.RootPath(rootPath); err != nil {
+		return err
+	}
+	if err := siteinput.SystemUser(systemUser); err != nil {
+		return fmt.Errorf("a valid non-root system_user is required to run an app")
+	}
+	u, err := user.Lookup(systemUser)
+	if err != nil || u.Uid == "0" {
+		return fmt.Errorf("system_user %q does not exist or is root", systemUser)
+	}
+	if command == "" || len(command) > 1024 {
+		return fmt.Errorf("invalid app command")
+	}
+	for _, r := range command {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("app command must be a single line without control characters")
+		}
+	}
+	return nil
 }
 
 // appStartTask writes the systemd unit and starts the app service.
@@ -86,6 +124,9 @@ func (r *Router) appStartTask(c echo.Context) error {
 	}
 	if payload.AppCommand == "" || payload.AppPort <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "missing app command or port")
+	}
+	if err := validateAppUnitInput(payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	svc := appServiceName(payload.SiteID)
@@ -167,7 +208,8 @@ func (r *Router) appRestartTask(c echo.Context) error {
 	svc := appServiceName(payload.SiteID)
 
 	// Rewrite unit in case command/port/memory changed
-	if payload.AppCommand != "" && payload.AppPort > 0 && isValidDomain(payload.Domain) && r.isAllowedSitePath(payload.RootPath) {
+	if payload.AppCommand != "" && payload.AppPort > 0 && isValidDomain(payload.Domain) && r.isAllowedSitePath(payload.RootPath) &&
+		validateAppUnitInput(payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand) == nil {
 		unitPath := filepath.Join("/etc/systemd/system", svc+".service")
 		unit := systemdUnitContent(payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand, payload.AppPort, payload.AppMemoryMax)
 		if err := r.executor.WriteFile(ctx, unitPath, unit, 0644); err == nil {

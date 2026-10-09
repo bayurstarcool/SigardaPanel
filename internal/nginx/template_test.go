@@ -1,6 +1,7 @@
 package nginx
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -119,5 +120,31 @@ func TestGenerateVhost_DifferentRuntime(t *testing.T) {
 	}
 	if !strings.Contains(phpConfig, "fastcgi_pass") {
 		t.Error("expected php-specific config")
+	}
+}
+
+func TestGenerateVhostRejectsInjection(t *testing.T) {
+	base := func() *store.Site {
+		return &store.Site{Domain: "example.com", Runtime: "proxy", RootPath: "/home/u/htdocs/example.com",
+			ProxyPassURL: sql.NullString{String: "http://127.0.0.1:3000", Valid: true}}
+	}
+	if _, err := GenerateVhost(base(), 0, nil); err != nil {
+		t.Fatalf("valid site rejected: %v", err)
+	}
+	mutations := map[string]func(*store.Site){
+		"proxy_pass newline": func(s *store.Site) {
+			s.ProxyPassURL.String = "http://x;\n}\nlocation /p/ {alias /home/;autoindex on;\n"
+		},
+		"root_path newline": func(s *store.Site) { s.RootPath = "/home/u\n}\nserver {" },
+		"domain semicolon":  func(s *store.Site) { s.Domain = "a.com;include /etc/passwd" },
+		"php version":       func(s *store.Site) { s.PHPVersion = sql.NullString{String: "8.3;x", Valid: true} },
+		"php ini quote":     func(s *store.Site) { s.PHPIni = sql.NullString{String: `a" ; evil "`, Valid: true} },
+	}
+	for name, mut := range mutations {
+		s := base()
+		mut(s)
+		if _, err := GenerateVhost(s, 0, nil); err == nil {
+			t.Errorf("%s: expected GenerateVhost to reject", name)
+		}
 	}
 }

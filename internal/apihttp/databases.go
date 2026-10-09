@@ -23,6 +23,7 @@ import (
 	"sigardapanel/internal/dbserver"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -489,12 +490,18 @@ func (h *dbHandler) createDBUser(c echo.Context) error {
 	if !dbNameRegex.MatchString(body.Username) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid username")
 	}
-	if len(body.Password) < 8 {
-		return echo.NewHTTPError(http.StatusBadRequest, "password must be at least 8 chars")
+	if err := siteinput.DBPassword(body.Password); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	body.HostPattern = canonicalDBHost(body.HostPattern)
+	if err := siteinput.DBHost(body.HostPattern); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
 	if body.Privileges == "" {
 		body.Privileges = "ALL"
+	}
+	if err := siteinput.DBPrivileges(body.Privileges); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	// Create user in MySQL directly first
@@ -953,11 +960,17 @@ func (h *dbHandler) updateDBUser(c echo.Context) error {
 	needsMySQL := false
 
 	if body.HostPattern != nil {
-		newHost = *body.HostPattern
+		newHost = canonicalDBHost(*body.HostPattern)
+		if err := siteinput.DBHost(newHost); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		needsMySQL = true
 	}
 	if body.Privileges != nil {
 		newPrivs = *body.Privileges
+		if err := siteinput.DBPrivileges(newPrivs); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		needsMySQL = true
 	}
 

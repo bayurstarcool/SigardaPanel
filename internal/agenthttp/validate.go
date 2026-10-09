@@ -2,6 +2,8 @@ package agenthttp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"io"
 	"io/fs"
@@ -200,4 +202,13 @@ func countFiles(root string) int {
 		return nil
 	})
 	return count
+}
+
+// randomHex returns 2*n random hex characters.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // crypto/rand failure is unrecoverable
+	}
+	return hex.EncodeToString(b)
 }

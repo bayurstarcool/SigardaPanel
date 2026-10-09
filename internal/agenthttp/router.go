@@ -21,6 +21,7 @@ import (
 	"sigardapanel/internal/executor"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/nginx"
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -412,6 +413,12 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		if payload.DockerImage == "" {
 			payload.DockerImage = "nginx:alpine"
 		}
+		// The agent runs docker as root: never trust the API for image names,
+		// host bind mounts, port mappings or restart flags.
+		if err := siteinput.DockerOptions(payload.DockerImage, payload.DockerName, payload.DockerPorts,
+			payload.DockerEnv, payload.DockerVolume, payload.DockerRestart, payload.DockerLanguage, payload.RootPath); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 
 		// Detect language from image or explicit docker_language field
 		dockerLang := payload.DockerLanguage
@@ -435,7 +442,15 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 
 		containerName := payload.DockerName
 		if containerName == "" {
-			containerName = "site-" + payload.Name
+			containerName = "site-" + strings.Map(func(r rune) rune {
+				if r == ' ' {
+					return '-'
+				}
+				return r
+			}, payload.Name)
+		}
+		if err := siteinput.DockerName(containerName); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 
 		// Pull image
@@ -449,7 +464,7 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		r.executor.RunShell(ctx, "docker", "rm", "-f", containerName)
 
 		// Build docker run args
-		args := []string{"run", "-d", "--name", containerName}
+		args := []string{"run", "-d", "--name", containerName, "--security-opt", "no-new-privileges"}
 		if payload.DockerRestart != "" && payload.DockerRestart != "no" {
 			args = append(args, "--restart", payload.DockerRestart)
 		} else {
@@ -1785,13 +1800,18 @@ func (r *Router) dbUserCreateTask(c echo.Context) error {
 	if !isValidDBIdentifier(payload.DatabaseName) || !isValidDBIdentifier(payload.Username) || payload.Password == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid database user payload")
 	}
+	// The password is embedded in SQL fed to mysql/psql running as root.
+	if err := siteinput.DBPassword(payload.Password); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
 	if payload.HostPattern == "" {
 		payload.HostPattern = "localhost"
 	}
 	if payload.Privileges == "" {
 		payload.Privileges = "ALL"
 	}
-	if !isValidDBHostPattern(payload.HostPattern) || !isValidDBPrivileges(payload.Privileges) {
+	if !isValidDBHostPattern(payload.HostPattern) || !isValidDBPrivileges(payload.Privileges) ||
+		siteinput.DBPrivileges(payload.Privileges) != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid database user grants")
 	}
 
@@ -1805,9 +1825,12 @@ func (r *Router) dbUserCreateTask(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusFailedDependency, "mysql create user failed: "+strings.TrimSpace(output))
 		}
 	case "postgres":
+		// Random dollar-quote tag: the (already control-char-free) password can
+		// never terminate the DO block.
+		tag := "$sg" + randomHex(8) + "$"
 		sql := fmt.Sprintf(
-			"DO $$ BEGIN CREATE ROLE %s LOGIN PASSWORD %s; EXCEPTION WHEN duplicate_object THEN ALTER ROLE %s WITH PASSWORD %s; END $$; GRANT ALL PRIVILEGES ON DATABASE %s TO %s;\n",
-			payload.Username, sqlQuote(payload.Password), payload.Username, sqlQuote(payload.Password), payload.DatabaseName, payload.Username,
+			"DO %s BEGIN CREATE ROLE %s LOGIN PASSWORD %s; EXCEPTION WHEN duplicate_object THEN ALTER ROLE %s WITH PASSWORD %s; END %s; GRANT ALL PRIVILEGES ON DATABASE %s TO %s;\n",
+			tag, payload.Username, sqlQuote(payload.Password), payload.Username, sqlQuote(payload.Password), tag, payload.DatabaseName, payload.Username,
 		)
 		if output, err := r.executor.RunWithInput(ctx, sql, "psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres"); err != nil {
 			return echo.NewHTTPError(http.StatusFailedDependency, "postgres create user failed: "+strings.TrimSpace(output))

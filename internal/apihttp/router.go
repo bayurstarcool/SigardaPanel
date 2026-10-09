@@ -166,7 +166,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// Site management advanced tabs
 	e.GET("/api/v1/sites/:id/vhost", sitesH.getVhost, RequireAuth(s))
-	e.PUT("/api/v1/sites/:id/vhost", sitesH.updateVhost, RequireAuth(s))
+	// Raw vhost editing can read/write arbitrary files via nginx directives, so it is admin-only.
+	e.PUT("/api/v1/sites/:id/vhost", sitesH.updateVhost, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/sites/:id/vhost/validate", sitesH.validateVhost, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/varnish", sitesH.getVarnish, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/varnish/purge", sitesH.purgeVarnish, RequireAuth(s))

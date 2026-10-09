@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"sigardapanel/internal/siteinput"
+
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -295,6 +297,15 @@ func (m *MySQLConn) CreateUser(ctx context.Context, username, password, host, db
 	if privileges == "" {
 		privileges = "ALL"
 	}
+	if err := siteinput.DBPrivileges(privileges); err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	if err := siteinput.DBHost(host); err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	if err := siteinput.DBPassword(password); err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
 
 	// Determine auth plugin
 	// MariaDB 10.x uses mysql_native_password by default and only supports IDENTIFIED BY.
@@ -378,6 +389,12 @@ func (m *MySQLConn) ChangePassword(ctx context.Context, username, host, newPassw
 	if host == "" {
 		host = "%"
 	}
+	if err := siteinput.DBHost(host); err != nil {
+		return err
+	}
+	if err := siteinput.DBPassword(newPassword); err != nil {
+		return err
+	}
 	// Use simple IDENTIFIED BY syntax (works on both MySQL 5.7/8.0 and MariaDB 10.x)
 	q := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'",
 		safeIdent(username), safeIdent(host), safeSQLString(newPassword))
@@ -392,11 +409,15 @@ func (m *MySQLConn) ChangePassword(ctx context.Context, username, host, newPassw
 // ─── Helpers ───────────────────────────────────────────────
 
 func safeIdent(s string) string {
-	return strings.NewReplacer("`", "", "\\", "", ";", "", "\n", "", "\r", "").Replace(s)
+	return strings.NewReplacer("`", "", "'", "", "\\", "", ";", "", "\n", "", "\r", "").Replace(s)
 }
 
+// safeSQLString quotes s for use inside a single-quoted SQL literal by doubling
+// quotes, which behaves identically with and without NO_BACKSLASH_ESCAPES.
+// Callers must have rejected backslashes and control characters beforehand
+// (siteinput.DBPassword); nothing is silently dropped from the value.
 func safeSQLString(s string) string {
-	return strings.NewReplacer("'", "\\'", "\\", "\\\\", ";", "", "\n", "\\n", "\r", "\\r").Replace(s)
+	return strings.ReplaceAll(s, "'", "''")
 }
 
 func boolToInt(b bool) int {
