@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,9 +23,10 @@ var terminalUpgrader = websocket.Upgrader{
 		if origin == "" {
 			return true // Allow non-browser clients (curl, etc.)
 		}
-		// Allow same-origin requests
-		host := r.Host
-		return strings.Contains(origin, host)
+		// Same-origin only (exact host match, not a substring test that
+		// "evil-host.com" would pass)
+		u, err := url.Parse(origin)
+		return err == nil && strings.EqualFold(u.Host, r.Host)
 	},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -263,8 +265,16 @@ func (r *Router) terminalWebSocket(c echo.Context) error {
 		sessionID = "pty_" + time.Now().Format("20060102150405.000")
 	}
 
-	// Optional: run shell as a specific user (site-level SSH access)
+	// Optional: run shell as a specific user (site-level SSH access). Only
+	// real, non-root accounts are accepted; empty means the root shell, which
+	// the API only requests for admins.
 	runAsUser := strings.TrimSpace(c.QueryParam("user"))
+	if runAsUser != "" {
+		if _, _, ok := siteUserIDs(runAsUser); !ok {
+			ws.WriteMessage(websocket.TextMessage, []byte("terminal: invalid or unknown user\r\n"))
+			return nil
+		}
+	}
 
 	sess, exists := getOrCreateSession(sessionID)
 	if !exists {

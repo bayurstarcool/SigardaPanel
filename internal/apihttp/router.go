@@ -118,6 +118,10 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/servers/:id/token", sh.regenerateToken, RequireAuth(s), RequireAdmin(s))
 
 	sitesH := newSiteHandler(s, auditRec)
+	termH := newTerminalHandler(s, auditRec, sitesH)
+	// Web terminal: ticket (authenticated) -> websocket (ticket-authenticated)
+	e.POST("/api/v1/terminal/tickets", termH.createTicket, RequireAuth(s), RequireUserSession)
+	e.GET("/api/v1/ws/terminal", termH.serve)
 	e.GET("/api/v1/sites", sitesH.list, RequireAuth(s))
 	e.POST("/api/v1/sites", sitesH.create, RequireAuth(s))
 	e.GET("/api/v1/sites/:id", sitesH.get, RequireAuth(s))

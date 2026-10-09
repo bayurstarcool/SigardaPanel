@@ -1,5 +1,6 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
+  import { apiFetch } from '$lib/api';
   import { onMount, onDestroy } from 'svelte';
   import { Terminal as TerminalIcon, Maximize2, Minimize2, Power, Loader2 } from 'lucide-svelte';
 
@@ -69,14 +70,25 @@
     });
   }
 
-  function doConnect() {
+  async function doConnect() {
     if (disposed) return;
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
 
-    const user = getSystemUser();
+    // Single-use ticket; the server decides which unix user the shell runs as.
+    let ticket: { ticket: string; session: string };
+    try {
+      ticket = await apiFetch(auth.token, 'POST', 'terminal/tickets', {
+        site_id: siteId,
+        session: sessionId || undefined,
+      });
+    } catch (e: any) {
+      connecting = false;
+      term?.write(`\r\n\x1b[31m[Terminal unavailable: ${e?.message || 'denied'}]\x1b[0m\r\n`);
+      return;
+    }
+    sessionId = ticket.session;
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const sessionParam = sessionId ? `&session=${sessionId}` : '';
-    ws = new WebSocket(`${proto}//${window.location.host}/api/ws/terminal?user=${user}${sessionParam}`);
+    ws = new WebSocket(`${proto}//${window.location.host}/api/v1/ws/terminal?ticket=${encodeURIComponent(ticket.ticket)}`);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {

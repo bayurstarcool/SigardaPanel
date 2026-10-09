@@ -1,5 +1,6 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
+  import { apiFetch } from '$lib/api';
   import { page } from '$app/stores';
   import { onMount, onDestroy } from 'svelte';
   const serverId = $page.params.id;
@@ -72,12 +73,25 @@
     }).observe(termEl);
   });
 
-  function connectWS() {
+  async function connectWS() {
     if (disposed) return;
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
+    // The browser cannot send an Authorization header on a WebSocket, so trade
+    // the session token for a single-use ticket first.
+    let ticket: { ticket: string; session: string };
+    try {
+      ticket = await apiFetch(auth.token, 'POST', 'terminal/tickets', {
+        server_id: Number(serverId),
+        session: sessionId || undefined,
+      });
+    } catch (e: any) {
+      term?.write(`\r\n\x1b[31m[Terminal unavailable: ${e?.message || 'denied'}]\x1b[0m\r\n`);
+      if (!disposed) reconnectTimer = setTimeout(connectWS, 5000);
+      return;
+    }
+    sessionId = ticket.session;
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const sessionParam = sessionId ? `?session=${sessionId}` : '';
-    ws = new WebSocket(`${proto}//${window.location.host}/api/ws/terminal${sessionParam}`);
+    ws = new WebSocket(`${proto}//${window.location.host}/api/v1/ws/terminal?ticket=${encodeURIComponent(ticket.ticket)}`);
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => {
       connected = true;
