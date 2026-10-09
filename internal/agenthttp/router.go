@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -985,47 +986,58 @@ func (r *Router) siteDeployTask(c echo.Context) error {
 		gitDir := filepath.Join(payload.RootPath, ".git")
 		isGitRepo, _ = r.executor.Stat(ctx, gitDir)
 	}
+	siteUID, siteGID, haveSiteUser := siteUserIDs(payload.SystemUser)
 	if !exists || !isGitRepo {
-		output, err := r.executor.RunShell(ctx, "git", "clone", "-b", payload.Branch, payload.Repo, payload.RootPath)
+		// Cloning never executes repository code, so root may do it; ownership is
+		// handed to the site user right after so every later git/npm/pip step
+		// runs unprivileged.
+		output, err := r.executor.RunShell(ctx, "git", "clone", "-b", payload.Branch, "--", payload.Repo, payload.RootPath)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
 		}
+		if haveSiteUser {
+			if out, err := r.executor.RunShell(ctx, "chown", "-R", fmt.Sprintf("%d:%d", siteUID, siteGID), payload.RootPath); err != nil {
+				slog.Warn("agent: deploy chown failed", "error", err, "output", strings.TrimSpace(out))
+			}
+		}
 	} else {
-		output, err := r.executor.RunShell(ctx, "git", "-C", payload.RootPath, "pull", "origin", payload.Branch)
+		output, err := r.runGit(ctx, payload.RootPath, "pull", "origin", payload.Branch)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "git pull failed: "+strings.TrimSpace(output))
 		}
 	}
 
-	commitOut, _ := r.executor.RunShell(ctx, "git", "-C", payload.RootPath, "rev-parse", "HEAD")
+	commitOut, _ := r.runGit(ctx, payload.RootPath, "rev-parse", "HEAD")
 	commit := strings.TrimSpace(commitOut)
 
 	// ─── Step 2: Install dependencies based on runtime ───
+	// Lifecycle scripts (npm postinstall, pip setup.py ...) come from the
+	// repository, so they only ever run as the site user, never as root.
 	var installOutput string
+	install := func(name string, args ...string) {
+		if !haveSiteUser {
+			installOutput = "dependency install skipped: site has no valid non-root system_user"
+			slog.Warn("agent: deploy install skipped, no system_user", "site_id", payload.SiteID)
+			return
+		}
+		out, err := r.executor.RunAsUser(ctx, siteUID, siteGID, payload.RootPath, name, args...)
+		installOutput = strings.TrimSpace(out)
+		if err != nil {
+			slog.Warn("agent: deploy install failed", "cmd", name, "error", err, "output", installOutput)
+		}
+	}
 	switch payload.Runtime {
 	case "node":
 		if _, err := r.executor.Stat(ctx, filepath.Join(payload.RootPath, "package.json")); err == nil {
-			out, err := r.executor.RunShellDir(ctx, payload.RootPath, "npm", "install", "--production")
-			installOutput = strings.TrimSpace(out)
-			if err != nil {
-				slog.Warn("agent: deploy npm install failed", "error", err, "output", installOutput)
-			}
+			install("npm", "install", "--production")
 		}
 	case "python":
 		if _, err := r.executor.Stat(ctx, filepath.Join(payload.RootPath, "requirements.txt")); err == nil {
-			out, err := r.executor.RunShellDir(ctx, payload.RootPath, "pip", "install", "-r", "requirements.txt")
-			installOutput = strings.TrimSpace(out)
-			if err != nil {
-				slog.Warn("agent: deploy pip install failed", "error", err, "output", installOutput)
-			}
+			install("pip", "install", "-r", "requirements.txt")
 		}
 	case "go":
 		if _, err := r.executor.Stat(ctx, filepath.Join(payload.RootPath, "go.mod")); err == nil {
-			out, err := r.executor.RunShellDir(ctx, payload.RootPath, "go", "mod", "download")
-			installOutput = strings.TrimSpace(out)
-			if err != nil {
-				slog.Warn("agent: deploy go mod download failed", "error", err, "output", installOutput)
-			}
+			install("go", "mod", "download")
 		}
 	}
 
@@ -1514,9 +1526,11 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 		backupPath = localFile
 	}
 
-	if !r.isAllowedBackupPath(backupPath) {
+	realBackup, ok := r.resolveBackupFile(backupPath)
+	if !ok {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid backup_path")
 	}
+	backupPath = realBackup
 
 	info, err := os.Stat(backupPath)
 	if err != nil || info.IsDir() {
@@ -1529,7 +1543,8 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	output, err := r.executor.RunShell(ctx, "tar", "-xzf", backupPath, "-C", tmpDir)
+	// --no-same-owner: archive uid/gid are not trusted; ownership is reset below.
+	output, err := r.executor.RunShell(ctx, "tar", "-xzf", backupPath, "-C", tmpDir, "--no-same-owner", "--no-same-permissions")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "extract backup failed: "+strings.TrimSpace(output))
 	}
@@ -1540,6 +1555,20 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(payload.RootPath), 0755); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "create parent dir failed: "+err.Error())
+	}
+
+	// Re-own the restored tree to whoever owns the site today (fall back to the
+	// parent directory's owner) and drop setuid/setgid/special files.
+	ownerRef := payload.RootPath
+	if _, err := os.Lstat(ownerRef); err != nil {
+		ownerRef = filepath.Dir(payload.RootPath)
+	}
+	if fi, err := os.Lstat(ownerRef); err == nil {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			if err := sanitizeRestoredTree(extractedRoot, int(st.Uid), int(st.Gid)); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "sanitize restored files failed: "+err.Error())
+			}
+		}
 	}
 
 	// Crash-safe swap: move the current root aside instead of deleting it, so a
@@ -1694,7 +1723,8 @@ func (r *Router) backupDeleteTask(c echo.Context) error {
 		// Nothing local to remove.
 		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "no local file to delete", "backup_id": payload.BackupID})
 	}
-	if !r.isAllowedBackupPath(path) {
+	path, ok := r.resolveBackupFile(path)
+	if !ok {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid storage_path")
 	}
 

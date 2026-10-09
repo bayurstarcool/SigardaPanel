@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"sigardapanel/internal/siteinput"
 )
 
 var errUnsafePath = errors.New("unsafe path")
@@ -74,7 +76,9 @@ func (r *Router) isAllowedSitePath(path string) bool {
 		return false
 	}
 	if r.siteRootDir == "" {
-		return true
+		// No configured site root: still never operate on system trees, bare
+		// home directories or paths with shell/nginx-significant characters.
+		return siteinput.RootPathAllowed(filepath.Clean(path)) == nil
 	}
 	cleanRoot := filepath.Clean(r.siteRootDir)
 	cleanPath := filepath.Clean(path)
@@ -211,4 +215,73 @@ func randomHex(n int) string {
 		panic(err) // crypto/rand failure is unrecoverable
 	}
 	return hex.EncodeToString(b)
+}
+
+var backupFileExts = []string{".tar.gz", ".tgz", ".sql", ".sql.gz", ".zip"}
+
+// resolveBackupFile returns the symlink-resolved location of a backup file
+// after re-checking that the real location is still an allowed backup path,
+// a known backup file type and a regular file. Parents are user-writable
+// (<site_root>/backups), so a symlinked directory must not redirect root.
+func (r *Router) resolveBackupFile(path string) (string, bool) {
+	if !r.isAllowedBackupPath(path) {
+		return "", false
+	}
+	okExt := false
+	for _, ext := range backupFileExts {
+		if strings.HasSuffix(strings.ToLower(path), ext) {
+			okExt = true
+			break
+		}
+	}
+	if !okExt {
+		return "", false
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(filepath.Clean(path)))
+	if err != nil {
+		return "", false
+	}
+	real := filepath.Join(dir, filepath.Base(path))
+	if !r.isAllowedBackupPath(real) {
+		return "", false
+	}
+	if siteinput.RootPathAllowed(dir) != nil {
+		return "", false
+	}
+	// Generic /var/backups belongs to the OS (apt, dpkg ...); only our own
+	// subdirectory of it may be touched.
+	if strings.HasPrefix(real, "/var/backups/") && !strings.HasPrefix(real, filepath.Clean(r.backupDir)+"/") {
+		return "", false
+	}
+	if fi, err := os.Lstat(real); err == nil && !fi.Mode().IsRegular() {
+		return "", false
+	}
+	return real, true
+}
+
+// sanitizeRestoredTree makes an extracted archive safe to install as a site:
+// everything is re-owned to the site owner (archive ownership is never
+// trusted), setuid/setgid bits are cleared and anything that is not a regular
+// file, directory or symlink (devices, fifos, sockets) is removed.
+func sanitizeRestoredTree(root string, uid, gid int) error {
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		mode := info.Mode()
+		if !mode.IsRegular() && !mode.IsDir() && mode&os.ModeSymlink == 0 {
+			return os.Remove(p)
+		}
+		if err := os.Lchown(p, uid, gid); err != nil {
+			return err
+		}
+		if mode&os.ModeSymlink == 0 && mode&(os.ModeSetuid|os.ModeSetgid) != 0 {
+			return os.Chmod(p, mode.Perm())
+		}
+		return nil
+	})
 }

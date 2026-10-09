@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -137,6 +140,58 @@ func (e *Executor) RunShellDir(ctx context.Context, dir, name string, args ...st
 	return string(output), nil
 }
 
+// RunAsUser executes an allowlisted command with the privileges of uid:gid
+// (never 0), working directory dir and a minimal environment. It is meant for
+// anything that processes site-owner controlled input (git hooks and config,
+// npm/pip lifecycle scripts) so a hostile repository cannot act as root.
+func (e *Executor) RunAsUser(ctx context.Context, uid, gid uint32, dir, name string, args ...string) (string, error) {
+	if !isAllowedCommand(name) {
+		return "", fmt.Errorf("command not allowed: %s", name)
+	}
+	if uid == 0 {
+		return "", fmt.Errorf("RunAsUser refuses uid 0")
+	}
+	home := "/tmp"
+	login := strconv.FormatUint(uint64(uid), 10)
+	if u, err := user.LookupId(login); err == nil {
+		home, login = u.HomeDir, u.Username
+	}
+	var groups []uint32
+	if u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10)); err == nil {
+		if gids, err := u.GroupIds(); err == nil {
+			for _, g := range gids {
+				if n, err := strconv.ParseUint(g, 10, 32); err == nil && n != 0 {
+					groups = append(groups, uint32(n))
+				}
+			}
+		}
+	}
+
+	timeout := e.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"HOME=" + home,
+		"USER=" + login,
+		"LOGNAME=" + login,
+		"PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+		"GIT_TERMINAL_PROMPT=0",
+		"LANG=C.UTF-8",
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: gid, Groups: groups}}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("%s failed: %w", name, err)
+	}
+	return string(output), nil
+}
+
 // Mkdir creates a directory recursively.
 func (e *Executor) Mkdir(ctx context.Context, path string) error {
 	return os.MkdirAll(path, 0755)
@@ -235,6 +290,8 @@ var allowedCommands = map[string]bool{
 	"python":          true,
 	"fail2ban-client": true,
 	"which":           true,
+	"chown":           true,
+	"journalctl":      true,
 	"test":            true,
 }
 
