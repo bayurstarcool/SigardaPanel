@@ -162,6 +162,7 @@ EnvironmentFile=/etc/sigardapanel/panel.env
 ExecStart=/usr/local/bin/sigardapanel api
 Restart=always
 RestartSec=3
+UMask=0027
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -348,8 +349,7 @@ NGINX
 }
 
 wait_http() { # <url> <seconds>
-  local i
-  for i in $(seq 1 "$2"); do
+  for _ in $(seq 1 "$2"); do
     curl -fsS -o /dev/null --max-time 3 "$1" 2>/dev/null && return 0
     sleep 1
   done
@@ -394,8 +394,9 @@ do_install() {
   ok "Binary: $("$INSTALL_BIN" version)"
 
   log "Creating the admin account..."
-  runuser -u sigardapanel -- env SIGARDAPANEL_DB_PATH="${DATA_DIR}/sigardapanel.db" SIGARDAPANEL_ADMIN_PASSWORD="$ADMIN_PASS" \
-    "$INSTALL_BIN" init --user "$ADMIN_USER" --email "$ADMIN_EMAIL" >/dev/null || die "Could not create the admin user"
+  runuser -u sigardapanel -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin SIGARDAPANEL_DB_PATH="${DATA_DIR}/sigardapanel.db" SIGARDAPANEL_ADMIN_PASSWORD="$ADMIN_PASS" \
+    sh -c 'umask 027; exec "$0" "$@"' "$INSTALL_BIN" init --user "$ADMIN_USER" --email "$ADMIN_EMAIL" >/dev/null || die "Could not create the admin user"
+  chmod 640 "${DATA_DIR}"/sigardapanel.db* 2>/dev/null || true
 
   log "Starting services..."
   systemctl enable --now sigardapanel-api sigardapanel-agent sigardapanel-web >/dev/null 2>&1
@@ -406,7 +407,11 @@ do_install() {
   if [ "${INSTALL_FIREWALL:-no}" = "yes" ]; then
     apt-get install -y -qq ufw >/dev/null
     local ssh_port
-    ssh_port="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')"; ssh_port="${ssh_port:-22}"
+    ssh_port=""
+    if command -v sshd >/dev/null 2>&1; then
+      ssh_port="$( (sshd -T 2>/dev/null || true) | awk '/^port /{print $2; exit}')"
+    fi
+    [[ "$ssh_port" =~ ^[0-9]+$ ]] || ssh_port=22
     ufw allow "${ssh_port}/tcp" >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
     ufw --force enable >/dev/null
     ok "ufw enabled (SSH ${ssh_port}, 80, 443); existing rules were kept"
@@ -462,7 +467,10 @@ do_update() {
       cp -a "$bk/sigardapanel.db" "$dbfile"; chown sigardapanel:sigardapanel "$dbfile"; rm -f "${dbfile}-wal" "${dbfile}-shm"
     fi
     systemctl restart sigardapanel-agent sigardapanel-api sigardapanel-web || true
-    die "Rolled back to ${current}. Backup kept in ${bk}"
+    if healthy; then
+      die "Update to ${TAG} failed; rolled back to ${current} and the panel is healthy again. Backup kept in ${bk}"
+    fi
+    die "Update to ${TAG} failed and the rolled-back panel is NOT healthy. Backup: ${bk}. Check: journalctl -u sigardapanel-api -u sigardapanel-web"
   }
 
   install -m 755 "$TMP/sigardapanel-linux-${ARCH}" "${INSTALL_BIN}.new" && mv -f "${INSTALL_BIN}.new" "$INSTALL_BIN"
