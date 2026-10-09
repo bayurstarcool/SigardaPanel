@@ -20,7 +20,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const Version = "1.0.0"
+// Version is overridden at release time: -ldflags "-X sigardapanel/internal/commands.Version=1.2.3"
+var Version = "1.1.0"
 
 type App struct {
 	stdout io.Writer
