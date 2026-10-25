@@ -2,12 +2,15 @@ package agenthttp
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -62,17 +65,27 @@ type sshActivity struct {
 	TopAttackers  []sshAttacker `json:"top_attackers"`
 	RecentLogins  []sshLogin    `json:"recent_accepted"`
 	LogSources    []string      `json:"log_sources"`
+
+	attackers map[string]*sshAttacker
 }
 
 // GET /tasks/security/ssh-activity
 func (r *Router) securitySSHActivity(c echo.Context) error {
 	activity := parseSSHLogs([]string{"/var/log/auth.log", "/var/log/auth.log.1", "/var/log/secure", "/var/log/secure.1"})
+	if len(activity.LogSources) == 0 {
+		// Minimal Ubuntu 24.04 images run no rsyslog; the journal is the
+		// only SSH log source.
+		if journal := readSSHJournal(c.Request().Context()); journal != "" {
+			parseSSHReader(strings.NewReader(journal), &activity)
+			activity.LogSources = []string{"journalctl -u ssh"}
+			finalizeSSHActivity(&activity)
+		}
+	}
 	return c.JSON(http.StatusOK, map[string]any{"ok": true, "data": activity})
 }
 
 func parseSSHLogs(paths []string) sshActivity {
 	act := sshActivity{TopAttackers: []sshAttacker{}, RecentLogins: []sshLogin{}, LogSources: []string{}}
-	attackers := map[string]*sshAttacker{}
 
 	for _, p := range paths {
 		f, err := os.Open(p)
@@ -80,42 +93,88 @@ func parseSSHLogs(paths []string) sshActivity {
 			continue
 		}
 		act.LogSources = append(act.LogSources, p)
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
-		lines := 0
-		for scanner.Scan() {
-			lines++
-			if lines > authLogLimitLines {
-				break
-			}
-			line := scanner.Text()
-			ts := parseSyslogTime(line)
-			if m := reSSHFailed.FindStringSubmatch(line); m != nil {
-				act.FailedTotal++
-				addAttacker(attackers, m[3], m[2])
-			} else if m := reSSHInvalid.FindStringSubmatch(line); m != nil {
-				act.InvalidTotal++
-				addAttacker(attackers, m[2], m[1])
-			} else if m := reSSHAccepted.FindStringSubmatch(line); m != nil {
-				act.AcceptedTotal++
-				act.RecentLogins = append(act.RecentLogins, sshLogin{User: m[2], IP: m[3], Method: m[1], Time: ts})
-			}
-		}
+		parseSSHReader(f, &act)
 		f.Close()
 	}
 
-	for _, a := range attackers {
+	finalizeSSHActivity(&act)
+	return act
+}
+
+func readSSHJournal(ctx context.Context) string {
+	jctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(jctx, "journalctl", "-u", "ssh", "-u", "sshd", "--no-pager", "-n", strconv.Itoa(authLogLimitLines)).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// parseSSHReader accumulates events from one log source into act.
+func parseSSHReader(reader io.Reader, act *sshActivity) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
+	lines := 0
+	for scanner.Scan() {
+		lines++
+		if lines > authLogLimitLines {
+			break
+		}
+		line := scanner.Text()
+		ts := parseSyslogTime(line)
+		if m := reSSHFailed.FindStringSubmatch(line); m != nil {
+			act.FailedTotal++
+			act.addAttacker(m[3], m[2])
+		} else if m := reSSHInvalid.FindStringSubmatch(line); m != nil {
+			act.InvalidTotal++
+			act.addAttacker(m[2], m[1])
+		} else if m := reSSHAccepted.FindStringSubmatch(line); m != nil {
+			act.AcceptedTotal++
+			act.RecentLogins = append(act.RecentLogins, sshLogin{User: m[2], IP: m[3], Method: m[1], Time: ts})
+		}
+	}
+}
+
+func (a *sshActivity) addAttacker(ip, username string) {
+	if net.ParseIP(ip) == nil {
+		return
+	}
+	if a.attackers == nil {
+		a.attackers = map[string]*sshAttacker{}
+	}
+	att, ok := a.attackers[ip]
+	if !ok {
+		att = &sshAttacker{IP: ip}
+		a.attackers[ip] = att
+	}
+	att.Count++
+	if username != "" && len(att.Usernames) < 5 {
+		dup := false
+		for _, u := range att.Usernames {
+			if u == username {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			att.Usernames = append(att.Usernames, username)
+		}
+	}
+}
+
+func finalizeSSHActivity(act *sshActivity) {
+	for _, a := range act.attackers {
 		act.TopAttackers = append(act.TopAttackers, *a)
 	}
 	sort.Slice(act.TopAttackers, func(i, j int) bool { return act.TopAttackers[i].Count > act.TopAttackers[j].Count })
 	if len(act.TopAttackers) > 15 {
 		act.TopAttackers = act.TopAttackers[:15]
 	}
-	act.UniqueIPs = len(attackers)
+	act.UniqueIPs = len(act.attackers)
 	if len(act.RecentLogins) > 10 {
 		act.RecentLogins = act.RecentLogins[len(act.RecentLogins)-10:]
 	}
-	return act
 }
 
 func addAttacker(m map[string]*sshAttacker, ip, username string) {
