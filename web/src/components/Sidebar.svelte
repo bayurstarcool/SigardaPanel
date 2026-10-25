@@ -64,7 +64,7 @@
   let usageData = $state<any>(null);
 
   onMount(() => {
-    if (!auth.user?.id || !auth.token) return;
+    if (!auth.user?.id) return;
     const currentId = auth.isImpersonating && auth.impersonatingUser ? auth.impersonatingUser.id : auth.user.id;
     apiFetch(auth.token, 'GET', `users/${currentId}/usage`).then((d) => { usageData = d; }).catch(() => {});
   });

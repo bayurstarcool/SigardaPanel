@@ -10,13 +10,14 @@
 
   onMount(() => {
     token = auth.token || '';
-    // Fetch real stats
-    if (auth.token) {
-      fetch('/api/proxy/servers', { headers: { Authorization: `Bearer ${auth.token}` } })
+    // Fetch real stats — the HttpOnly session cookie authenticates via the
+    // proxy; an explicit Bearer header is only needed for impersonation.
+    if (auth.user) {
+      fetch('/api/proxy/servers')
         .then(r => r.json())
         .then(d => { if (d.data) servers = d.data.count || (d.data.servers || []).length || 0; })
         .catch(() => {});
-      fetch('/api/proxy/sites?limit=100', { headers: { Authorization: `Bearer ${auth.token}` } })
+      fetch('/api/proxy/sites?limit=100')
         .then(r => r.json())
         .then(d => { if (d.data) sites = d.data.count || d.data.total_count || (d.data.sites || []).length || 0; })
         .catch(() => {});

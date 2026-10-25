@@ -18,7 +18,7 @@
   let sslStatus = $state<any>(null);
 
   async function loadSite() {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     try {
       site = await apiFetch(auth.token, 'GET', `sites/${siteId}`);
     } catch (e: any) {

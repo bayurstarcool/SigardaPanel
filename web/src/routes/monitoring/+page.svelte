@@ -27,7 +27,7 @@
   ];
 
   async function fetchServers() {
-    if (stopped || !auth.token) return;
+    if (stopped || !auth.user) return;
     try {
       const data = await apiFetch(auth.token, 'GET', 'servers');
       servers = data?.servers || [];
@@ -40,7 +40,7 @@
   }
 
   async function fetchLatest() {
-    if (stopped || !selectedServer || !auth.token) return;
+    if (stopped || !selectedServer || !auth.user) return;
     try {
       const data = await apiFetch(auth.token, 'GET', `servers/${selectedServer}/metrics/latest`);
       latest = data;
@@ -52,7 +52,7 @@
   }
 
   async function fetchHistory() {
-    if (stopped || !selectedServer || !auth.token) return;
+    if (stopped || !selectedServer || !auth.user) return;
     try {
       const data = await apiFetch(auth.token, 'GET', `servers/${selectedServer}/metrics?range=${range}`);
       history = data?.metrics || [];

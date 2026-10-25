@@ -155,7 +155,7 @@
   }
 
   async function loadDbs() {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     loading = true;
     try {
       const [dbData, siteData, userData] = await Promise.all([

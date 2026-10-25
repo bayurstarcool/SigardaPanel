@@ -22,7 +22,7 @@
   }
 
   async function fetchSpecs() {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     loadingSpecs = true;
     error = '';
     try {
@@ -41,7 +41,7 @@
   }
 
   async function runBenchmark() {
-    if (!auth.token) return;
+    if (!auth.user) return;
     loadingBench = true;
     error = '';
     try {

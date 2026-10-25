@@ -60,7 +60,7 @@
   }
 
   async function search(q: string) {
-    if (!auth.token) return;
+    if (!auth.user) return;
     const all: SearchResult[] = [];
 
     try {

@@ -131,7 +131,7 @@
   }
 
   async function fetchSites() {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     loading = true;
     const params: Record<string, string | number> = {
       limit: pageSize,
@@ -152,7 +152,7 @@
   }
 
   async function fetchServers() {
-    if (!auth.token) return;
+    if (!auth.user) return;
     try {
       const d = await apiFetch(auth.token, 'GET', 'servers');
       servers = d?.servers || [];

@@ -33,7 +33,7 @@
   let testResult = $state<any>(null);
 
   onMount(async () => {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     await load();
     await loadProviders();
     await loadConfigs();

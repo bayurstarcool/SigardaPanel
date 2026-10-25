@@ -36,7 +36,7 @@
 
 
   onMount(async () => {
-    if (!auth.token) { loading = false; return; }
+    if (!auth.user) { loading = false; return; }
     try {
       const d = await apiFetch(auth.token, 'GET', 'users');
       users = d?.users || [];

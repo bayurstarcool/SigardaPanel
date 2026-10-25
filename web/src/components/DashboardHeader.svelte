@@ -20,7 +20,7 @@
 
   async function fetchUnreadCount() {
     try {
-      if (!auth.token) return;
+      if (!auth.user) return;
       const data = await apiFetch(auth.token, 'GET', 'notifications/unread-count');
       unreadCount = data?.unread ?? 0;
     } catch {

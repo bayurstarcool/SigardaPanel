@@ -38,14 +38,14 @@
   ];
 
   function loadServer() {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     apiFetch(auth.token, 'GET', `servers/${serverId}`)
       .then((d: any) => server = d)
       .catch((e) => { error = e.message; });
   }
 
   function loadStack() {
-    if (!auth.token) return;
+    if (!auth.user) return;
     loading = true;
     error = '';
     apiFetch(auth.token, 'GET', `servers/${serverId}/stack`)
@@ -76,7 +76,7 @@
   }
 
   async function doAction(pkg: string, action: string, version?: string) {
-    if (!auth.token) return;
+    if (!auth.user) return;
     actionPending = `${pkg}:${action}`;
     actionResult = null;
     lastOutput = '';

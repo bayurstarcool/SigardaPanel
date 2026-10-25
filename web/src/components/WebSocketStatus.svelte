@@ -16,7 +16,7 @@
   let reconnectTimer = $state<ReturnType<typeof setTimeout>>();
 
   onMount(() => {
-    if (!auth.token) return;
+    if (!auth.user) return;
     connect();
   });
 

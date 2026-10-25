@@ -57,7 +57,7 @@
   }
 
   async function loadData() {
-    if (!auth.token) { loading = false; return; }
+    if (!auth.user) { loading = false; return; }
     loading = true;
     try {
       const [zoneData, dnsData] = await Promise.all([

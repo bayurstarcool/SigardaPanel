@@ -9,7 +9,7 @@
   let stopped = false;
 
   async function fetchMetrics() {
-    if (stopped || !auth.token) return;
+    if (stopped || !auth.user) return;
     try {
       const serversData = await apiFetch(auth.token, 'GET', 'servers').catch((e) => {
         if (e.message === 'session expired') { stopped = true; clearInterval(interval); }

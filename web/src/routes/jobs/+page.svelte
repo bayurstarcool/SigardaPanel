@@ -24,14 +24,14 @@
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
   onMount(() => {
-    if (!auth.token) { loading = false; return; }
+    if (!auth.user) { loading = false; return; }
     loadJobs();
     refreshInterval = setInterval(loadJobs, 5000);
     return () => { if (refreshInterval) clearInterval(refreshInterval); };
   });
 
   async function loadJobs() {
-    if (!auth.token) return;
+    if (!auth.user) return;
     try {
       const d = await apiFetch(auth.token, 'GET', 'jobs');
       jobs = d?.jobs || [];

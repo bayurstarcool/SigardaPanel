@@ -14,7 +14,7 @@
   let recoveryCodes = $state<string[]>([]);
 
   onMount(async () => {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     await checkStatus();
   });
 

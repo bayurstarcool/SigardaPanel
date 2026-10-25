@@ -10,7 +10,7 @@
   let loading = $state(true);
 
   onMount(async () => {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     try {
       const d: any = await apiFetch(auth.token, 'GET', 'servers');
       servers = d?.servers ?? [];

@@ -36,7 +36,7 @@
   let usageLoading = $state(false);
 
   onMount(async () => {
-    if (!auth.token) { loading = false; return; }
+    if (!auth.user) { loading = false; return; }
     try {
       const d = await apiFetch(auth.token, 'GET', 'users');
       user = (d?.users || []).find((u: any) => u.id === userId);
@@ -73,7 +73,7 @@
 
   // ─── Assigned sites ───
   async function fetchAssignedSites() {
-    if (!auth.token) return;
+    if (!auth.user) return;
     sitesLoading = true;
     try {
       const d = await apiFetch(auth.token, 'GET', `users/${userId}/sites`);
@@ -86,7 +86,7 @@
   }
 
   async function fetchAllSites() {
-    if (!auth.token) return;
+    if (!auth.user) return;
     try {
       const d = await apiFetch(auth.token, 'GET', 'sites');
       allSites = d?.sites || [];
@@ -96,7 +96,7 @@
   }
 
   async function assignSite() {
-    if (!auth.token || !assignSiteId) return;
+    if (!auth.user || !assignSiteId) return;
     assigningSite = true;
     try {
       await apiFetch(auth.token, 'POST', `users/${userId}/sites`, {
@@ -112,7 +112,7 @@
   }
 
   async function removeSite(siteId: number) {
-    if (!auth.token) return;
+    if (!auth.user) return;
     removingSiteId = siteId;
     try {
       await apiFetch(auth.token, 'DELETE', `users/${userId}/sites/${siteId}`);
@@ -123,7 +123,7 @@
   }
 
   async function updatePermission(siteId: number, newPerm: string) {
-    if (!auth.token) return;
+    if (!auth.user) return;
     updatingPermSiteId = siteId;
     try {
       await apiFetch(auth.token, 'PATCH', `users/${userId}/sites/${siteId}`, { permission: newPerm });
@@ -144,7 +144,7 @@
   }
 
   async function doImpersonate() {
-    if (!auth.token) return;
+    if (!auth.user) return;
     try {
       await auth.impersonateUser(userId);
       showImpersonateDialog = false;
@@ -166,7 +166,7 @@
 
   // ─── Usage ───
   async function fetchUsage() {
-    if (!auth.token) return;
+    if (!auth.user) return;
     usageLoading = true;
     try {
       const d = await apiFetch(auth.token, 'GET', `users/${userId}/usage`);

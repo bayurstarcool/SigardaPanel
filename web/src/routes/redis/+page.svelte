@@ -14,7 +14,7 @@
   let canManage = $derived(hasRole(auth.user?.role, 'admin'));
 
   onMount(async () => {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     const d: any = await apiFetch(auth.token, 'GET', 'servers');
     servers = d?.servers ?? [];
     if (servers.length > 0) {

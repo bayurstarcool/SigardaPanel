@@ -55,7 +55,7 @@
   function copyText(text: string, field: string) { navigator.clipboard.writeText(text); copiedField = field; setTimeout(() => copiedField = '', 1500); }
 
   onMount(async () => {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     try {
       site = await apiFetch(auth.token, 'GET', `sites/${siteId}`);
     } catch (e: any) {

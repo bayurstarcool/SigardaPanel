@@ -33,7 +33,7 @@
   let showPassword = $state(false);
 
   onMount(async () => {
-    if (!auth.token) { loading = false; return; }
+    if (!auth.user) { loading = false; return; }
     try {
       await loadConfig();
       if (configured) {

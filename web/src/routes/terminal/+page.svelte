@@ -4,7 +4,7 @@
   import { onMount } from 'svelte';
 
   onMount(async () => {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     try {
       const d = await apiFetch(auth.token, 'GET', 'servers');
       const servers = d?.servers ?? [];

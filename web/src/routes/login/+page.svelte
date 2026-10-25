@@ -18,7 +18,7 @@
   let code = $state('');
 
   onMount(() => {
-    if (auth.token) window.location.href = '/dashboard';
+    if (auth.user) window.location.href = "/dashboard";
     mounted = true;
   });
 

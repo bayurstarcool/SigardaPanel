@@ -15,7 +15,9 @@
         console.error('[AUTH] initialization failed:', error);
       })
       .finally(() => {
-        if (auth.token) {
+        // auth.token is only non-null during impersonation; the session
+        // signal for normal cookie sessions is auth.user.
+        if (auth.user) {
           licenseStore.fetch();
         }
         ready = true;
@@ -25,7 +27,7 @@
   // Reactive guard: redirect ke /login kalau session expired di tengah jalan
   // Ini penting — api.ts clearSession() via handler, bukan redirect langsung
   $effect(() => {
-    if (ready && !auth.token && window.location.pathname !== '/login' && window.location.pathname !== '/register' && window.location.pathname !== '/pricing' && !window.location.pathname.startsWith('/member') && !window.location.pathname.startsWith('/docs') && window.location.pathname !== '/') {
+    if (ready && !auth.user && window.location.pathname !== '/login' && window.location.pathname !== '/register' && window.location.pathname !== '/pricing' && !window.location.pathname.startsWith('/member') && !window.location.pathname.startsWith('/docs') && window.location.pathname !== '/') {
       window.location.href = '/login';
     }
   });

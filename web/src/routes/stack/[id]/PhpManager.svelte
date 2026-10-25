@@ -17,7 +17,7 @@
   });
 
   function loadVersions() {
-    if (!auth.token) return;
+    if (!auth.user) return;
     loading = true;
     actionResult = null;
 
@@ -36,7 +36,7 @@
   }
 
   async function doAction(version: string, action: string) {
-    if (!auth.token) return;
+    if (!auth.user) return;
     actionPending = `${version}:${action}`;
     actionResult = null;
     try {

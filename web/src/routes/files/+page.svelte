@@ -61,7 +61,7 @@
   }
 
   async function loadDir(path: string) {
-    if (!auth.token) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     loading = true;
     error = '';
     openFile = null;
@@ -90,7 +90,7 @@
   }
 
   async function openFileContent(item: FileItem) {
-    if (!auth.token) return;
+    if (!auth.user) return;
     try {
       const data = await apiFetch(auth.token, 'GET', `files/read?path=${encodeURIComponent(item.path)}`);
       const content = typeof data === 'string' ? data : data?.content || '';
@@ -102,7 +102,7 @@
   }
 
   async function saveFile() {
-    if (!auth.token || !openFile) return;
+    if (!auth.user || !openFile) return;
     saving = true;
     try {
       await apiFetch(auth.token, 'POST', 'files/write', { path: openFile.path, content: openFile.content });
@@ -116,7 +116,7 @@
   }
 
   async function createItem() {
-    if (!auth.token || !newName.trim()) return;
+    if (!auth.user || !newName.trim()) return;
     const full = currentPath === '/' ? `/${newName.trim()}` : `${currentPath}/${newName.trim()}`;
     try {
       if (showNewModal === 'file') {
@@ -135,7 +135,7 @@
   }
 
   async function deleteItem(item: FileItem) {
-    if (!auth.token) return;
+    if (!auth.user) return;
     busyAction = item.path;
     try {
       await apiFetch(auth.token, 'DELETE', `files/delete?path=${encodeURIComponent(item.path)}`);
@@ -152,14 +152,14 @@
   }
 
   function downloadFile(item: FileItem) {
-    if (!auth.token) return;
+    if (!auth.user) return;
     window.open(`/api/proxy/files/download?path=${encodeURIComponent(item.path)}`, '_blank');
   }
 
   async function handleUpload(e: Event) {
     const input = e.target as HTMLInputElement;
     const fileList = input.files;
-    if (!fileList?.length || !auth.token) return;
+    if (!fileList?.length || !auth.user) return;
     busyAction = 'uploading';
     try {
       for (const file of Array.from(fileList)) {
@@ -178,7 +178,7 @@
     }
   }
 
-  $effect(() => { if (auth.token) loadDir('/'); });
+  $effect(() => { if (auth.user) loadDir("/"); });
 </script>
 
 <DashboardLayout active="Files">

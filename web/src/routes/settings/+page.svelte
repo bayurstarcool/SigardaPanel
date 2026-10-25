@@ -17,7 +17,7 @@
   const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
 
   onMount(async () => {
-    if (!auth.token) return;
+    if (!auth.user) return;
     try {
       const [ver, metrics] = await Promise.allSettled([
         apiFetch(auth.token, 'GET', 'version'),
@@ -45,13 +45,13 @@
     return d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m` : `${m}m`;
   }
   async function clearCache() {
-    if (!auth.token) return; clearingCache = true;
+    if (!auth.user) return; clearingCache = true;
     try { await apiFetch(auth.token, 'POST', 'settings/clear-cache'); toasts.success('Cache cleared'); }
     catch (e: any) { toasts.error(e.message || 'Failed to clear cache'); }
     finally { clearingCache = false; }
   }
   async function resetAuditLogs() {
-    if (!auth.token) return; clearingAudit = true;
+    if (!auth.user) return; clearingAudit = true;
     try { await apiFetch(auth.token, 'DELETE', 'audit-logs'); toasts.success('Audit logs cleared'); }
     catch (e: any) { toasts.error(e.message || 'Failed to clear audit logs'); }
     finally { clearingAudit = false; }
