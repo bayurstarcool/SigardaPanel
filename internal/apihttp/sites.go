@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/cloudflare"
+	"sigardapanel/internal/dbserver"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/siteinput"
@@ -165,23 +167,23 @@ func (h *siteHandler) create(c echo.Context) error {
 	}
 
 	var body struct {
-		ServerID      int64  `json:"server_id"`
-		Name          string `json:"name"`
-		Domain        string `json:"domain"`
-		Runtime       string `json:"runtime"`
-		RootPath      string `json:"root_path,omitempty"`
-		ManagedBy     string `json:"managed_by,omitempty"`
-		SystemUser    string `json:"system_user,omitempty"`
-		ConfFile      string `json:"conf_file,omitempty"`
-		ProxyPassURL  string `json:"proxy_pass_url,omitempty"`
-		PHPVersion    string `json:"php_version,omitempty"`
-		DockerImage   string `json:"docker_image,omitempty"`
+		ServerID       int64  `json:"server_id"`
+		Name           string `json:"name"`
+		Domain         string `json:"domain"`
+		Runtime        string `json:"runtime"`
+		RootPath       string `json:"root_path,omitempty"`
+		ManagedBy      string `json:"managed_by,omitempty"`
+		SystemUser     string `json:"system_user,omitempty"`
+		ConfFile       string `json:"conf_file,omitempty"`
+		ProxyPassURL   string `json:"proxy_pass_url,omitempty"`
+		PHPVersion     string `json:"php_version,omitempty"`
+		DockerImage    string `json:"docker_image,omitempty"`
 		DockerLanguage string `json:"docker_language,omitempty"`
-		DockerName    string `json:"docker_name,omitempty"`
-		DockerPorts   string `json:"docker_ports,omitempty"`
-		DockerEnv     string `json:"docker_env,omitempty"`
-		DockerVolume  string `json:"docker_volume,omitempty"`
-		DockerRestart string `json:"docker_restart,omitempty"`
+		DockerName     string `json:"docker_name,omitempty"`
+		DockerPorts    string `json:"docker_ports,omitempty"`
+		DockerEnv      string `json:"docker_env,omitempty"`
+		DockerVolume   string `json:"docker_volume,omitempty"`
+		DockerRestart  string `json:"docker_restart,omitempty"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -371,21 +373,21 @@ func (h *siteHandler) create(c echo.Context) error {
 	// Enqueue site.create job. App runtimes proxy to the assigned app_port.
 	port := int(appPort)
 	payload, _ := json.Marshal(map[string]any{
-		"site_id":        site.ID,
-		"name":           site.Name,
-		"domain":         site.Domain,
-		"runtime":        site.Runtime,
-		"root_path":      site.RootPath,
-		"port":           port,
-		"proxy_pass_url": body.ProxyPassURL,
-		"php_version":    body.PHPVersion,
+		"site_id":         site.ID,
+		"name":            site.Name,
+		"domain":          site.Domain,
+		"runtime":         site.Runtime,
+		"root_path":       site.RootPath,
+		"port":            port,
+		"proxy_pass_url":  body.ProxyPassURL,
+		"php_version":     body.PHPVersion,
 		"docker_image":    body.DockerImage,
 		"docker_language": body.DockerLanguage,
 		"docker_name":     body.DockerName,
 		"docker_ports":    body.DockerPorts,
 		"docker_env":      body.DockerEnv,
-		"docker_volume":  body.DockerVolume,
-		"docker_restart": body.DockerRestart,
+		"docker_volume":   body.DockerVolume,
+		"docker_restart":  body.DockerRestart,
 	})
 	job := &jobmodel.Job{
 		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
@@ -497,10 +499,32 @@ func (h *siteHandler) delete(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
-	// Clean up databases before deleting site
+	// Clean up databases before deleting site. Mirror the dedicated
+	// delete-database endpoint: drop the real MySQL database (not just its
+	// record), enqueue the agent job as a fallback, then remove the record —
+	// otherwise deleted sites leave orphaned databases, users and grants.
 	if databases, err := h.store.Databases.ListBySite(c.Request().Context(), id); err == nil {
-		for _, db := range databases {
-			h.store.Databases.Delete(c.Request().Context(), db.ID)
+		for _, database := range databases {
+			if database.Type == "mysql" {
+				_ = execMySQLConn(h.store, func(conn *dbserver.MySQLConn) error {
+					if err := conn.DropDatabase(c.Request().Context(), database.Name); err != nil {
+						slog.Warn("site delete: mysql drop failed", "name", database.Name, "error", err)
+						return err
+					}
+					return nil
+				})
+				payload := fmt.Sprintf(`{"database_id":%d,"site_id":%d,"name":%q,"type":%q}`,
+					database.ID, database.SiteID, database.Name, database.Type)
+				_ = h.store.Jobs.Create(c.Request().Context(), &jobmodel.Job{
+					ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
+					SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
+					Type:        jobmodel.TypeDatabaseDelete,
+					Description: fmt.Sprintf("Delete database %s (site removal)", database.Name),
+					Status:      jobmodel.StatusQueued,
+					Payload:     payload,
+				})
+			}
+			h.store.Databases.Delete(c.Request().Context(), database.ID)
 		}
 	}
 

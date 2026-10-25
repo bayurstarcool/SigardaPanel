@@ -703,11 +703,17 @@ func (h *dbHandler) canAccess(ctx context.Context, sess *store.Session, site *st
 // execMySQL connects to the default database server and runs a function.
 // Returns nil if no database server configured (graceful skip).
 func (h *dbHandler) execMySQL(fn func(conn *dbserver.MySQLConn) error) error {
-	svr, err := h.store.DBStore.GetDefault(context.Background())
+	return execMySQLConn(h.store, fn)
+}
+
+// execMySQLConn opens a short-lived admin connection to the configured
+// default database server. Shared by handlers that need direct MySQL access.
+func execMySQLConn(s *store.Store, fn func(conn *dbserver.MySQLConn) error) error {
+	svr, err := s.DBStore.GetDefault(context.Background())
 	if err != nil || svr == nil {
 		return fmt.Errorf("no database server")
 	}
-	pass, err := h.store.DBStore.DecryptPassword(svr.PasswordEncrypted)
+	pass, err := s.DBStore.DecryptPassword(svr.PasswordEncrypted)
 	if err != nil {
 		return fmt.Errorf("decrypt: %w", err)
 	}
