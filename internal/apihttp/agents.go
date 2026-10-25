@@ -280,8 +280,8 @@ echo "  IP: $SERVER_IP"
 
 # ── Download binary ──
 echo "[5/7] Downloading agent binary..."
-DOWNLOAD_URL="${SIGARDAPANEL_BINARY_URL:-https://github.com/bayurstarcool/SigardaPanel/releases/download/${SIGARDAPANEL_VERSION:-v1.2.0}/sigardapanel-linux-amd64}"
-BINARY_SHA256="${SIGARDAPANEL_BINARY_SHA256:-644a19a6d91fd68c9cfdbe11f82c2b5a0e8e49936681ea8312787e00b8544cdb}"
+DOWNLOAD_URL="${SIGARDAPANEL_BINARY_URL:-https://github.com/bayurstarcool/SigardaPanel/releases/download/${SIGARDAPANEL_VERSION:-v1.3.1}/sigardapanel-linux-amd64}"
+BINARY_SHA256="${SIGARDAPANEL_BINARY_SHA256:-41a263439c2cc4369c8aea88f0f33c36b3196d8920da1aa3b7472766abfe9cf8}"
 mkdir -p "$INSTALL_DIR"
 DOWNLOAD_TARGET="$INSTALL_DIR/.sigardapanel.new"
 ROLLBACK_DIR=$(mktemp -d)
