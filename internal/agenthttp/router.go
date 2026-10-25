@@ -175,6 +175,13 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	// Fail2ban management
 	tasks.GET("/fail2ban/status", r.fail2banStatus)
 	tasks.GET("/security/overview", r.securityOverviewTask)
+
+	// Threat monitor (read-only compromise indicators)
+	tasks.GET("/security/ssh-activity", r.securitySSHActivity)
+	tasks.GET("/security/integrity", r.securityIntegrity)
+	tasks.GET("/security/connections", r.securityConnections)
+	tasks.GET("/security/persistence", r.securityPersistence)
+	tasks.GET("/security/web-attacks", r.securityWebAttacks)
 	tasks.GET("/fail2ban/jail", r.fail2banJail)
 	tasks.POST("/fail2ban/unban", r.fail2banUnban)
 	tasks.POST("/fail2ban/ban", r.fail2banBan)

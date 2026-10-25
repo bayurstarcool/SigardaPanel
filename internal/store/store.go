@@ -37,6 +37,7 @@ type Store struct {
 	BackupProviders *SQLiteBackupStorageProviderStore
 	BackupSchedules BackupScheduleRepository
 	BackupConfigs      BackupConfigRepository
+	SecurityBaselines SecurityBaselineRepository
 	ServiceTokens      ServiceTokenRepository
 	Notifications      NotificationRepository
 	RegistrationTokens RegistrationTokenRepository
@@ -75,6 +76,7 @@ func New(db *sql.DB) *Store {
 		BackupProviders: NewBackupStorageProviderStore(db),
 		BackupSchedules: NewBackupScheduleStore(db),
 		BackupConfigs:      NewBackupConfigStore(db),
+		SecurityBaselines: NewSecurityBaselineStore(db),
 		ServiceTokens:      NewServiceTokenStore(db),
 		Notifications:      NewNotificationStore(db),
 		RegistrationTokens: NewRegistrationTokenStore(db),

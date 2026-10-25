@@ -86,6 +86,7 @@ var AllMigrations = []Migration{
 	RecoveryCodesSchema,
 	BackupCredentialsSchema,
 	CloudflareConfigPerUserSchema,
+	SecurityBaselineSchema,
 }
 
 func Down(db *sql.DB) error {

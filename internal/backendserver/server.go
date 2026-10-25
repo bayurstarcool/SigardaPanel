@@ -71,6 +71,11 @@ func Run(ctx context.Context) error {
 	metricsCollector.Start(ctx)
 	defer metricsCollector.Stop()
 
+	// Start security collector (threat rules every 10 minutes)
+	securityCollector := sjobs.NewSecurityCollector(s)
+	securityCollector.Start(ctx)
+	defer securityCollector.Stop()
+
 	// Start periodic session cleanup (every 1 hour)
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)

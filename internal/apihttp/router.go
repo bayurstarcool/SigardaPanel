@@ -404,6 +404,12 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/servers/:id/redis/info", stackH.redisInfo, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/servers/:id/redis/flushdb", stackH.redisFlushDB, RequireAuth(s), RequireAdmin(s))
 
+	// ─── Threat Monitor (admin only) ──
+	smH := newSecurityMonitorHandler(s, auditRec)
+	e.GET("/api/v1/servers/:id/security/monitor", smH.monitor, RequireAuth(s), RequireAdmin(s))
+	e.GET("/api/v1/servers/:id/security/baseline", smH.getBaseline, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/security/baseline", smH.saveBaseline, RequireAuth(s), RequireAdmin(s))
+
 	// ─── Fail2ban Management ──
 	e.GET("/api/v1/servers/:id/fail2ban/status", stackH.fail2banStatus, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/:id/security/overview", stackH.securityOverview, RequireAuth(s), RequireAdmin(s))

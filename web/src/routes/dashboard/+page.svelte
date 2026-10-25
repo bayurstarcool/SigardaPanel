@@ -213,6 +213,7 @@
             <p class="dashboard-section-subtitle mt-1 text-xs text-slate-500">Live protection against DDoS, intrusions, malware & unauthorized access</p>
           </div>
           <a href="/fail2ban" class="dashboard-section-link text-xs text-sky-400 transition hover:text-sky-300">View firewall & rules <ArrowRight size={13} class="inline" /></a>
+          <a href="/threats" class="dashboard-section-link text-xs text-amber-400 transition hover:text-amber-300 ml-3">Threat monitor <ArrowRight size={13} class="inline" /></a>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
