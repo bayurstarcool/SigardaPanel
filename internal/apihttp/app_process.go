@@ -203,7 +203,7 @@ func (h *siteHandler) appUpdateConfig(c echo.Context) error {
 	if body.Port > 0 {
 		avail, reason, err := h.store.Sites.CheckPortAvailable(c.Request().Context(), site.ID, body.Port)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "port check failed: "+err.Error())
+			return echo.NewHTTPError(http.StatusInternalServerError, "port check failed")
 		}
 		if !avail {
 			// Suggest next available port

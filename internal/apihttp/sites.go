@@ -338,19 +338,19 @@ func (h *siteHandler) create(c echo.Context) error {
 	case "node":
 		appPort, err = h.store.Sites.FindFreePort(c.Request().Context(), 30000, 40000)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "no available port: "+err.Error())
+			return echo.NewHTTPError(http.StatusInternalServerError, "no available port")
 		}
 		appCmd = "node server.js"
 	case "go":
 		appPort, err = h.store.Sites.FindFreePort(c.Request().Context(), 30000, 40000)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "no available port: "+err.Error())
+			return echo.NewHTTPError(http.StatusInternalServerError, "no available port")
 		}
 		appCmd = "./app"
 	case "python":
 		appPort, err = h.store.Sites.FindFreePort(c.Request().Context(), 30000, 40000)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "no available port: "+err.Error())
+			return echo.NewHTTPError(http.StatusInternalServerError, "no available port")
 		}
 		appCmd = "python3 app.py"
 	case "proxy":
@@ -1073,7 +1073,7 @@ func (h *siteHandler) gitBranches(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/branches?root_path=" + url.QueryEscape(site.RootPath)
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -1096,7 +1096,7 @@ func (h *siteHandler) gitLog(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/log?root_path=" + url.QueryEscape(site.RootPath) + "&lines=" + url.QueryEscape(lines)
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -1119,7 +1119,7 @@ func (h *siteHandler) gitRollback(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/rollback"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -1142,7 +1142,7 @@ func (h *siteHandler) gitCheckout(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/checkout"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)

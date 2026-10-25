@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +111,23 @@ func (w *Worker) processOne(ctx context.Context) {
 	if job == nil {
 		return
 	}
+	w.runClaimedJob(ctx, job)
+}
+
+// runClaimedJob executes a claimed job. A panic inside any task handler must
+// never take the whole panel process down (the worker loop runs in-process),
+// so recover here and fail just this job.
+func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("worker: recovered from panic in job execution",
+				"job_id", job.ID, "type", job.Type, "panic", r, "stack", string(debug.Stack()))
+			_ = w.store.Jobs.MarkCompleted(context.Background(), job.ID, false, "", fmt.Sprintf("panic: %v", r))
+			sender := notify.NewSender(w.store)
+			sender.Send(context.Background(), "error", "Job panicked",
+				fmt.Sprintf("Job %d (%s) panicked: %v", job.ID, job.Type, r))
+		}
+	}()
 
 	slog.Info("worker: executing job", "id", job.ID, "type", job.Type, "attempts", job.Attempts)
 

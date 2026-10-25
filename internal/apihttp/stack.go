@@ -50,7 +50,7 @@ func (h *stackHandler) stackInfo(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/stack/info"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 
@@ -117,7 +117,7 @@ func (h *stackHandler) stackAction(c echo.Context) error {
 	}
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, payload)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 
@@ -183,7 +183,7 @@ func (h *stackHandler) stackRestart(c echo.Context) error {
 	}
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, payload)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 
@@ -261,7 +261,7 @@ func (h *stackHandler) dockerContainers(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/docker/containers"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -397,7 +397,7 @@ func (h *stackHandler) dockerContainerLogs(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/docker/container/logs?container_id=" + url.QueryEscape(containerID) + "&lines=" + lines
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -421,7 +421,7 @@ func (h *stackHandler) dockerImages(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/docker/images"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -527,7 +527,7 @@ func (h *stackHandler) dockerVolumes(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/docker/volumes"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -556,7 +556,7 @@ func (h *stackHandler) dockerNetworks(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/docker/networks"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -585,7 +585,7 @@ func (h *stackHandler) dockerInfo(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/docker/info"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -604,7 +604,7 @@ func (h *stackHandler) dockerDiskUsage(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/docker/disk-usage"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -629,7 +629,7 @@ func (h *stackHandler) pm2Manage(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/pm2/manage"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -665,7 +665,7 @@ func (h *stackHandler) dockerContainerProxy(c echo.Context, action string) error
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + agentPath
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -705,7 +705,7 @@ func (h *stackHandler) firewallStatus(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/firewall/status"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -749,7 +749,7 @@ func (h *stackHandler) firewallRules(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/firewall/rules"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -778,7 +778,7 @@ func (h *stackHandler) firewallProxy(c echo.Context, action string) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/firewall/" + action
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -799,7 +799,7 @@ func (h *stackHandler) redisStats(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/redis/stats"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -823,7 +823,7 @@ func (h *stackHandler) redisInfo(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/redis/info"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -852,7 +852,7 @@ func (h *stackHandler) redisProxy(c echo.Context, action string) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/redis/" + action
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -907,7 +907,7 @@ func (h *stackHandler) securityOverview(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/security/overview"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 
@@ -934,7 +934,7 @@ func (h *stackHandler) fail2banStatus(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/fail2ban/status"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -954,7 +954,7 @@ func (h *stackHandler) fail2banJail(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/fail2ban/jail?name=" + jailName
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -998,7 +998,7 @@ func (h *stackHandler) botBlockerManage(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/bot-blocker/manage"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -1021,7 +1021,7 @@ func (h *stackHandler) fail2banProxy(c echo.Context, action string) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/fail2ban/" + action
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -1043,7 +1043,7 @@ func (h *stackHandler) serverSpecs(c echo.Context) error {
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/system/spec"
 	resp, err := agentRequest("GET", agentURL, server.AgentToken, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 
@@ -1080,7 +1080,7 @@ func (h *stackHandler) serverBenchmark(c echo.Context) error {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
 	defer resp.Body.Close()
 

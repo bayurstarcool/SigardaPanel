@@ -57,7 +57,13 @@ func (rl *rateLimiter) allow(ip string) bool {
 			valid = append(valid, t)
 		}
 	}
-	rl.attempts[ip] = valid
+	// Drop the key once its window is empty so the map cannot grow without
+	// bound from one-off attacker IPs.
+	if len(valid) == 0 {
+		delete(rl.attempts, ip)
+	} else {
+		rl.attempts[ip] = valid
+	}
 
 	if len(valid) >= rl.limit {
 		return false

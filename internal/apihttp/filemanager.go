@@ -388,7 +388,7 @@ func (h *fileManagerHandler) renameEntry(c echo.Context) error {
 	}
 
 	if err := os.Rename(oldFull, newFull); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to rename: "+err.Error())
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to rename")
 	}
 
 	sess := sessionFromEcho(c)
