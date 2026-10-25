@@ -1,6 +1,6 @@
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
-import { API_URL, clientIpHeaders } from "$lib/server/upstream";
+import { API_URL, authHeaders, clientIpHeaders } from "$lib/server/upstream";
 
 function buildUrl(base: string, request: Request): string {
   const url = new URL(request.url);
@@ -11,9 +11,7 @@ function buildUrl(base: string, request: Request): string {
 export const GET: RequestHandler = async ({ params, request }) => {
   const url = buildUrl(`${API_URL}/api/v1/${params.path}`, request);
   const headers: Record<string, string> = {};
-  const auth = request.headers.get("Authorization");
-  if (auth) headers["Authorization"] = auth;
-  Object.assign(headers, clientIpHeaders(request));
+  Object.assign(headers, authHeaders(request), clientIpHeaders(request));
 
   try {
     const res = await fetch(url, { headers, cache: "no-store" });
@@ -32,9 +30,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  const auth = request.headers.get("Authorization");
-  if (auth) headers["Authorization"] = auth;
-  Object.assign(headers, clientIpHeaders(request));
+  Object.assign(headers, authHeaders(request), clientIpHeaders(request));
 
   try {
     const body = await request.text();
@@ -59,9 +55,7 @@ export const PUT: RequestHandler = async ({ params, request }) => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  const auth = request.headers.get("Authorization");
-  if (auth) headers["Authorization"] = auth;
-  Object.assign(headers, clientIpHeaders(request));
+  Object.assign(headers, authHeaders(request), clientIpHeaders(request));
 
   try {
     const body = await request.text();
@@ -86,9 +80,7 @@ export const PATCH: RequestHandler = async ({ params, request }) => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  const auth = request.headers.get("Authorization");
-  if (auth) headers["Authorization"] = auth;
-  Object.assign(headers, clientIpHeaders(request));
+  Object.assign(headers, authHeaders(request), clientIpHeaders(request));
 
   try {
     const body = await request.text();
@@ -111,9 +103,7 @@ export const PATCH: RequestHandler = async ({ params, request }) => {
 export const DELETE: RequestHandler = async ({ params, request }) => {
   const url = buildUrl(`${API_URL}/api/v1/${params.path}`, request);
   const headers: Record<string, string> = {};
-  const auth = request.headers.get("Authorization");
-  if (auth) headers["Authorization"] = auth;
-  Object.assign(headers, clientIpHeaders(request));
+  Object.assign(headers, authHeaders(request), clientIpHeaders(request));
 
   try {
     const res = await fetch(url, {

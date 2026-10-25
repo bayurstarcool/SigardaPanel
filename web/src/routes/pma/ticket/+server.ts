@@ -2,6 +2,7 @@ import type { RequestHandler } from "./$types";
 import { env } from "$env/dynamic/private";
 import { randomBytes, createCipheriv, createHash } from "crypto";
 import { createPmaRedemption } from "$lib/server/pma-redemptions";
+import { authHeaders } from "$lib/server/upstream";
 
 const API_URL = env.SIGARDAPANEL_API_URL || "http://127.0.0.1:7700";
 
@@ -16,7 +17,9 @@ export const POST: RequestHandler = async ({ request }) => {
   const key = encryptionKey();
   if (!key) return new Response(null, { status: 503 });
 
-  const auth = request.headers.get("Authorization");
+  // Authorization header first (impersonation), else the HttpOnly
+  // sp_session cookie — same resolution order as the API proxy.
+  const auth = authHeaders(request)["Authorization"];
   const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
   if (!token) return new Response(null, { status: 401 });
 

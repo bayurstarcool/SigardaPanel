@@ -62,16 +62,19 @@ function doLogout(reason: string) {
   }
 }
 
-// Re-validate token with /auth/me before giving up
-async function revalidateToken(token: string): Promise<boolean> {
+// Re-validate session with /auth/me before giving up
+async function revalidateToken(token: string | null): Promise<boolean> {
   try {
-    log("re-validating token with /auth/me...");
+    log("re-validating session with /auth/me...");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    // Impersonation rides on an explicit Bearer token; normal sessions
+    // re-validate through the HttpOnly cookie.
+    if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch("/api/proxy/auth/me", {
       method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       cache: "no-store",
     });
     if (res.ok) {

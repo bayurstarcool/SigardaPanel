@@ -14,7 +14,12 @@ export const POST: RequestHandler = async ({ request }) => {
       body,
     });
     const data = await res.json();
-    return json(data, { status: res.status });
+    const out = json(data, { status: res.status });
+    // Forward the HttpOnly session cookie so the browser holds the token,
+    // not page JavaScript.
+    const setCookie = res.headers.get("set-cookie");
+    if (setCookie) out.headers.set("set-cookie", setCookie);
+    return out;
   } catch (e: any) {
     return json(
       { error: { message: e.message || "proxy error" } },

@@ -20,33 +20,32 @@ function createAuthStore() {
 
   function loadSession() {
     try {
-      const t = localStorage.getItem("sigarda_token");
+      // Only the display-name cache lives here; the session token now lives
+      // in the HttpOnly sp_session cookie and never touches JS storage.
       const u = localStorage.getItem("sigarda_user");
-      if (t && u) {
-        token = t;
+      if (u) {
         user = JSON.parse(u) as User;
-        // (the legacy JS-readable panel_token cookie is no longer written)
-        log(
-          "session loaded from localStorage:",
-          user?.username,
-          "token=" + t.slice(0, 8) + "...",
-        );
+        log("user cache loaded from localStorage:", user?.username);
       } else {
-        log("no session in localStorage");
+        log("no cached user in localStorage");
       }
     } catch (e) {
       log("failed to parse localStorage session:", e);
     }
   }
 
-  async function validateToken(tok: string) {
-    log("validating token:", tok.slice(0, 8) + "...");
+  async function validateToken(tok: string | null) {
+    if (tok) log("validating token:", tok.slice(0, 8) + "...");
+    else log("validating session cookie via /auth/me...");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    // Impersonation still rides on an explicit Bearer token; normal
+    // sessions authenticate with the HttpOnly cookie.
+    if (tok) headers["Authorization"] = `Bearer ${tok}`;
     const res = await fetch("/api/proxy/auth/me", {
       method: "GET",
-      headers: {
-        Authorization: `Bearer ${tok}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       cache: "no-store",
     });
 
@@ -84,51 +83,50 @@ function createAuthStore() {
   async function init() {
     log("init() called");
     loadSession();
-    if (token && user) {
-      try {
-        const result = await validateToken(token);
-        if (result) {
-          consecutiveFailures = 0;
-          if (result.isImpersonating) {
-            isImpersonating = true;
-            impersonatingUser = result.user;
-            impersonator = result.impersonator;
-            const orig = localStorage.getItem("sigarda_imp_token");
-            if (orig) originalToken = orig;
-          } else {
-            isImpersonating = false;
-            impersonatingUser = null;
-            impersonator = null;
-            localStorage.removeItem("sigarda_imp_token");
-            localStorage.removeItem("sigarda_imp_user");
-          }
-          user = result.user;
-          localStorage.setItem("sigarda_user", JSON.stringify(result.user));
-          log("init() session valid, user:", user?.username);
+    // Validate whatever the cookie says — even without a cached user the
+    // browser may still hold a valid session.
+    try {
+      const result = await validateToken(null);
+      if (result) {
+        consecutiveFailures = 0;
+        if (result.isImpersonating) {
+          // Cookie sessions are never impersonation sessions (impersonation
+          // is Bearer-only and does not survive a reload).
+          isImpersonating = false;
+          impersonatingUser = null;
+          impersonator = null;
+          token = null;
         } else {
-          // Token invalid (401/403) — count failures
-          consecutiveFailures++;
-          log(
-            `init() token invalid, failures: ${consecutiveFailures}/${MAX_FAILURES}`,
-          );
-          if (consecutiveFailures >= MAX_FAILURES) {
-            // Truly invalid — clear everything
-            log("init() clearing session after", MAX_FAILURES, "failures");
-            clearSession();
-          }
-          // Otherwise keep session — might be transient
+          isImpersonating = false;
+          impersonatingUser = null;
+          impersonator = null;
         }
-      } catch (e) {
-        // Network error or transient failure — keep session
-        log("init() network error, keeping session:", e);
+        user = result.user;
+        localStorage.setItem("sigarda_user", JSON.stringify(result.user));
+        log("init() session valid, user:", user?.username);
+      } else {
+        // Session invalid (401/403) — count failures
+        consecutiveFailures++;
+        log(
+          `init() session invalid, failures: ${consecutiveFailures}/${MAX_FAILURES}`,
+        );
+        if (consecutiveFailures >= MAX_FAILURES) {
+          // Truly invalid — clear everything
+          log("init() clearing session after", MAX_FAILURES, "failures");
+          clearSession();
+        }
+        // Otherwise keep session — might be transient
       }
+    } catch (e) {
+      // Network error or transient failure — keep session
+      log("init() network error, keeping session:", e);
     }
     loading = false;
     log(
-      "init() done, token:",
-      token ? token.slice(0, 8) + "..." : "null",
-      "user:",
+      "init() done, user:",
       user?.username || "null",
+      "impersonating:",
+      isImpersonating,
     );
   }
 
@@ -140,11 +138,12 @@ function createAuthStore() {
     impersonator = null;
     originalToken = null;
     consecutiveFailures = 0;
+    // Also wipe legacy keys from pre-cookie versions so old copies die.
     localStorage.removeItem("sigarda_token");
-    document.cookie = "panel_token=; path=/; max-age=0";
     localStorage.removeItem("sigarda_user");
     localStorage.removeItem("sigarda_imp_token");
     localStorage.removeItem("sigarda_imp_user");
+    document.cookie = "panel_token=; path=/; max-age=0";
     log("clearSession() called");
   }
 
@@ -181,13 +180,13 @@ function createAuthStore() {
     }
     const t = json.data.token;
     const u = json.data.user as User;
-    token = t;
+    // The token arrives as an HttpOnly cookie via the login route's
+    // Set-Cookie; keep it out of JS storage entirely.
+    token = null;
     user = u;
     consecutiveFailures = 0;
-    localStorage.setItem("sigarda_token", t);
-    // (the legacy JS-readable panel_token cookie is no longer written)
     localStorage.setItem("sigarda_user", JSON.stringify(u));
-    log("login() success, token:", t.slice(0, 8) + "...");
+    log("login() success (HttpOnly cookie session), user:", u.username);
   }
 
   function logout() {
@@ -196,47 +195,42 @@ function createAuthStore() {
       stopImpersonation();
       return;
     }
-    if (token) {
-      fetch("/api/proxy/auth/logout", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      }).catch(() => {});
-    }
+    // The HttpOnly cookie authenticates the call — no token in JS.
+    fetch("/api/proxy/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }).catch(() => {});
     clearAuth();
   }
 
   async function stopImpersonation() {
     log("stopImpersonation() called");
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
       await fetch("/api/proxy/auth/stop-impersonation", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
+        headers,
       });
     } catch {}
 
-    const orig = originalToken || localStorage.getItem("sigarda_imp_token");
-    if (orig) {
-      try {
-        const result = await validateToken(orig);
-        if (result?.user) {
-          token = orig;
-          user = result.user;
-          localStorage.setItem("sigarda_token", orig);
-          localStorage.setItem("sigarda_user", JSON.stringify(result.user));
-        } else {
-          clearAuth();
-        }
-      } catch {
+    // Drop the impersonation Bearer token; the original HttpOnly cookie
+    // session takes over again.
+    token = null;
+    try {
+      const result = await validateToken(null);
+      if (result?.user) {
+        user = result.user;
+        localStorage.setItem("sigarda_user", JSON.stringify(result.user));
+      } else {
         clearAuth();
+        return;
       }
-    } else {
+    } catch {
       clearAuth();
+      return;
     }
 
     isImpersonating = false;
@@ -249,12 +243,15 @@ function createAuthStore() {
 
   async function impersonateUser(targetUserId: number) {
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      // Impersonation needs the current session: prefer the explicit token
+      // (already impersonating is blocked server-side) else the cookie.
+      if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch(`/api/proxy/users/${targetUserId}/impersonate`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
+        headers,
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error.message || json.error.code);
@@ -264,17 +261,14 @@ function createAuthStore() {
         impersonator: impInfo,
       } = json.data;
 
-      if (token) {
-        originalToken = token;
-        localStorage.setItem("sigarda_imp_token", token);
-      }
-
+      // Impersonation tokens live in memory only — never persisted, and
+      // they do not survive a page reload by design.
+      originalToken = token;
       token = impToken;
       user = impUser as User;
       isImpersonating = true;
       impersonatingUser = impUser as User;
       impersonator = impInfo || null;
-      localStorage.setItem("sigarda_token", impToken);
       localStorage.setItem("sigarda_user", JSON.stringify(impUser));
     } catch (e: any) {
       throw new Error(e.message || "impersonation failed");

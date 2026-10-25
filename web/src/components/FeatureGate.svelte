@@ -17,10 +17,7 @@
 
   onMount(async () => {
     try {
-      const token = localStorage.getItem('sigarda_token');
-      const res = await fetch('/api/proxy/license/features', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await fetch('/api/proxy/license/features');
       if (res.ok) {
         const data = await res.json();
         features = data.features || {};

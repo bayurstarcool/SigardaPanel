@@ -23,15 +23,22 @@ const (
 func RequireAuth(s *store.Store) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// Prefer the Authorization header; fall back to the HttpOnly
+			// session cookie so browser clients never need the token in JS.
+			var token string
 			header := c.Request().Header.Get("Authorization")
-			if header == "" {
+			if header != "" {
+				parts := strings.SplitN(header, " ", 2)
+				if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+					return echo.NewHTTPError(http.StatusUnauthorized, "invalid authorization header format")
+				}
+				token = parts[1]
+			} else if ck, err := c.Cookie(sessionCookieName); err == nil && ck.Value != "" {
+				token = ck.Value
+			}
+			if token == "" {
 				return echo.NewHTTPError(http.StatusUnauthorized, "missing authorization header")
 			}
-			parts := strings.SplitN(header, " ", 2)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-				return echo.NewHTTPError(http.StatusUnauthorized, "invalid authorization header format")
-			}
-			token := parts[1]
 			if len(token) != 64 {
 				return echo.NewHTTPError(http.StatusUnauthorized, "invalid token")
 			}

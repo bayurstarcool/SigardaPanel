@@ -13,10 +13,8 @@ export const licenseStore = {
 
   async fetch() {
     try {
-      const token = localStorage.getItem("sigarda_token");
-      const res = await fetch("/api/proxy/license", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      // Session rides on the HttpOnly sp_session cookie via the proxy.
+      const res = await fetch("/api/proxy/license");
       if (res.ok) {
         const data = await res.json();
         _tier = data.tier || "free";

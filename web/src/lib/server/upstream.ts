@@ -13,3 +13,17 @@ export function clientIpHeaders(request: Request): Record<string, string> {
   const ip = request.headers.get("x-real-ip");
   return ip ? { "X-Real-IP": ip } : {};
 }
+
+/**
+ * Authorization for the upstream API: pass through the browser's header when
+ * present (API clients, impersonation), otherwise derive it from the HttpOnly
+ * sp_session cookie so the session token never has to live in page JS.
+ */
+export function authHeaders(request: Request): Record<string, string> {
+  const auth = request.headers.get("Authorization");
+  if (auth) return { Authorization: auth };
+  const cookie = request.headers.get("cookie") ?? "";
+  const m = cookie.match(/(?:^|;\s*)sp_session=([^;]+)/);
+  if (m) return { Authorization: `Bearer ${decodeURIComponent(m[1])}` };
+  return {};
+}

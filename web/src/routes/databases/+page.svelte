@@ -10,12 +10,15 @@
   } from 'lucide-svelte';
 
   async function openPma(databaseId: number) {
-    const t = auth.token || localStorage.getItem('sigarda_token');
-    if (!t) { window.location.href = '/login'; return; }
+    if (!auth.user) { window.location.href = '/login'; return; }
     try {
+      // The HttpOnly session cookie authenticates the ticket request;
+      // impersonation falls back to the explicit Bearer token.
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (auth.token) headers['Authorization'] = `Bearer ${auth.token}`;
       const res = await fetch('/pma/ticket', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
+        headers,
         body: JSON.stringify({ database_id: databaseId })
       });
       if (res.status === 401) { window.location.href = '/login'; return; }

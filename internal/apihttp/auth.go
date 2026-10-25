@@ -16,6 +16,7 @@ import (
 	"github.com/pquerna/otp/totp"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
+	"sigardapanel/internal/config"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -163,6 +164,41 @@ func hashRecoveryCode(code string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// sessionCookieName is the HttpOnly cookie that carries the session token so
+// it never has to live in browser JavaScript (localStorage is XSS-readable).
+const sessionCookieName = "sp_session"
+
+// setSessionCookie writes the session token as an HttpOnly, SameSite=Strict
+// cookie. Path is "/" because non-/api panel routes (e.g. /pma/ticket) also
+// authenticate with it. Secure is always on except in explicit dev mode so
+// plain-HTTP local development still works.
+func setSessionCookie(c echo.Context, token string, expires time.Time) {
+	sameSite := http.SameSiteStrictMode
+	secure := os.Getenv("SIGARDAPANEL_DEV") != "true"
+	c.SetCookie(&http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: sameSite,
+		Expires:  expires,
+	})
+}
+
+func clearSessionCookie(c echo.Context) {
+	secure := os.Getenv("SIGARDAPANEL_DEV") != "true"
+	c.SetCookie(&http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
+}
+
 type authHandler struct {
 	store        *store.Store
 	audit        *audit.Recorder
@@ -297,6 +333,10 @@ func (ah *authHandler) login(c echo.Context) error {
 		slog.Warn("login: failed to revoke old sessions", "error", err)
 	}
 
+	// The cookie keeps the token out of browser JS; the Bearer token is still
+	// returned for API clients, the member portal and impersonation.
+	setSessionCookie(c, token, expiresAt)
+
 	slog.Info("user logged in", "user_id", user.ID, "username", user.Username)
 
 	ah.audit.RecordAction(c.Request().Context(), user.ID, audit.ActionLogin, audit.ResourceSession, sess.ID, map[string]any{
@@ -324,6 +364,12 @@ func (ah *authHandler) login(c echo.Context) error {
 // register creates a new user account (public endpoint).
 func (ah *authHandler) register(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+
+	// Operators of self-hosted instances can close public sign-up with
+	// SIGARDAPANEL_ALLOW_REGISTRATION=false; default stays open.
+	if !config.AllowRegistration() {
+		return echo.NewHTTPError(http.StatusForbidden, "registration is disabled on this server")
+	}
 
 	var body struct {
 		Name     string `json:"name"`
@@ -386,6 +432,7 @@ func (ah *authHandler) logout(c echo.Context) error {
 	if err := ah.store.Sessions.Revoke(c.Request().Context(), sess.ID); err != nil {
 		slog.Error("logout: revoke session", "error", err)
 	} else {
+		clearSessionCookie(c)
 		ah.audit.RecordAction(c.Request().Context(), sess.UserID, audit.ActionLogout, audit.ResourceSession, sess.ID, nil)
 	}
 	slog.Info("session revoked", "session_id", sess.ID, "user_id", sess.UserID)
