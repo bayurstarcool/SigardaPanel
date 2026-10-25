@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, bearerHeaders } from '$lib/auth.svelte';
   import { onMount } from 'svelte';
 
   let loading = $state(true);
@@ -22,7 +22,7 @@
     loading = true;
     try {
       const res = await fetch('/api/v1/auth/2fa/status', {
-        headers: { 'Authorization': `Bearer ${auth.token}` }
+        headers: { ...bearerHeaders() }
       });
       const data = await res.json();
       enabled = data.enabled;
@@ -39,7 +39,7 @@
     try {
       const res = await fetch('/api/v1/auth/2fa/setup', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${auth.token}` }
+        headers: { ...bearerHeaders() }
       });
       const data = await res.json();
       if (data.error) { error = data.error; return; }
@@ -61,7 +61,7 @@
       const res = await fetch('/api/v1/auth/2fa/enable', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${auth.token}`,
+          ...bearerHeaders(),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ code })
@@ -88,7 +88,7 @@
       const res = await fetch('/api/v1/auth/2fa/disable', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${auth.token}`,
+          ...bearerHeaders(),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ code })
@@ -109,7 +109,7 @@
     try {
       const res = await fetch('/api/v1/auth/2fa/recovery-codes', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${auth.token}` }
+        headers: { ...bearerHeaders() }
       });
       const data = await res.json();
       if (data.recovery_codes) {

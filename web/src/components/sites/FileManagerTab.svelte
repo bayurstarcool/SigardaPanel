@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, bearerHeaders } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
   import CodeEditor from '$components/CodeEditor.svelte';
@@ -103,7 +103,7 @@
   async function fmUploadFiles(files: FileList | null) {
     if (!files || files.length === 0) return; fmUploading = true;
     const dir = (fmPath === '/' || fmPath === '.') ? '.' : fmPath.replace(/^\/+/, '');
-    try { for (const file of Array.from(files)) { const formData = new FormData(); formData.append('file', file); formData.append('path', dir); await fetch(`/api/proxy/sites/${siteId}/files/upload`, { method: 'POST', headers: { 'Authorization': `Bearer ${auth.token}` }, body: formData }).then(async r => { if (!r.ok) { const d = await r.json().catch(() => null); throw new Error(d?.error?.message || 'Upload failed'); } }); } fmEntries = []; await loadFiles(fmPath); toasts.success(`Uploaded ${files.length} file(s)`); }
+    try { for (const file of Array.from(files)) { const formData = new FormData(); formData.append('file', file); formData.append('path', dir); await fetch(`/api/proxy/sites/${siteId}/files/upload`, { method: 'POST', headers: bearerHeaders(), body: formData }).then(async r => { if (!r.ok) { const d = await r.json().catch(() => null); throw new Error(d?.error?.message || 'Upload failed'); } }); } fmEntries = []; await loadFiles(fmPath); toasts.success(`Uploaded ${files.length} file(s)`); }
     catch (e: any) { toasts.error(e.message); } finally { fmUploading = false; }
   }
   function fmSelectAll() { fmSelectedEntries = new Set(fmFilteredEntries.filter((e: any) => !e.is_dir).map((e: any) => e.path)); }

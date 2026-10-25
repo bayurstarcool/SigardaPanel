@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, bearerHeaders } from '$lib/auth.svelte';
   import { page } from '$app/stores';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import { Cpu, HardDrive, MemoryStick, Wifi, Globe, Server, Zap, RefreshCw, Clock, Cloud } from 'lucide-svelte';
@@ -27,7 +27,7 @@
     error = '';
     try {
       const res = await fetch(`/api/proxy/servers/${serverId}/specs`, {
-        headers: { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' }
+        headers: { ...bearerHeaders(), 'Content-Type': 'application/json' }
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error.message);
@@ -46,7 +46,7 @@
     error = '';
     try {
       const res = await fetch(`/api/proxy/servers/${serverId}/benchmark`, {
-        headers: { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' }
+        headers: { ...bearerHeaders(), 'Content-Type': 'application/json' }
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error.message);

@@ -306,6 +306,15 @@ function createAuthStore() {
 
 export const auth = createAuthStore();
 
+/**
+ * Authorization headers for direct fetch calls to /api/proxy/*.
+ * Cookie sessions need none (the proxy derives them server-side); only
+ * impersonation must carry its explicit Bearer token.
+ */
+export function bearerHeaders(): Record<string, string> {
+  return auth.token ? { Authorization: `Bearer ${auth.token}` } : {};
+}
+
 // Register handler biar api.ts panggil clearSession() bukan redirect langsung
 setSessionExpiredHandler((reason: string) => {
   log("session expired handler called:", reason);
