@@ -1,6 +1,6 @@
 # CLI Reference
 
-SigardaPanel CLI v0.5.0 — 55+ subcommands.
+SigardaPanel CLI v1.2.0 — 55+ subcommands.
 
 ## Usage
 

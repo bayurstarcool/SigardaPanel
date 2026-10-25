@@ -1,6 +1,6 @@
 # Installation Guide
 
-SigardaPanel v0.5.0 — Installation and setup guide.
+SigardaPanel v1.2.0 — Installation and setup guide.
 
 ## Quick Start
 

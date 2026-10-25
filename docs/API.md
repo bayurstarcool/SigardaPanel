@@ -4,7 +4,9 @@ Base URL: `http://127.0.0.1:7700/api/v1` (via nginx: `https://panel.example.com/
 
 ## Authentication
 
-All endpoints (except public ones) require Bearer token:
+All endpoints (except public ones) require authentication. Browsers use the
+HttpOnly `sp_session` cookie (set at login, SameSite=Strict); API clients use a
+Bearer token:
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7700/api/v1/...

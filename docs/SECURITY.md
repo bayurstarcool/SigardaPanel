@@ -9,11 +9,11 @@ SigardaPanel v1.0.0 has been audited. This document describes the threat model, 
 1. **Brute force** login → rate-limited (10 attempts / 15min per IP)
 2. **Stolen password** → Argon2id hash, optional 2FA
 3. **Token leakage** → 64-char session tokens, hashed in DB, revocable
-4. **CSRF** → bearer token auth, no cookies
+4. **CSRF** → browser sessions use SameSite=Strict cookies; API clients use Bearer headers
 5. **Path traversal** in file manager → `safePath()` validates
 6. **Command injection** in agent → allowlist, args array (no shell)
 7. **SQL injection** → all queries parameterized
-8. **XSS** in SvelteKit → auto-escaping + `localStorage` token (single domain)
+8. **XSS** in SvelteKit → auto-escaping; session token lives in an HttpOnly cookie, never in JS (since v1.2.0)
 9. **Network sniffing** → TLS 1.2/1.3, HSTS
 10. **Privilege escalation** → role hierarchy + ownership checks
 11. **Brute force on SSH** → fail2ban + key-only auth
@@ -111,20 +111,20 @@ Actions tracked: `site_create`, `site_delete`, `site_update`, `user_create`, `us
 
 ## Known Issues / Limitations
 
-### v1.0.0
+### Reviewed at v1.2.0
 
 | Issue | Severity | Mitigation |
 |---|---|---|
-| Token stored in `localStorage` (XSS-amplified) | Medium | SvelteKit auto-escapes; HSTS; CSP not yet set |
+| ~~Token stored in `localStorage`~~ | — | **Resolved in v1.2.0**: HttpOnly + Secure + SameSite=Strict cookie |
 | No CSP header | Low | Recommended: `default-src 'self'` |
-| Registration endpoint blocked at nginx (403) | Low | By design — admin creates users |
+| Public registration | Low | Open by design; close with `SIGARDAPANEL_ALLOW_REGISTRATION=false` |
 | `test_db.php` may exist on web server (172.104.62.193) | High (out of scope) | Remove from that host |
 | Self-signed cert warning in browsers | Low | Use Let's Encrypt with `DOMAIN` + `CF_TOKEN` |
 | HTTP still works for direct IP (anti-loop only checks CF-Ray) | Low | `iptables` block if not needed |
 
 ### Future hardening
 
-- [ ] Migrate session token to HttpOnly cookie (eliminate XSS-amplified localStorage theft)
+- [x] Migrate session token to HttpOnly cookie (done in v1.2.0)
 - [ ] Add CSP header
 - [ ] Add 2FA enforcement for admin role (currently optional)
 - [ ] Add per-IP session limit

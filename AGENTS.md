@@ -545,10 +545,14 @@ location /api/ws/ {
 
 ## Repositories
 
-- **Public (binary distribution)**: github.com/bayurstarcool/SigardaPanel
-- **Enterprise (full source)**: github.com/bayurstarcool/SigardaPanel-Enterprise
+- **Public (open source — full source + signed releases)**: github.com/bayurstarcool/SigardaPanel — `main` is the source of truth
+- **Enterprise (internal deployment flow)**: github.com/bayurstarcool/SigardaPanel-Enterprise
 
 ## GitHub Releases
 
 Binary releases: https://github.com/bayurstarcool/SigardaPanel/releases
-Latest: v0.5.6 — Docker Multi-Language, Auto Token Sync, Progressive Create Flow
+Latest: v1.2.0 — HttpOnly cookie sessions, registration toggle
+
+Recent security/stability releases: v1.1.1 file-manager upload traversal fix;
+v1.1.2 worker panic recovery + rate-limiter/error hygiene; v1.1.3 site deletion
+drops its MySQL databases; v1.2.0 cookie sessions + `SIGARDAPANEL_ALLOW_REGISTRATION`.

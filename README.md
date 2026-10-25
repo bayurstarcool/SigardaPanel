@@ -44,14 +44,14 @@ Manage nginx, PHP, Node, databases, SSL, backups, firewall from one web UI.
 ┌─────────────────────┐         ┌────────────────────────────┐
 │   nginx (port 80/443) │         │   SigardaPanel Web         │
 │   reverse proxy       │────────▶│   SvelteKit (port 7720)   │
-│   + Let's Encrypt     │         │   Bearer token auth        │
+│   + Let's Encrypt     │         │   HttpOnly cookie session  │
 └──────────┬────────────┘         └────────┬───────────────────┘
-           │                                │ Bearer token
+           │                                │ session cookie
            ▼                                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │   SigardaPanel API   (port 7700)                              │
 │   - Go 1.25 + Echo                                          │
-│   - Bearer + Session auth, RBAC, 2FA                        │
+│   - Cookie + Bearer auth, RBAC, 2FA                        │
 │   - SQLite (sigardapanel.db) + PostgreSQL (member)          │
 └──────────┬─────────────────────────────────┬───────────────┘
            │ HTTPS + Bearer token             │
@@ -166,7 +166,8 @@ source/
 
 ## API
 
-37 endpoints across 18 domains. Bearer token auth.
+37 endpoints across 18 domains. Browsers authenticate with the HttpOnly
+`sp_session` cookie (SameSite=Strict); API clients and the CLI use a Bearer token.
 
 ```bash
 TOKEN=$(sigardapanel login --user admin)

@@ -40,7 +40,8 @@ WantedBy=multi-user.target
 | `SIGARDAPANEL_LOG_DIR` | `/var/log/sigardapanel` | Logs |
 | `SIGARDAPANEL_AGENT_URL` | `http://127.0.0.1:7710` | Local agent endpoint |
 | `SIGARDAPANEL_AGENT_TOKEN` | (generated) | Shared secret with agent |
-| `SIGARDAPANEL_ENCRYPTION_KEY` | (generated) | DB column encryption |
+| `SIGARDAPANEL_ENCRYPTION_KEY` | (generated) | AES-256 key (32 bytes hex) for secrets at rest — set explicitly; a loud warning is logged when the derived fallback is used |
+| `SIGARDAPANEL_ALLOW_REGISTRATION` | `true` | Set `false` to close public sign-up |
 | `MEMBER_DB_HOST` | `127.0.0.1` | Member DB host (optional) |
 | `MEMBER_DB_PORT` | `3306` | Member DB port |
 | `MEMBER_DB_USER` | `sigardapanel` | Member DB user |
