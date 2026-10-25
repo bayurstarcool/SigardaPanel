@@ -25,7 +25,7 @@
     "svelte": "^5",
     "svelte-check": "^4",
     "tailwindcss": "^4",
-    "typescript": "^5",
+    "typescript": "^7",
     "vite": "^6"
   },
   "type": "module",
