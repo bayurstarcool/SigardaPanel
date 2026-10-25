@@ -418,8 +418,7 @@ func (h *fileManagerHandler) uploadFile(c echo.Context) error {
 	if relDir == "" {
 		relDir = "."
 	}
-	dirPath, err := safePath(site.RootPath, relDir)
-	if err != nil {
+	if _, err := safePath(site.RootPath, relDir); err != nil {
 		return err
 	}
 
@@ -428,8 +427,18 @@ func (h *fileManagerHandler) uploadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "file field required")
 	}
 
-	os.MkdirAll(dirPath, 0755)
-	dstPath := filepath.Join(dirPath, src.Filename)
+	// The multipart filename is client-controlled; strip any directory
+	// components (ToSlash first — backslashes are not separators on Linux)
+	// and re-validate the final path so it can never escape the site root.
+	filename := filepath.Base(filepath.ToSlash(src.Filename))
+	if filename == "" || filename == "." || filename == ".." || filename == "/" {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid filename")
+	}
+	dstPath, err := safePath(site.RootPath, filepath.Join(relDir, filename))
+	if err != nil {
+		return err
+	}
+	os.MkdirAll(filepath.Dir(dstPath), 0755)
 
 	// Open uploaded file
 	srcFile, err := src.Open()
@@ -456,16 +465,16 @@ func (h *fileManagerHandler) uploadFile(c echo.Context) error {
 		userID = sess.UserID
 	}
 	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, site.ID, map[string]any{
-		"domain": site.Domain, "action": "file_upload", "path": filepath.Join(relDir, src.Filename), "size": info.Size(), "item_type": "file", "is_dir": false,
+		"domain": site.Domain, "action": "file_upload", "path": filepath.Join(relDir, filename), "size": info.Size(), "item_type": "file", "is_dir": false,
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
 			"status":  "success",
 			"message": "Uploaded",
-			"name":    src.Filename,
+			"name":    filename,
 			"size":    info.Size(),
-			"path":    filepath.Join(relDir, src.Filename),
+			"path":    filepath.Join(relDir, filename),
 		},
 		RequestID: rid,
 	})

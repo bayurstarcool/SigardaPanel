@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -93,6 +94,10 @@ func DBPath() string {
 	return env("SIGARDAPANEL_DB_PATH", "sigardapanel.db")
 }
 
+// warnDerivedEncryptionKeyOnce makes the fallback-key warning fire once per
+// process instead of on every encrypt/decrypt call.
+var warnDerivedEncryptionKeyOnce sync.Once
+
 // EncryptionKey returns the AES-256 key for encrypting sensitive data (e.g. DB passwords).
 // Must be 32 bytes hex-encoded, or defaults to a hash of the DB path + agent token.
 func EncryptionKey() []byte {
@@ -102,6 +107,12 @@ func EncryptionKey() []byte {
 			return key
 		}
 	}
+	// The derived key is deployment-local: secrets encrypted with it become
+	// unreadable after a reinstall, and the derivation is weaker than an
+	// explicitly generated key. Surface the misconfiguration loudly.
+	warnDerivedEncryptionKeyOnce.Do(func() {
+		slog.Error("SIGARDAPANEL_ENCRYPTION_KEY missing or invalid: using derived fallback key. Set it to 32 bytes hex (openssl rand -hex 32) before storing secrets")
+	})
 	// Derive from DB path + agent token
 	material := DBPath() + ":" + AgentToken()
 	h := sha256.Sum256([]byte(material))
