@@ -9,7 +9,7 @@
   import {
     LayoutDashboard, Server, Globe, ShieldCheck, Database, Package, Zap,
     Folder, BarChart3, Users, ClipboardCheck, LogOut, ChevronRight,
-    Cloud, User, Bell, DollarSign, ShoppingCart, Layers, Box, Shield, HardDrive, Mail, Cpu, Bug, Sun, Moon,
+    Cloud, User, Bell, DollarSign, ShoppingCart, Layers, Box, Shield, HardDrive, Mail, Cpu, Bug, Sun, Moon, ShieldAlert,
   } from 'lucide-svelte';
 
   let { active, mobileOpen, onCloseMobile }: { active: string; mobileOpen: boolean; onCloseMobile: () => void } = $props();
@@ -20,7 +20,7 @@
     'Database Users': Users, Cloudflare: Cloud, Storage: Database, Profile: User,
     Notifications: Bell, Plans: DollarSign, Orders: ShoppingCart,
     Monitoring: BarChart3, Users: Users, Audit: ClipboardCheck,
-    Docker: Box, Firewall: Shield, Redis: Zap, System: HardDrive,
+    Docker: Box, Firewall: Shield, Redis: Zap, System: HardDrive, 'Threat Monitor': ShieldAlert,
     Email: Mail, PM2: Cpu, 'Bot Blocker': Bug,
   };
 
@@ -52,6 +52,7 @@
       { label: 'Files', href: '/files' },
       { label: 'Users', href: '/users', pro: true },
       { label: 'Audit', href: '/audit' },
+      { label: 'Threat Monitor', href: '/threats' },
       { label: 'Storage', href: '/backups' },
     ];
     if (hasRole(auth.user?.role, 'super_admin')) {

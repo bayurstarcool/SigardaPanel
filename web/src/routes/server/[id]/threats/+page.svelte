@@ -3,7 +3,8 @@
   import { apiFetch } from '$lib/api';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
-  import { ShieldAlert, RefreshCw, Loader2, Save, Activity, FileWarning, Network, Clock, Globe } from 'lucide-svelte';
+  import DashboardLayout from '$components/DashboardLayout.svelte';
+  import { ShieldAlert, RefreshCw, Loader2, Save, Activity, FileWarning, Network, Clock, Globe, Ban } from 'lucide-svelte';
 
   const serverId = $page.params.id;
   let data = $state<any>(null);
@@ -13,9 +14,20 @@
   let message = $state<{ type: 'success' | 'error'; text: string } | null>(null);
 
   onMount(() => {
-    if (!hasRole(auth.user?.role, 'admin')) { window.location.href = '/dashboard'; return; }
+    // auth.user sudah terisi: layout hanya me-render halaman setelah auth.init
+    // selesai, jadi pemeriksaan role di sini aman dari race init.
+    if (auth.user && !hasRole(auth.user.role, 'admin')) { window.location.href = '/dashboard'; return; }
     load();
   });
+
+  async function banIp(ip: string) {
+    try {
+      await apiFetch(auth.token, 'POST', `servers/${serverId}/fail2ban/ban`, { jail: 'sshd', ip });
+      message = { type: 'success', text: `${ip} banned (sshd jail)` };
+    } catch (e: any) {
+      message = { type: 'error', text: e.message };
+    }
+  }
 
   async function load() {
     loading = true;
@@ -46,6 +58,7 @@
   const cardTitle = 'flex items-center gap-2 text-sm font-semibold text-slate-200 mb-3';
 </script>
 
+<DashboardLayout active="Threat Monitor">
 <div class="max-w-6xl mx-auto p-6 space-y-6">
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-3">
@@ -92,9 +105,14 @@
         </div>
         <div class="space-y-1 max-h-44 overflow-auto text-xs">
           {#each (data.ssh?.top_attackers ?? []).slice(0, 8) as a}
-            <div class="flex justify-between rounded bg-slate-950/40 px-2 py-1">
+            <div class="flex justify-between items-center rounded bg-slate-950/40 px-2 py-1">
               <span class="font-mono text-rose-300">{a.ip}</span>
-              <span class="text-slate-400">{a.count}× {a.usernames?.length ? `(${a.usernames.join(', ')})` : ''}</span>
+              <span class="flex items-center gap-2">
+                <span class="text-slate-400">{a.count}× {a.usernames?.length ? `(${a.usernames.join(', ')})` : ''}</span>
+                <button title="Ban via fail2ban" class="text-slate-500 hover:text-rose-400" onclick={() => banIp(a.ip)}>
+                  <Ban size={12} />
+                </button>
+              </span>
             </div>
           {:else}
             <p class="text-slate-500">No failed logins in the current logs.</p>
@@ -203,3 +221,4 @@
     </div>
   {/if}
 </div>
+</DashboardLayout>
