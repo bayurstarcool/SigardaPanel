@@ -16,12 +16,10 @@ import (
 
 	agentserver "sigardapanel/internal/agentserver"
 	backendserver "sigardapanel/internal/backendserver"
+	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/config"
 	_ "modernc.org/sqlite"
 )
-
-// Version is overridden at release time: -ldflags "-X sigardapanel/internal/commands.Version=1.2.3"
-var Version = "1.1.0"
 
 type App struct {
 	stdout io.Writer
@@ -44,7 +42,7 @@ func (a *App) Run(args []string) int {
 		a.printHelp()
 		return 0
 	case "version", "--version", "-v":
-		fmt.Fprintln(a.stdout, Version)
+		fmt.Fprintln(a.stdout, buildinfo.Version)
 		return 0
 	case "api":
 		return a.runService("api", backendserver.Run)
@@ -210,7 +208,7 @@ func (a *App) doctor(args []string) int {
 
 	problems := 0
 	fmt.Fprintln(a.stdout, "SigardaPanel CLI doctor")
-	fmt.Fprintf(a.stdout, "version: %s\n", Version)
+	fmt.Fprintf(a.stdout, "version: %s\n", buildinfo.Version)
 	if *apiURL == "" {
 		fmt.Fprintln(a.stdout, "  api_url: not configured")
 		problems++

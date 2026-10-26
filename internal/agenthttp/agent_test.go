@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/executor"
 )
 
@@ -232,6 +233,33 @@ func TestAgentHealth(t *testing.T) {
 	}
 	if data["status"] != "ok" {
 		t.Fatalf("expected status ok, got %v", data["status"])
+	}
+}
+
+// The agent must report the version stamped into the binary at release time.
+func TestAgentHealthReportsBuildVersion(t *testing.T) {
+	orig := buildinfo.Version
+	buildinfo.Version = "9.8.7-test"
+	t.Cleanup(func() { buildinfo.Version = orig })
+
+	e := NewRouterWithOptions(RouterOptions{AuthToken: "test-agent-token"})
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var result struct {
+		Data struct {
+			Version string `json:"version"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.Data.Version != "9.8.7-test" {
+		t.Fatalf("expected version 9.8.7-test, got %q", result.Data.Version)
 	}
 }
 

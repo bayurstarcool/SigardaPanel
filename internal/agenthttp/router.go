@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/executor"
 	"sigardapanel/internal/httpjson"
@@ -35,8 +36,6 @@ func isPortAvailable(port string) bool {
 	ln.Close()
 	return true
 }
-
-const version = "0.1.0-dev"
 
 // Router holds agent HTTP handlers and dependencies.
 type Router struct {
@@ -263,7 +262,7 @@ func healthHandler(c echo.Context) error {
 		Data: map[string]any{
 			"status":  "ok",
 			"service": "sigardapanel-agent",
-			"version": version,
+			"version": buildinfo.Version,
 			"time":    time.Now().UTC().Format(time.RFC3339),
 		},
 		RequestID: "",
@@ -348,7 +347,7 @@ func capabilitiesHandler(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
-			"agent_version": version,
+			"agent_version": buildinfo.Version,
 			"os":            runtime.GOOS,
 			"arch":          runtime.GOARCH,
 			"capabilities": map[string]bool{

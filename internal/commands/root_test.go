@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"sigardapanel/internal/buildinfo"
 )
 
 func newApp(stdout, stderr *bytes.Buffer) *App {
@@ -19,8 +21,8 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-	if strings.TrimSpace(stdout.String()) != Version {
-		t.Fatalf("expected version %q, got %q", Version, strings.TrimSpace(stdout.String()))
+	if strings.TrimSpace(stdout.String()) != buildinfo.Version {
+		t.Fatalf("expected version %q, got %q", buildinfo.Version, strings.TrimSpace(stdout.String()))
 	}
 }
 

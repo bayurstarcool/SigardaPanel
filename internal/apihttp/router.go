@@ -11,12 +11,11 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"sigardapanel/internal/audit"
+	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/member"
 	"sigardapanel/internal/store"
 )
-
-const version = "0.5.0"
 
 // NewRouter returns a new Echo router wired with the given store and database.
 func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
@@ -486,7 +485,7 @@ func versionHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
 			"service": "sigardapanel-api",
-			"version": version,
+			"version": buildinfo.Version,
 		},
 		RequestID: rid,
 	})

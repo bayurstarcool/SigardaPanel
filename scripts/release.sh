@@ -36,7 +36,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 echo "==> binaries"
 for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -buildvcs=false -trimpath \
-    -ldflags "-s -w -X sigardapanel/internal/commands.Version=${VERSION}" \
+    -ldflags "-s -w -X sigardapanel/internal/buildinfo.Version=${VERSION}" \
     -o "$OUT/sigardapanel-linux-${arch}" ./cmd/sigardapanel
 done
 tar -czf "$OUT/sigardapanel-web.tar.gz" -C web/build .
