@@ -8,6 +8,7 @@ package apihttp
 
 import (
 	"database/sql"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,6 +45,7 @@ func (h *backupScheduleHandler) create(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), siteID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -114,6 +116,7 @@ func (h *backupScheduleHandler) listBySite(c echo.Context) error {
 
 	schedules, err := h.store.BackupSchedules.ListBySite(c.Request().Context(), siteID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -145,6 +148,7 @@ func (h *backupScheduleHandler) update(c echo.Context) error {
 
 	existing, err := h.store.BackupSchedules.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if existing == nil {
@@ -213,6 +217,7 @@ func (h *backupScheduleHandler) delete(c echo.Context) error {
 
 	existing, err := h.store.BackupSchedules.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if existing == nil {

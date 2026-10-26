@@ -202,7 +202,12 @@ export async function apiFetch(
       }
 
       const json = await res.json();
-      if (json.error) throw new Error(json.error.message || json.error.code);
+      if (json.error) {
+        // request_id lets support correlate a user-visible failure with the
+        // server log line for the same request.
+        const ref = json.request_id ? ` · ref ${json.request_id.slice(0, 15)}` : "";
+        throw new Error((json.error.message || json.error.code) + ref);
+      }
 
       // Mark as validated on successful request
       lastValidatedAt = Date.now();

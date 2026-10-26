@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -524,6 +525,7 @@ func (h *siteHandler) getVarnish(c echo.Context) error {
 		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"enabled": false, "cache_time": 3600, "hit_rate": "0%"}, RequestID: rid})
 	}
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -574,6 +576,7 @@ func (h *siteHandler) getSecurity(c echo.Context) error {
 		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"basic_auth_enabled": false, "basic_auth_username": "", "blocked_ips": []string{}}, RequestID: rid})
 	}
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -685,6 +688,7 @@ func (h *siteHandler) getSshFtp(c echo.Context) error {
 
 	users, err := h.store.SSH.ListBySiteID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if users == nil {
@@ -784,6 +788,7 @@ func (h *siteHandler) deleteSshFtp(c echo.Context) error {
 	// Get user info before deleting
 	user, err := h.store.SSH.GetByID(c.Request().Context(), sshID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if user == nil {
@@ -855,6 +860,7 @@ func (h *siteHandler) listCron(c echo.Context) error {
 
 	jobs, err := h.store.Cron.ListBySiteID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if jobs == nil {
@@ -946,8 +952,8 @@ func (h *siteHandler) deleteCron(c echo.Context) error {
 	}
 
 	h.audit.RecordAction(c.Request().Context(), userID, "cron_delete", audit.ResourceSite, siteID, map[string]any{
-		"site_id":  siteID,
-		"cron_id":  cronID,
+		"site_id": siteID,
+		"cron_id": cronID,
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Cron job deleted"}, RequestID: rid})

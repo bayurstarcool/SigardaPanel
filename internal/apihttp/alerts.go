@@ -3,6 +3,7 @@ package apihttp
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -80,6 +81,7 @@ func (h *alertHandler) listChannels(c echo.Context) error {
 
 	channels, err := h.store.AlertChannels.List(c.Request().Context())
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -109,6 +111,7 @@ func (h *alertHandler) deleteChannel(c echo.Context) error {
 
 	ch, err := h.store.AlertChannels.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if ch == nil {
@@ -142,6 +145,7 @@ func (h *alertHandler) listAlerts(c echo.Context) error {
 
 	alerts, err := h.store.Alerts.List(c.Request().Context(), limit)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 

@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -110,6 +111,7 @@ func (h *agentHandler) registerAgent(c echo.Context) error {
 	tokenHash := auth.HashToken(req.RegistrationToken)
 	rt, err := h.store.RegistrationTokens.GetByHash(c.Request().Context(), tokenHash)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if rt == nil {

@@ -3,6 +3,7 @@ package apihttp
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -10,8 +11,8 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"sigardapanel/internal/auth"
 	"sigardapanel/internal/audit"
+	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -38,17 +39,18 @@ func (h *userHandler) list(c echo.Context) error {
 
 	users, err := h.store.Users.List(c.Request().Context(), filter)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	type userResp struct {
-		ID        int64   `json:"id"`
-		Username  string  `json:"username"`
-		Email     string  `json:"email"`
-		Role      string  `json:"role"`
-		CreatedAt string  `json:"created_at"`
-		DiskLimit *int64  `json:"disk_limit"` // nil = unlimited
-		MaxSites  *int64  `json:"max_sites"`  // nil = unlimited
-		PlanID    *int64  `json:"plan_id"`    // nil = no plan
+		ID        int64  `json:"id"`
+		Username  string `json:"username"`
+		Email     string `json:"email"`
+		Role      string `json:"role"`
+		CreatedAt string `json:"created_at"`
+		DiskLimit *int64 `json:"disk_limit"` // nil = unlimited
+		MaxSites  *int64 `json:"max_sites"`  // nil = unlimited
+		PlanID    *int64 `json:"plan_id"`    // nil = no plan
 	}
 	var out []userResp
 	for _, u := range users {
@@ -237,6 +239,7 @@ func (h *userHandler) update(c echo.Context) error {
 	if body.Password != "" {
 		hash, err := auth.HashPassword(body.Password)
 		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}
 		if err := h.store.Users.UpdatePassword(c.Request().Context(), id, hash); err != nil {

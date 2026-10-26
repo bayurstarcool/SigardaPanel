@@ -2,6 +2,7 @@ package apihttp
 
 import (
 	"database/sql"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -25,6 +26,7 @@ func (h *serviceTokenHandler) list(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	tokens, err := h.store.ServiceTokens.List(c.Request().Context())
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -81,6 +83,7 @@ func (h *serviceTokenHandler) create(c echo.Context) error {
 	// Generate raw token
 	rawToken, err := auth.NewToken()
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 

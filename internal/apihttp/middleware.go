@@ -2,6 +2,7 @@ package apihttp
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ func RequireAuth(s *store.Store) echo.MiddlewareFunc {
 			// Then: check sessions table
 			sess, err := s.Sessions.GetByTokenHash(c.Request().Context(), tokenHash)
 			if err != nil {
+				slog.Error("api: request failed", "route", c.Path(), "error", err)
 				return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 			}
 			if sess == nil {

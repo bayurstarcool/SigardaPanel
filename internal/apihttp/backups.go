@@ -59,6 +59,7 @@ func (h *backupHandler) create(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), siteID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -151,6 +152,7 @@ func (h *backupHandler) list(c echo.Context) error {
 		backups, err = h.store.Backups.ListAll(c.Request().Context(), 100, 0)
 	}
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -180,6 +182,7 @@ func (h *backupHandler) restore(c echo.Context) error {
 
 	backup, err := h.store.Backups.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if backup == nil {
@@ -303,6 +306,7 @@ func (h *backupHandler) bulkCreate(c echo.Context) error {
 		var err error
 		provider, err = h.store.BackupProviders.GetByID(c.Request().Context(), body.ProviderID)
 		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}
 		if provider == nil {
@@ -556,6 +560,7 @@ func (h *backupHandler) download(c echo.Context) error {
 
 	backup, err := h.store.Backups.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if backup == nil {
@@ -647,6 +652,7 @@ func (h *backupHandler) delete(c echo.Context) error {
 
 	backup, err := h.store.Backups.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if backup == nil {
@@ -727,6 +733,7 @@ func (h *backupHandler) createDatabaseBackup(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), siteID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -754,6 +761,7 @@ func (h *backupHandler) createDatabaseBackup(c echo.Context) error {
 		// Backup a specific database
 		db, err := h.store.Databases.GetByID(c.Request().Context(), body.DatabaseID)
 		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}
 		if db == nil {
@@ -771,6 +779,7 @@ func (h *backupHandler) createDatabaseBackup(c echo.Context) error {
 		// Backup ALL databases for this site
 		allDBs, err := h.store.Databases.ListBySite(c.Request().Context(), siteID)
 		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}
 		if len(allDBs) == 0 {

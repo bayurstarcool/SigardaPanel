@@ -1,6 +1,7 @@
 package apihttp
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -73,6 +74,7 @@ func (h *jobLogHandler) getSince(c echo.Context) error {
 
 	logs, err := h.store.JobLogs.GetSince(c.Request().Context(), jobID, since, 1000)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 

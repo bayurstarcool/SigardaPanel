@@ -69,6 +69,7 @@ func (h *dbHandler) createDatabase(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), siteID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -176,6 +177,7 @@ func (h *dbHandler) listDatabases(c echo.Context) error {
 
 	dbs, err := h.store.Databases.ListBySite(c.Request().Context(), siteID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -216,6 +218,7 @@ func (h *dbHandler) listAllDatabases(c echo.Context) error {
 
 	dbs, err := h.store.Databases.ListAll(c.Request().Context())
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -356,6 +359,7 @@ func (h *dbHandler) getDatabase(c echo.Context) error {
 
 	database, err := h.store.Databases.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if database == nil {
@@ -601,6 +605,7 @@ func (h *dbHandler) listDBUsers(c echo.Context) error {
 
 	users, err := h.store.DBUsers.ListByDatabase(c.Request().Context(), dbID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -885,6 +890,7 @@ func (h *dbHandler) listAllDBUsers(c echo.Context) error {
 
 	dbs, err := h.store.Databases.ListAll(c.Request().Context())
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 

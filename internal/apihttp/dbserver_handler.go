@@ -28,6 +28,7 @@ func (h *dbServerHandler) getDBServer(c echo.Context) error {
 
 	svr, err := h.store.DBStore.GetDefault(c.Request().Context())
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if svr == nil {

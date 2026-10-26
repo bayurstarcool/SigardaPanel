@@ -1,6 +1,8 @@
 package apihttp
+
 import (
 	"database/sql"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -38,6 +40,7 @@ func (ah *authHandler) impersonate(c echo.Context) error {
 	// Fetch target user
 	targetUser, err := ah.store.Users.GetByID(c.Request().Context(), targetID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if targetUser == nil {
@@ -63,6 +66,7 @@ func (ah *authHandler) impersonate(c echo.Context) error {
 	// Generate a new token for the impersonation session
 	token, err := auth.NewToken()
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 

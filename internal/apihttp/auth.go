@@ -530,6 +530,7 @@ func (ah *authHandler) updateProfile(c echo.Context) error {
 		// Hash new password
 		hash, err := auth.HashPassword(body.NewPassword)
 		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}
 		if err := ah.store.Users.UpdatePassword(ctx, sess.UserID, hash); err != nil {

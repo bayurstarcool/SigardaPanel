@@ -2,6 +2,7 @@ package apihttp
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -54,6 +55,7 @@ func (h *jobHandler) list(c echo.Context) error {
 
 	list, err := h.store.Jobs.List(c.Request().Context(), filter)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -77,6 +79,7 @@ func (h *jobHandler) get(c echo.Context) error {
 
 	job, err := h.store.Jobs.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if job == nil {
@@ -104,6 +107,7 @@ func (h *jobHandler) cancel(c echo.Context) error {
 
 	job, err := h.store.Jobs.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if job == nil {

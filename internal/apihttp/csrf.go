@@ -96,10 +96,10 @@ func (c *CSRFProtection) Middleware() echo.MiddlewareFunc {
 
 			// Skip public endpoints
 			path := ctx.Request().URL.Path
-			if path == "/api/v1/auth/login" || 
-			   path == "/api/v1/auth/register" ||
-			   path == "/health" ||
-			   path == "/api/v1/health" {
+			if path == "/api/v1/auth/login" ||
+				path == "/api/v1/auth/register" ||
+				path == "/health" ||
+				path == "/api/v1/health" {
 				return next(ctx)
 			}
 

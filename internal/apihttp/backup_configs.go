@@ -31,6 +31,7 @@ func (h *backupConfigHandler) list(c echo.Context) error {
 
 	configs, err := h.store.BackupConfigs.ListAll(c.Request().Context())
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -134,6 +135,7 @@ func (h *backupConfigHandler) update(c echo.Context) error {
 
 	existing, err := h.store.BackupConfigs.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if existing == nil {
@@ -221,6 +223,7 @@ func (h *backupConfigHandler) delete(c echo.Context) error {
 
 	existing, err := h.store.BackupConfigs.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if existing == nil {
@@ -255,6 +258,7 @@ func (h *backupConfigHandler) run(c echo.Context) error {
 
 	cfg, err := h.store.BackupConfigs.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if cfg == nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -40,6 +41,7 @@ func (h *sslHandler) status(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -84,6 +86,7 @@ func (h *sslHandler) issue(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -167,6 +170,7 @@ func (h *sslHandler) renew(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -209,6 +213,7 @@ func (h *sslHandler) renewAll(c echo.Context) error {
 	const renewWindow = 30 * 24 * time.Hour
 	sites, err := h.store.Sites.ListSSLEpiring(c.Request().Context(), renewWindow)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 

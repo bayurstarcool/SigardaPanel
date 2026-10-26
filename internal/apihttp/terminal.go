@@ -144,6 +144,7 @@ func (h *terminalHandler) createTicket(c echo.Context) error {
 		userID: sess.UserID, agentURL: server.AgentURL.String, token: server.AgentToken, runAs: runAs, session: sid,
 	})
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	h.audit.RecordAction(ctx, sess.UserID, "terminal_open", audit.ResourceServer, serverID, map[string]any{

@@ -2,6 +2,7 @@ package apihttp
 
 import (
 	"database/sql"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -93,6 +94,7 @@ func (h *metricHandler) latest(c echo.Context) error {
 
 	metric, err := h.store.Metrics.GetLatest(c.Request().Context(), serverID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if metric == nil {
@@ -126,6 +128,7 @@ func (h *metricHandler) range_(c echo.Context) error {
 	since := time.Now().Add(-duration)
 	metrics, err := h.store.Metrics.GetRange(c.Request().Context(), serverID, since, 1000)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -149,6 +152,7 @@ func (h *metricHandler) gpu(c echo.Context) error {
 
 	metric, err := h.store.Metrics.GetLatest(c.Request().Context(), serverID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if metric == nil {
@@ -167,16 +171,16 @@ func (h *metricHandler) gpu(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
-			"gpu_detected":      true,
-			"gpu_name":          metric.GPUName.String,
-			"gpu_count":         metric.GPUCount.Int64,
-			"gpu_utilization":   metric.GPUUtilization.Float64,
-			"gpu_memory_used":   metric.GPUMemoryUsed.Int64,
-			"gpu_memory_total":  metric.GPUMemoryTotal.Int64,
-			"gpu_temperature":   metric.GPUTemperature.Float64,
-			"gpu_power_draw":    metric.GPUPowerDraw.Float64,
-			"gpu_fan_speed":     metric.GPUFanSpeed.Float64,
-			"collected_at":      metric.CollectedAt,
+			"gpu_detected":     true,
+			"gpu_name":         metric.GPUName.String,
+			"gpu_count":        metric.GPUCount.Int64,
+			"gpu_utilization":  metric.GPUUtilization.Float64,
+			"gpu_memory_used":  metric.GPUMemoryUsed.Int64,
+			"gpu_memory_total": metric.GPUMemoryTotal.Int64,
+			"gpu_temperature":  metric.GPUTemperature.Float64,
+			"gpu_power_draw":   metric.GPUPowerDraw.Float64,
+			"gpu_fan_speed":    metric.GPUFanSpeed.Float64,
+			"collected_at":     metric.CollectedAt,
 		},
 		RequestID: rid,
 	})

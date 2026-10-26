@@ -2,6 +2,7 @@ package apihttp
 
 import (
 	"database/sql"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -44,6 +45,7 @@ func (h *serverHandler) list(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	servers, err := h.store.Servers.List(c.Request().Context())
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -68,6 +70,7 @@ func (h *serverHandler) get(c echo.Context) error {
 
 	server, err := h.store.Servers.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if server == nil {
@@ -120,6 +123,7 @@ func (h *serverHandler) create(c echo.Context) error {
 
 	token, err := auth.NewToken()
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -174,6 +178,7 @@ func (h *serverHandler) update(c echo.Context) error {
 
 	server, err := h.store.Servers.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if server == nil {
@@ -262,6 +267,7 @@ func (h *serverHandler) delete(c echo.Context) error {
 
 	server, err := h.store.Servers.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if server == nil {
@@ -292,6 +298,7 @@ func (h *serverHandler) getHealth(c echo.Context) error {
 
 	server, err := h.store.Servers.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if server == nil {
@@ -315,6 +322,7 @@ func (h *serverHandler) getHealthAll(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	servers, err := h.store.Servers.List(c.Request().Context())
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -346,6 +354,7 @@ func (h *serverHandler) regenerateToken(c echo.Context) error {
 
 	server, err := h.store.Servers.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if server == nil {
@@ -354,6 +363,7 @@ func (h *serverHandler) regenerateToken(c echo.Context) error {
 
 	token, err := auth.NewToken()
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	server.AgentToken = token

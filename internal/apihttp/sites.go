@@ -93,6 +93,7 @@ func (h *siteHandler) list(c echo.Context) error {
 
 	sites, err := h.store.Sites.List(c.Request().Context(), filter)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -141,6 +142,7 @@ func (h *siteHandler) get(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -284,6 +286,7 @@ func (h *siteHandler) create(c echo.Context) error {
 	// Validate server exists
 	server, err := h.store.Servers.GetByID(c.Request().Context(), body.ServerID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if server == nil {
@@ -294,11 +297,13 @@ func (h *siteHandler) create(c echo.Context) error {
 	if userID > 0 {
 		owner, err := h.store.Users.GetByID(c.Request().Context(), userID)
 		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}
 		if owner != nil && owner.MaxSites.Valid {
 			count, err := h.store.Sites.CountByOwner(c.Request().Context(), userID)
 			if err != nil {
+				slog.Error("api: request failed", "route", c.Path(), "error", err)
 				return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 			}
 			if int64(count) >= owner.MaxSites.Int64 {
@@ -311,6 +316,7 @@ func (h *siteHandler) create(c echo.Context) error {
 	// Validate domain not duplicate
 	existing, err := h.store.Sites.GetByDomain(c.Request().Context(), body.Domain)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if existing != nil {
@@ -488,6 +494,7 @@ func (h *siteHandler) delete(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -600,6 +607,7 @@ func (h *siteHandler) deploy(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -671,6 +679,7 @@ func (h *siteHandler) updateConfig(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -768,6 +777,7 @@ func (h *siteHandler) reloadNginx(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -912,6 +922,7 @@ func (h *siteHandler) transfer(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -1051,6 +1062,7 @@ func (h *siteHandler) usage(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {

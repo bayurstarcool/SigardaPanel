@@ -3,6 +3,7 @@ package apihttp
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -141,6 +142,7 @@ func (h *securityMonitorHandler) getBaseline(c echo.Context) error {
 	}
 	baseline, err := h.store.SecurityBaselines.ListByServer(c.Request().Context(), serverID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if len(baseline) == 0 {

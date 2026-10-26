@@ -458,13 +458,13 @@ func (h *stackHandler) dockerSearchImages(c echo.Context) error {
 
 	var hubResp struct {
 		Results []struct {
-			RepoName      string `json:"repo_name"`
-			ShortDesc     string `json:"short_description"`
-			StarCount     int64  `json:"star_count"`
-			PullCount     int64  `json:"pull_count"`
-			IsOfficial    bool   `json:"is_official"`
-			IsAutomated   bool   `json:"is_automated"`
-			Owner         string `json:"owner"`
+			RepoName    string `json:"repo_name"`
+			ShortDesc   string `json:"short_description"`
+			StarCount   int64  `json:"star_count"`
+			PullCount   int64  `json:"pull_count"`
+			IsOfficial  bool   `json:"is_official"`
+			IsAutomated bool   `json:"is_automated"`
+			Owner       string `json:"owner"`
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&hubResp); err != nil {

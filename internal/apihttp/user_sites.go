@@ -2,6 +2,7 @@ package apihttp
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -117,6 +118,7 @@ func (h *userHandler) listSiteUsers(c echo.Context) error {
 
 	users, err := h.store.UserSites.ListBySite(c.Request().Context(), siteID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 

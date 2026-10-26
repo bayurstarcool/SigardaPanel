@@ -1,6 +1,7 @@
 package apihttp
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -33,6 +34,7 @@ func (h *notificationHandler) list(c echo.Context) error {
 
 	notifications, total, err := h.s.Notifications.ListByUser(c.Request().Context(), sess.UserID, limit, offset)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -54,6 +56,7 @@ func (h *notificationHandler) count(c echo.Context) error {
 	sess := sessionFromEcho(c)
 	count, err := h.s.Notifications.CountUnread(c.Request().Context(), sess.UserID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	return c.JSON(http.StatusOK, httpjson.Success{

@@ -6,10 +6,13 @@ import (
 	"fmt"
 )
 
-// Migration represents a single database migration.
+// Migration represents a single database migration. SQL is executed as-is;
+// Func, when set, runs instead of SQL for migrations that must inspect the
+// database before acting (idempotent repairs).
 type Migration struct {
 	Version int
 	SQL     string
+	Func    func(tx *sql.Tx) error
 }
 
 // Up runs all pending migrations up.
@@ -87,6 +90,7 @@ var AllMigrations = []Migration{
 	BackupCredentialsSchema,
 	CloudflareConfigPerUserSchema,
 	SecurityBaselineSchema,
+	RepairBackupsSchema,
 }
 
 func Down(db *sql.DB) error {
@@ -119,7 +123,11 @@ func applyMigration(db *sql.DB, m Migration) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(m.SQL); err != nil {
+	if m.Func != nil {
+		if err := m.Func(tx); err != nil {
+			return err
+		}
+	} else if _, err := tx.Exec(m.SQL); err != nil {
 		return err
 	}
 

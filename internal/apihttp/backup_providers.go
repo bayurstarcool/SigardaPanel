@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/labstack/echo/v4"
+	"log/slog"
 	"net/http"
 	"os/exec"
 	"sigardapanel/internal/audit"
@@ -37,6 +38,7 @@ var allowedProviderTypes = map[string]struct{}{
 func (h *backupProviderHandler) list(c echo.Context) error {
 	providers, err := h.store.BackupProviders.List(c.Request().Context())
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	out := make([]map[string]any, 0, len(providers))
@@ -115,6 +117,7 @@ func (h *backupProviderHandler) update(c echo.Context) error {
 
 	existing, err := h.store.BackupProviders.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if existing == nil {
@@ -210,6 +213,7 @@ func (h *backupProviderHandler) usage(c echo.Context) error {
 	}
 	provider, err := h.store.BackupProviders.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if provider == nil {
@@ -236,6 +240,7 @@ func (h *backupProviderHandler) usage(c echo.Context) error {
 
 	backups, err := h.store.Backups.ListAll(c.Request().Context(), 10000, 0)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -294,6 +299,7 @@ func (h *backupProviderHandler) testConnection(c echo.Context) error {
 	}
 	provider, err := h.store.BackupProviders.GetByID(c.Request().Context(), id)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if provider == nil {
@@ -530,6 +536,7 @@ func (h *backupHandler) createWithProvider(c echo.Context) error {
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), siteID)
 	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	if site == nil {
@@ -550,6 +557,7 @@ func (h *backupHandler) createWithProvider(c echo.Context) error {
 	if body.StorageProviderID > 0 {
 		provider, err = h.store.BackupProviders.GetByID(c.Request().Context(), body.StorageProviderID)
 		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}
 		if provider == nil {
