@@ -2,7 +2,11 @@
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
-  import { Users, Search, Trash2, RefreshCw, X, Plus, Loader2, Check, Shield, Key, LogIn, Settings, Eye } from 'lucide-svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import Modal from '$components/Modal.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
+  import { Users, Search, Trash2, RefreshCw, X, Plus, Loader2, Check, Shield, Key, LogIn, Settings } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { toasts } from '$lib/toast.svelte';
@@ -58,8 +62,22 @@
     finally { busy = false; }
   }
 
+  // Confirm dialogs (replace window.confirm)
+  let confirmDelete = $state<any>(null);
+  let confirmDeleteOpen = $state(false);
+  let confirmImp = $state<any>(null);
+  let confirmImpOpen = $state(false);
+
+  function askDelete(u: any) { confirmDelete = u; confirmDeleteOpen = true; }
+  function askImpersonate(u: any) { confirmImp = u; confirmImpOpen = true; }
+
+  // Reset-password modal
+  let resetOpen = $state(false);
+  const resetUser = $derived(users.find((x) => x.id === resetTarget) ?? null);
+  function openReset(u: any) { resetTarget = u.id; resetPassword = ''; resetResult = ''; resetOpen = true; }
+  function closeReset() { resetTarget = null; resetPassword = ''; resetResult = ''; }
+
   async function deleteUser(u: any) {
-    if (!confirm(`Delete user "${u.username}"? This cannot be undone.`)) return;
     try {
       await apiFetch(auth.token, 'DELETE', `users/${u.id}`);
       users = users.filter(x => x.id !== u.id);
@@ -81,7 +99,6 @@
   }
 
   async function impersonateUser(u: any) {
-    if (!confirm(`Login as ${u.username}?`)) return;
     impersonateTarget = u.id;
     impersonateBusy = true;
     try {
@@ -96,375 +113,224 @@
 
   function roleBadge(role: string) {
     switch (role) {
-      case 'super_admin': return 'bg-amber-500/15 text-amber-400 ring-1 ring-amber-400/20';
-      case 'admin': return 'bg-sky-500/15 text-sky-400 ring-1 ring-sky-400/20';
-      default: return 'bg-white/5 text-slate-400 ring-1 ring-white/10';
+      case 'super_admin': return 'badge-warning';
+      case 'admin': return 'badge-accent';
+      default: return '';
     }
   }
 
-  function roleIcon(role: string) {
-    if (role === 'super_admin') return Shield;
-    return null;
+  function roleLabel(role: string) {
+    return role === 'super_admin' ? 'Super Admin' : role === 'admin' ? 'Admin' : 'User';
   }
+
+  function fmtDate(d: string | null | undefined) {
+    return d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  }
+
+  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
 </script>
 
 <DashboardLayout active="Users">
-  <!-- Header -->
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-    <div>
-      <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent">Users</h1>
-      <p class="text-sm text-slate-500 mt-1">
-        {#if loading}
-          Loading users...
-        {:else}
+  <PageHeader title="Users">
+    {#snippet meta()}
+      {#if !loading}<span class="badge tabular-nums">{users.length}</span>{/if}
+    {/snippet}
+    {#snippet actions()}
+      {#if isAdmin}
+        <button onclick={() => (showCreate = true)} class="btn btn-primary btn-sm"><Plus size={14} /> Create user</button>
+      {/if}
+    {/snippet}
+  </PageHeader>
+
+  <div class="card">
+    {#if !loading && users.length > 0}
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <p class="text-[13px] text-muted">
           {users.length} user{users.length !== 1 ? 's' : ''} total
           {#if search && filtered.length !== users.length}
-            <span class="text-sky-400/60">· {filtered.length} match{filtered.length !== 1 ? 'es' : ''}</span>
+            <span class="text-subtle">· {filtered.length} match{filtered.length !== 1 ? 'es' : ''}</span>
           {/if}
-        {/if}
-      </p>
-    </div>
-    {#if hasRole(auth.user?.role, 'admin')}
-      <button onclick={() => showCreate = !showCreate}
-        class="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 hover:shadow-[0_6px_20px_rgba(56,189,248,0.3)] transition-all duration-150 cursor-pointer border-0 whitespace-nowrap">
-        <Plus size={15} /> Create User
-      </button>
+        </p>
+        <div class="relative w-full sm:w-72">
+          <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+          <input bind:value={search} type="text" aria-label="Search users" placeholder="Search by username or email…" class="input h-8 pr-8 pl-8" />
+          {#if search}
+            <button onclick={() => (search = '')} class="btn btn-ghost btn-xs btn-icon absolute top-1/2 right-0.5 -translate-y-1/2" aria-label="Clear search"><X size={12} /></button>
+          {/if}
+        </div>
+      </div>
     {/if}
-  </div>
 
-  <!-- Search bar -->
-  {#if !loading && users.length > 0}
-    <div class="relative mb-5">
-      <Search size={16} class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
-      <input
-        bind:value={search}
-        type="text"
-        placeholder="Search by username or email..."
-        class="w-full bg-white/[0.03] border border-white/[0.07] rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-200 placeholder-slate-600 outline-none focus:border-sky-400/30 focus:ring-1 focus:ring-sky-400/10 transition"
-      />
-      {#if search}
-        <button onclick={() => search = ''} class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition cursor-pointer border-0 bg-transparent p-1">
-          <X size={14} />
-        </button>
-      {/if}
-    </div>
-  {/if}
-
-  <!-- Create form -->
-  {#if showCreate}
-    <div class="mb-6 bg-white/[0.03] border border-white/[0.07] backdrop-blur-sm rounded-xl p-6">
-      <div class="flex items-center gap-2 mb-4">
-        <Plus size={16} class="text-sky-400" />
-        <h3 class="text-sm font-semibold text-slate-200">Create User</h3>
-      </div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <label for="usr-name" class="block text-xs text-slate-500 mb-1.5">Username *</label>
-          <input id="usr-name" bind:value={form.username} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition" />
-        </div>
-        <div>
-          <label for="usr-email" class="block text-xs text-slate-500 mb-1.5">Email <span class="text-red-400">*</span></label>
-          <input id="usr-email" type="email" required bind:value={form.email} placeholder="user@example.com" class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition" />
-        </div>
-        <div>
-          <label for="usr-pass" class="block text-xs text-slate-500 mb-1.5">Password *</label>
-          <input id="usr-pass" type="password" bind:value={form.password} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition" />
-        </div>
-        <div>
-          <label for="usr-role" class="block text-xs text-slate-500 mb-1.5">Role</label>
-          <select id="usr-role" bind:value={form.role} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition">
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
-            {#if hasRole(auth.user?.role, 'super_admin')}
-              <option value="super_admin">Super Admin</option>
-            {/if}
-          </select>
-        </div>
-      </div>
-      <div class="flex gap-3 mt-5">
-        <button onclick={createUser} disabled={busy || !form.username || !form.email || !form.password}
-          class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition disabled:opacity-40 cursor-pointer border-0">
-          {#if busy}
-            <Loader2 size={14} class="animate-spin" /> Creating...
-          {:else}
-            <Check size={14} /> Create
-          {/if}
-        </button>
-        <button onclick={() => showCreate = false} class="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Cancel</button>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Loading skeleton -->
-  {#if loading}
-    <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl overflow-hidden">
-      <div class="p-5 space-y-0">
-        {#each Array(5) as _}
-          <div class="flex items-center gap-4 py-3.5 border-b border-white/[0.03] last:border-0">
-            <div class="w-8 h-8 rounded-lg bg-white/[0.04] animate-pulse"></div>
-            <div class="flex-1 space-y-2">
-              <div class="h-3 w-32 bg-white/[0.06] rounded-lg animate-pulse"></div>
-              <div class="h-2.5 w-48 bg-white/[0.04] rounded-lg animate-pulse"></div>
+    {#if loading}
+      <div class="divide-y divide-line">
+        {#each Array(5) as _, i (i)}
+          <div class="flex items-center gap-3 px-4 py-3">
+            <div class="skeleton size-8 rounded-full"></div>
+            <div class="flex-1 space-y-1.5">
+              <div class="skeleton h-3 w-32"></div>
+              <div class="skeleton h-2.5 w-48"></div>
             </div>
-            <div class="h-5 w-16 bg-white/[0.05] rounded-full animate-pulse"></div>
-            <div class="h-5 w-16 bg-white/[0.04] rounded-lg animate-pulse hidden sm:block"></div>
+            <div class="skeleton h-5 w-16"></div>
           </div>
         {/each}
       </div>
-    </div>
-
-  <!-- Empty state -->
-  {:else if users.length === 0}
-    <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl py-16 px-6 text-center">
-      <div class="w-16 h-16 rounded-2xl bg-white/[0.04] flex items-center justify-center mx-auto mb-5">
-        <Users size={28} class="text-slate-600" />
-      </div>
-      <h2 class="text-lg font-semibold text-slate-300 mb-2">No users yet</h2>
-      <p class="text-sm text-slate-500 mb-6 max-w-sm mx-auto">
-        {#if hasRole(auth.user?.role, 'admin')}
-          Create your first user to get started.
-        {:else}
-          No users have been created yet. Ask an administrator to create one.
-        {/if}
-      </p>
-      {#if hasRole(auth.user?.role, 'admin')}
-        <button onclick={() => showCreate = true}
-          class="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 transition-all duration-150 cursor-pointer border-0">
-          <Plus size={15} /> Create User
-        </button>
-      {/if}
-    </div>
-
-  <!-- No search results -->
-  {:else if filtered.length === 0 && search}
-    <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl py-16 px-6 text-center">
-      <div class="w-16 h-16 rounded-2xl bg-white/[0.04] flex items-center justify-center mx-auto mb-5">
-        <Search size={28} class="text-slate-600" />
-      </div>
-      <h2 class="text-lg font-semibold text-slate-300 mb-2">No results</h2>
-      <p class="text-sm text-slate-500">No users match "<span class="text-sky-400">{search}</span>"</p>
-      <button onclick={() => search = ''} class="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">
-        <X size={14} /> Clear search
-      </button>
-    </div>
-
-  {:else}
-    <!-- Desktop table (hidden on small screens) -->
-    <div class="hidden md:block bg-[#040a14] border border-white/[0.07] rounded-2xl overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full border-separate border-spacing-0">
+    {:else if users.length === 0}
+      <EmptyState
+        icon={Users as any}
+        title="No users yet"
+        description={isAdmin ? 'Create your first user to get started.' : 'No users have been created yet. Ask an administrator to create one.'}
+        actionLabel={isAdmin ? 'Create user' : ''}
+        onaction={() => (showCreate = true)}
+      />
+    {:else if filtered.length === 0 && search}
+      <EmptyState compact icon={Search as any} title="No results" description={`No users match "${search}"`} actionLabel="Clear search" onaction={() => (search = '')} />
+    {:else}
+      <div class="table-wrap">
+        <table class="table">
           <thead>
-            <tr class="text-left">
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Username</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Email</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Role</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Status</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Actions</th>
+            <tr>
+              <th>User</th>
+              <th class="max-md:hidden">Email</th>
+              <th>Role</th>
+              <th class="max-sm:hidden">Created</th>
+              <th class="text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {#each filtered as u (u.id)}
-              <tr class="hover:bg-white/[0.02] transition group">
-                <td class="px-5 py-3.5 border-b border-white/[0.03] font-medium align-middle">
-                  <div class="flex items-center gap-2.5">
-                    <div class="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center text-xs font-semibold text-slate-400">
+              {@const self = u.id === auth.user?.id}
+              <tr>
+                <td>
+                  <a href="/users/{u.id}" class="flex items-center gap-2.5">
+                    <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-surface-2 text-xs font-semibold text-muted">
                       {(u.username || '?')[0].toUpperCase()}
-                    </div>
-                    <span class="text-slate-200">{u.username}</span>
-                    {#if u.id === auth.user?.id}
-                      <span class="text-[0.65rem] px-1.5 py-0.5 rounded-md bg-sky-500/10 text-sky-400/70 font-medium">you</span>
-                    {/if}
-                  </div>
+                    </span>
+                    <span class="min-w-0">
+                      <span class="flex items-center gap-1.5 font-medium text-fg hover:text-accent">
+                        {u.username}
+                        {#if self}<span class="badge badge-accent px-1.5 py-0 text-[11px]">you</span>{/if}
+                      </span>
+                      <span class="block truncate text-xs text-subtle md:hidden">{u.email || 'No email'}</span>
+                    </span>
+                  </a>
                 </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] text-slate-400 align-middle">{u.email || '—'}</td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                  <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[0.72rem] font-medium {roleBadge(u.role)}">
-                    {#if roleIcon(u.role)}
-                      <Shield size={10} />
-                    {/if}
-                    {u.role === 'super_admin' ? 'Super Admin' : u.role === 'admin' ? 'Admin' : 'User'}
+                <td class="text-muted max-md:hidden">{u.email || '—'}</td>
+                <td>
+                  <span class="badge {roleBadge(u.role)}">
+                    {#if u.role === 'super_admin'}<Shield size={11} />{/if}
+                    {roleLabel(u.role)}
                   </span>
                 </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                  <div class="text-xs text-slate-500">
-                    {u.created_at ? new Date(u.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
-                  </div>
-                </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                  <div class="flex items-center gap-1 flex-wrap">
-                    <!-- Manage button -->
-                    <a href="/users/{u.id}"
-                      class="inline-flex items-center gap-1 text-xs text-indigo-400/70 hover:text-indigo-400 transition px-2 py-1 rounded-lg hover:bg-indigo-400/5"
-                      title="Manage user">
-                      <Settings size={12} /> Manage
+                <td class="text-xs whitespace-nowrap text-subtle tabular-nums max-sm:hidden">{fmtDate(u.created_at)}</td>
+                <td>
+                  <div class="flex items-center justify-end gap-0.5">
+                    <a href="/users/{u.id}" class="btn btn-ghost btn-xs" title="Manage user">
+                      <Settings size={12} /><span class="max-lg:hidden">Manage</span>
                     </a>
-                    <!-- Edit link -->
-                    <a href="/users/{u.id}"
-                      class="inline-flex items-center gap-1 text-xs text-sky-400/70 hover:text-sky-400 transition px-2 py-1 rounded-lg hover:bg-sky-400/5"
-                      title="Edit user">
-                      <Eye size={12} /> Edit
-                    </a>
-                    <!-- Impersonate (admin/super_admin only, not self) -->
-                    {#if hasRole(auth.user?.role, 'admin') && u.id !== auth.user?.id}
-                      {#if impersonateTarget === u.id && impersonateBusy}
-                        <span class="inline-flex items-center gap-1 text-xs text-purple-400/70 px-2 py-1 rounded-lg">
-                          <Loader2 size={12} class="animate-spin" /> Logging in...
-                        </span>
-                      {:else}
-                        <button onclick={() => impersonateUser(u)}
-                          class="inline-flex items-center gap-1 text-xs text-purple-400/60 hover:text-purple-400 transition px-2 py-1 rounded-lg hover:bg-purple-400/5 cursor-pointer border-0 bg-transparent"
-                          title="Impersonate user">
-                          <LogIn size={12} /> Impersonate
-                        </button>
-                      {/if}
-                    {/if}
-                    <!-- Reset password (admin only, not self) -->
-                    {#if hasRole(auth.user?.role, 'admin') && u.id !== auth.user?.id}
-                      <button onclick={() => { resetTarget = resetTarget === u.id ? null : u.id; resetPassword = ''; resetResult = ''; }}
-                        class="inline-flex items-center gap-1 text-xs text-amber-400/70 hover:text-amber-400 transition px-2 py-1 rounded-lg hover:bg-amber-400/5 cursor-pointer border-0 bg-transparent"
-                        title="Reset password">
-                        <Key size={12} /> Reset
+                    {#if isAdmin && !self}
+                      <button onclick={() => askImpersonate(u)} disabled={impersonateBusy} class="btn btn-ghost btn-xs" title="Impersonate user" aria-label="Impersonate {u.username}">
+                        {#if impersonateTarget === u.id && impersonateBusy}
+                          <Loader2 size={12} class="animate-spin" />
+                        {:else}
+                          <LogIn size={12} />
+                        {/if}
+                        <span class="max-lg:hidden">Impersonate</span>
                       </button>
-                      <button onclick={() => deleteUser(u)} class="inline-flex items-center gap-1 text-xs text-red-400/50 hover:text-red-400 transition px-2 py-1 rounded-lg hover:bg-red-400/5 cursor-pointer border-0 bg-transparent">
-                        <Trash2 size={12} /> Delete
+                      <button onclick={() => openReset(u)} class="btn btn-ghost btn-xs" title="Reset password" aria-label="Reset password for {u.username}">
+                        <Key size={12} /><span class="max-lg:hidden">Reset</span>
+                      </button>
+                      <button onclick={() => askDelete(u)} class="btn btn-danger-ghost btn-xs" title="Delete user" aria-label="Delete {u.username}">
+                        <Trash2 size={12} /><span class="max-lg:hidden">Delete</span>
                       </button>
                     {/if}
                   </div>
                 </td>
               </tr>
-              {#if resetTarget === u.id}
-                <tr>
-                  <td colspan="5" class="px-5 py-3 border-b border-white/[0.03]">
-                    <div class="bg-amber-500/5 border border-amber-500/15 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                      <div class="flex items-center gap-2 text-amber-400 shrink-0">
-                        <Key size={14} />
-                        <span class="text-xs font-medium">Reset password for <strong>{u.username}</strong></span>
-                      </div>
-                      {#if resetResult}
-                        <div class="flex items-center gap-2 text-emerald-400 text-xs">
-                          <Check size={13} /> {resetResult}
-                        </div>
-                      {:else}
-                        <input
-                          bind:value={resetPassword}
-                          type="password"
-                          placeholder="New password"
-                          class="flex-1 min-w-0 bg-white/[0.04] border border-white/[0.07] rounded-lg px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-amber-400/40 transition"
-                          onkeydown={(e) => { if (e.key === 'Enter') resetUserPassword(u); }}
-                        />
-                        <button onclick={() => resetUserPassword(u)} disabled={resetBusy || !resetPassword}
-                          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition disabled:opacity-40 cursor-pointer border-0 whitespace-nowrap">
-                          {#if resetBusy}
-                            <Loader2 size={12} class="animate-spin" />
-                          {:else}
-                            <RefreshCw size={12} />
-                          {/if}
-                          Reset
-                        </button>
-                      {/if}
-                      <button onclick={() => { resetTarget = null; resetPassword = ''; resetResult = ''; }} class="text-slate-500 hover:text-slate-300 transition cursor-pointer border-0 bg-transparent p-1"><X size={14} /></button>
-                    </div>
-                  </td>
-                </tr>
-              {/if}
             {/each}
           </tbody>
         </table>
       </div>
-    </div>
+    {/if}
+  </div>
 
-    <!-- Mobile cards (visible on small screens) -->
-    <div class="md:hidden space-y-3">
-      {#each filtered as u (u.id)}
-        <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl p-4 space-y-3">
-          <div class="flex items-start justify-between">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-white/[0.05] flex items-center justify-center text-sm font-semibold text-slate-400">
-                {(u.username || '?')[0].toUpperCase()}
-              </div>
-              <div>
-                <div class="text-sm font-medium text-slate-200 flex items-center gap-2">
-                  {u.username}
-                  {#if u.id === auth.user?.id}
-                    <span class="text-[0.6rem] px-1.5 py-0.5 rounded-md bg-sky-500/10 text-sky-400/70 font-medium">you</span>
-                  {/if}
-                </div>
-                <div class="text-xs text-slate-500 mt-0.5">{u.email || 'No email'}</div>
-              </div>
-            </div>
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[0.65rem] font-medium {roleBadge(u.role)}">
-              {#if roleIcon(u.role)}<Shield size={9} />{/if}
-              {u.role === 'super_admin' ? 'Super Admin' : u.role === 'admin' ? 'Admin' : 'User'}
-            </span>
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-[0.65rem] text-slate-600">
-              {u.created_at ? 'Created ' + new Date(u.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
-            </span>
-            <div class="flex items-center gap-1">
-              <!-- Manage -->
-              <a href="/users/{u.id}"
-                class="inline-flex items-center gap-1 text-xs text-indigo-400/70 hover:text-indigo-400 transition px-2 py-1 rounded-lg hover:bg-indigo-400/5"
-                title="Manage">
-                <Settings size={12} />
-              </a>
-              <!-- Edit -->
-              <a href="/users/{u.id}"
-                class="inline-flex items-center gap-1 text-xs text-sky-400/70 hover:text-sky-400 transition px-2 py-1 rounded-lg hover:bg-sky-400/5"
-                title="Edit">
-                <Eye size={12} />
-              </a>
-              <!-- Impersonate -->
-              {#if hasRole(auth.user?.role, 'admin') && u.id !== auth.user?.id}
-                {#if impersonateTarget === u.id && impersonateBusy}
-                  <span class="inline-flex items-center text-xs text-purple-400/70 px-2 py-1 rounded-lg">
-                    <Loader2 size={12} class="animate-spin" />
-                  </span>
-                {:else}
-                  <button onclick={() => impersonateUser(u)}
-                    class="inline-flex items-center text-xs text-purple-400/60 hover:text-purple-400 transition px-2 py-1 rounded-lg hover:bg-purple-400/5 cursor-pointer border-0 bg-transparent"
-                    title="Impersonate">
-                    <LogIn size={12} />
-                  </button>
-                {/if}
-              {/if}
-              <!-- Reset -->
-              {#if hasRole(auth.user?.role, 'admin') && u.id !== auth.user?.id}
-                <button onclick={() => { resetTarget = resetTarget === u.id ? null : u.id; resetPassword = ''; resetResult = ''; }}
-                  class="inline-flex items-center text-xs text-amber-400/70 hover:text-amber-400 transition px-2 py-1 rounded-lg hover:bg-amber-400/5 cursor-pointer border-0 bg-transparent"
-                  title="Reset password">
-                  <Key size={12} />
-                </button>
-                <button onclick={() => deleteUser(u)} class="inline-flex items-center text-xs text-red-400/50 hover:text-red-400 transition px-2 py-1 rounded-lg hover:bg-red-400/5 cursor-pointer border-0 bg-transparent" title="Delete">
-                  <Trash2 size={12} />
-                </button>
-              {/if}
-            </div>
-          </div>
-
-          {#if resetTarget === u.id}
-            <div class="bg-amber-500/5 border border-amber-500/15 rounded-xl p-3 space-y-2">
-              {#if resetResult}
-                <div class="flex items-center gap-2 text-emerald-400 text-xs">
-                  <Check size={13} /> {resetResult}
-                </div>
-              {:else}
-                <label class="text-[0.65rem] text-amber-400/70 font-medium">New password for {u.username}</label>
-                <div class="flex gap-2">
-                  <input bind:value={resetPassword} type="password" placeholder="New password"
-                    class="flex-1 min-w-0 bg-white/[0.04] border border-white/[0.07] rounded-lg px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-amber-400/40 transition"
-                    onkeydown={(e) => { if (e.key === 'Enter') resetUserPassword(u); }} />
-                  <button onclick={() => resetUserPassword(u)} disabled={resetBusy || !resetPassword}
-                    class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition disabled:opacity-40 cursor-pointer border-0">
-                    {#if resetBusy}<Loader2 size={12} class="animate-spin" />{:else}<RefreshCw size={12} />{/if} Reset
-                  </button>
-                </div>
-              {/if}
-            </div>
+  <!-- Create user -->
+  <Modal bind:open={showCreate} title="Create user" maxWidth="lg">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label for="usr-name" class="label">Username <span class="text-danger">*</span></label>
+        <input id="usr-name" bind:value={form.username} class="input" autocomplete="off" />
+      </div>
+      <div>
+        <label for="usr-email" class="label">Email <span class="text-danger">*</span></label>
+        <input id="usr-email" type="email" required bind:value={form.email} placeholder="user@example.com" class="input" />
+      </div>
+      <div>
+        <label for="usr-pass" class="label">Password <span class="text-danger">*</span></label>
+        <input id="usr-pass" type="password" bind:value={form.password} class="input" autocomplete="new-password" />
+      </div>
+      <div>
+        <label for="usr-role" class="label">Role</label>
+        <select id="usr-role" bind:value={form.role} class="input">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+          {#if hasRole(auth.user?.role, 'super_admin')}
+            <option value="super_admin">Super Admin</option>
           {/if}
-        </div>
-      {/each}
+        </select>
+      </div>
     </div>
-  {/if}
+    {#snippet footer()}
+      <button onclick={() => (showCreate = false)} class="btn btn-secondary btn-sm">Cancel</button>
+      <button onclick={createUser} disabled={busy || !form.username || !form.email || !form.password} class="btn btn-primary btn-sm">
+        {#if busy}<Loader2 size={14} class="animate-spin" /> Creating...{:else}<Check size={14} /> Create{/if}
+      </button>
+    {/snippet}
+  </Modal>
+
+  <!-- Reset password -->
+  <Modal bind:open={resetOpen} title="Reset password" maxWidth="sm" onclose={closeReset}>
+    {#if resetResult}
+      <div class="flex items-center gap-2 rounded-lg bg-success/10 px-3 py-2.5 text-[13px] text-success ring-1 ring-success/20 ring-inset">
+        <Check size={14} /> {resetResult}
+      </div>
+    {:else if resetUser}
+      <label for="usr-reset" class="label">New password for <span class="font-semibold text-fg">{resetUser.username}</span></label>
+      <input
+        id="usr-reset"
+        bind:value={resetPassword}
+        type="password"
+        placeholder="New password"
+        autocomplete="new-password"
+        class="input"
+        onkeydown={(e) => { if (e.key === 'Enter') resetUserPassword(resetUser); }}
+      />
+    {/if}
+    {#snippet footer()}
+      {#if resetResult}
+        <button onclick={() => { resetOpen = false; closeReset(); }} class="btn btn-secondary btn-sm">Done</button>
+      {:else}
+        <button onclick={() => { resetOpen = false; closeReset(); }} class="btn btn-secondary btn-sm">Cancel</button>
+        <button onclick={() => resetUser && resetUserPassword(resetUser)} disabled={resetBusy || !resetPassword} class="btn btn-primary btn-sm">
+          {#if resetBusy}<Loader2 size={14} class="animate-spin" />{:else}<RefreshCw size={14} />{/if} Reset
+        </button>
+      {/if}
+    {/snippet}
+  </Modal>
+
+  <ConfirmDialog
+    bind:open={confirmDeleteOpen}
+    title="Delete user"
+    message={confirmDelete ? `Delete user "${confirmDelete.username}"? This cannot be undone.` : ''}
+    confirmLabel="Delete"
+    destructive
+    onconfirm={() => confirmDelete && deleteUser(confirmDelete)}
+  />
+
+  <ConfirmDialog
+    bind:open={confirmImpOpen}
+    title="Impersonate user"
+    message={confirmImp ? `Login as ${confirmImp.username}?` : ''}
+    confirmLabel="Login as user"
+    onconfirm={() => confirmImp && impersonateUser(confirmImp)}
+  />
 </DashboardLayout>

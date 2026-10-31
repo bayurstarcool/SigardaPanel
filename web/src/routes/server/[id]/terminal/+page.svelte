@@ -3,7 +3,43 @@
   import { apiFetch } from '$lib/api';
   import { page } from '$app/stores';
   import { onMount, onDestroy } from 'svelte';
+  import { theme } from '$lib/theme.svelte';
+  import { ChevronLeft, SquareTerminal, Eraser, X, ArrowUp, ArrowDown, Delete } from 'lucide-svelte';
   const serverId = $page.params.id;
+
+  // ANSI palettes per app theme; chrome colors come from the design tokens.
+  const ansiDark = {
+    black: '#0d1117', red: '#f85149', green: '#3fb950', yellow: '#d29922',
+    blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#c9d1d9',
+  };
+  const ansiLight = {
+    black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#9a6700',
+    blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+  };
+
+  function xtermTheme() {
+    const css = getComputedStyle(document.documentElement);
+    const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
+    const bg = v('--c-surface', '#111113');
+    const accent = v('--c-accent', '#6d7cff');
+    return {
+      background: bg,
+      foreground: v('--c-fg', '#f4f4f5'),
+      cursor: accent,
+      cursorAccent: bg,
+      // #RRGGBB + alpha — xterm accepts 8-digit hex.
+      selectionBackground: accent.length === 7 ? accent + '55' : accent,
+      ...(theme.isLight ? ansiLight : ansiDark),
+    };
+  }
+
+  // Follow the app theme without re-creating the terminal.
+  $effect(() => {
+    theme.current;
+    if (term) term.options.theme = xtermTheme();
+  });
+
+  let resizeObserver: ResizeObserver | null = null;
 
   let termEl: HTMLDivElement;
   let term: any;
@@ -27,15 +63,7 @@
       cursorStyle: 'block',
       fontSize: 14,
       fontFamily: "'JetBrains Mono','Fira Code','SF Mono',monospace",
-      theme: {
-        background: '#0d1117',
-        foreground: '#c9d1d9',
-        cursor: '#ffffff',
-        cursorAccent: '#0d1117',
-        selectionBackground: '#264f78',
-        black: '#0d1117', red: '#f85149', green: '#3fb950', yellow: '#d29922',
-        blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#c9d1d9',
-      },
+      theme: xtermTheme(),
       scrollback: 5000,
       allowProposedApi: true,
     });
@@ -62,7 +90,7 @@
     // ResizeObserver: only resize on initial load and orientation changes
     // Never resize while connected — it causes character loss on mobile
     let initialFitDone = false;
-    new ResizeObserver(() => {
+    resizeObserver = new ResizeObserver(() => {
       if (disposed) return;
       // Only fit on very first observation (initial layout)
       if (!initialFitDone) {
@@ -70,7 +98,8 @@
         try { fitAddon?.fit(); } catch {}
         sendResize();
       }
-    }).observe(termEl);
+    });
+    resizeObserver.observe(termEl);
   });
 
   async function connectWS() {
@@ -135,118 +164,68 @@
   onDestroy(() => {
     disposed = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    resizeObserver?.disconnect();
     ws?.close();
     term?.dispose();
   });
 </script>
 
-<div class="terminal-page">
-  <div class="term-top">
-    <div class="term-tabs">
-      <button class="tab active">
-        <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-        <span>root@{hostname}</span>
-      </button>
-    </div>
-    <div class="term-actions">
-      <button class="act-btn" onclick={() => { term?.clear(); term?.write('\x1b[H'); }} title="Clear">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-      </button>
-      <a href="/servers" class="act-btn" title="Close">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </a>
-    </div>
+<!-- Standalone (no DashboardLayout): the layout's global Ctrl+K shortcut would
+     steal a key the shell needs. -->
+<div class="flex min-h-dvh flex-col bg-bg p-3 sm:p-4">
+  <div class="mb-3 flex items-center justify-between gap-3">
+    <a href="/servers" class="inline-flex items-center gap-1 text-[13px] text-subtle transition-colors hover:text-fg">
+      <ChevronLeft size={14} /> Servers
+    </a>
+    <a href="/server/{serverId}/fail2ban" class="link text-[13px]">Fail2ban</a>
   </div>
-  <div class="term-body" bind:this={termEl} onclick={() => term?.focus()}></div>
-  <div class="term-keys">
-    <div class="keys-row">
-      <button class="key-btn" onclick={() => sendCtrl('c')}>Ctrl+C</button>
-      <button class="key-btn" onclick={() => sendCtrl('z')}>Ctrl+Z</button>
-      <button class="key-btn" onclick={() => sendCtrl('d')}>Ctrl+D</button>
-      <button class="key-btn" onclick={() => sendCtrl('l')}>Ctrl+L</button>
-      <button class="key-btn" onclick={() => sendCtrl('u')}>Ctrl+U</button>
+
+  <div class="card flex flex-1 flex-col overflow-hidden">
+    <div class="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-line bg-surface-2 px-2 max-md:h-9">
+      <div class="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md bg-surface px-3 font-mono text-xs text-fg ring-1 ring-line ring-inset">
+        <SquareTerminal size={13} class="shrink-0 text-accent" />
+        <span class="truncate">root@{hostname}</span>
+      </div>
+      <div class="flex gap-0.5">
+        <button class="btn btn-ghost btn-icon btn-xs" onclick={() => { term?.clear(); term?.write('\x1b[H'); }} title="Clear" aria-label="Clear terminal">
+          <Eraser size={14} />
+        </button>
+        <a href="/servers" class="btn btn-ghost btn-icon btn-xs" title="Close" aria-label="Close terminal">
+          <X size={14} />
+        </a>
+      </div>
     </div>
-    <div class="keys-row">
-      <button class="key-btn" onclick={() => sendKey('\t')}>Tab</button>
-      <button class="key-btn" onclick={() => sendKey('\x1b')}>Esc</button>
-      <button class="key-btn" onclick={() => sendKey('\x1b[A')}>↑</button>
-      <button class="key-btn" onclick={() => sendKey('\x1b[B')}>↓</button>
-      <button class="key-btn" onclick={() => sendKey('\x7f')}>⌫</button>
+
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div
+      class="h-[calc(100dvh-230px)] min-h-[300px] cursor-text bg-surface px-1 pt-1 max-md:min-h-[250px]"
+      bind:this={termEl}
+      onclick={() => term?.focus()}
+    ></div>
+
+    <div class="sticky bottom-0 z-10 flex shrink-0 flex-col gap-1 border-t border-line bg-surface-2 px-2 py-1.5">
+      <div class="flex gap-1">
+        {#each ['c', 'z', 'd', 'l', 'u'] as ch (ch)}
+          <button class="btn btn-secondary btn-xs flex-1 font-mono font-semibold active:bg-accent/15 active:text-accent" onclick={() => sendCtrl(ch)}>Ctrl+{ch.toUpperCase()}</button>
+        {/each}
+      </div>
+      <div class="flex gap-1">
+        <button class="btn btn-secondary btn-xs flex-1 font-mono font-semibold active:bg-accent/15 active:text-accent" onclick={() => sendKey('\t')}>Tab</button>
+        <button class="btn btn-secondary btn-xs flex-1 font-mono font-semibold active:bg-accent/15 active:text-accent" onclick={() => sendKey('\x1b')}>Esc</button>
+        <button class="btn btn-secondary btn-xs flex-1 font-mono font-semibold active:bg-accent/15 active:text-accent" onclick={() => sendKey('\x1b[A')} aria-label="Arrow up"><ArrowUp size={13} /></button>
+        <button class="btn btn-secondary btn-xs flex-1 font-mono font-semibold active:bg-accent/15 active:text-accent" onclick={() => sendKey('\x1b[B')} aria-label="Arrow down"><ArrowDown size={13} /></button>
+        <button class="btn btn-secondary btn-xs flex-1 font-mono font-semibold active:bg-accent/15 active:text-accent" onclick={() => sendKey('\x7f')} aria-label="Backspace"><Delete size={13} /></button>
+      </div>
     </div>
-  </div>
-  <div class="term-status">
-    <div class="status-left">
-      <span class="status-dot" class:connected></span>
-      <span>{connected ? 'PTY Connected' : 'Connecting...'}</span>
-      <span class="sep">•</span>
-      <span>{hostname}</span>
-    </div>
-    <div class="status-right">
-      <span class="key">TUI</span> Supported
+
+    <div class="flex h-7 shrink-0 items-center justify-between border-t border-line bg-surface-2 px-3 font-mono text-[11px] text-subtle">
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="dot {connected ? 'text-success' : 'text-danger'}"></span>
+        <span>{connected ? 'PTY connected' : 'Connecting…'}</span>
+        <span class="text-line-strong">·</span>
+        <span class="truncate">{hostname}</span>
+      </div>
+      <div class="max-md:hidden"><span class="font-semibold text-success">TUI</span> supported</div>
     </div>
   </div>
 </div>
-
-<style>
-  .terminal-page {
-    background: #0d1117; border: 1px solid rgba(255,255,255,.06);
-    border-radius: 12px; overflow: hidden;
-    box-shadow: 0 8px 40px rgba(0,0,0,.5);
-  }
-  .term-top {
-    display: flex; align-items: center; justify-content: space-between;
-    background: #161b22; border-bottom: 1px solid rgba(255,255,255,.04);
-    padding: 0 8px; height: 38px;
-  }
-  .term-tabs { display: flex; align-items: center; height: 100%; }
-  .tab {
-    display: flex; align-items: center; gap: 6px;
-    height: 28px; padding: 0 12px;
-    background: #0d1117; border: none; border-radius: 6px 6px 0 0;
-    color: #e6edf3; font-size: .7rem;
-    font-family: 'JetBrains Mono',monospace;
-    box-shadow: 0 -1px 0 #30363d inset;
-  }
-  .tab-icon { width: 13px; height: 13px; color: #58a6ff; }
-  .term-actions { display: flex; gap: 2px; }
-  .act-btn {
-    display: flex; align-items: center; justify-content: center;
-    width: 26px; height: 26px; border: none; background: transparent;
-    color: #8b949e; cursor: pointer; border-radius: 6px;
-    transition: all .15s; text-decoration: none;
-  }
-  .act-btn:hover { background: rgba(255,255,255,.06); color: #e6edf3; }
-  .term-body { height: calc(100vh - 260px); min-height: 300px; cursor: text; }
-  .term-keys {
-    display: flex; flex-direction: column; gap: 3px; padding: 5px 8px;
-    background: #161b22; border-top: 1px solid rgba(255,255,255,.04);
-    position: sticky; bottom: 0; z-index: 50;
-  }
-  .keys-row { display: flex; gap: 4px; }
-  .key-btn {
-    flex: 1; height: 30px; border: 1px solid rgba(255,255,255,.08);
-    background: rgba(255,255,255,.04); color: #8b949e;
-    border-radius: 6px; font-size: .6rem; font-weight: 600;
-    font-family: 'JetBrains Mono',monospace; cursor: pointer; transition: all .1s;
-  }
-  .key-btn:active { background: rgba(88,166,255,.2); color: #58a6ff; }
-  .term-status {
-    display: flex; align-items: center; justify-content: space-between;
-    height: 26px; padding: 0 12px;
-    background: #161b22; border-top: 1px solid rgba(255,255,255,.04);
-    font-size: .6rem; color: #484f58; font-family: 'JetBrains Mono',monospace;
-  }
-  .status-left { display: flex; align-items: center; gap: 6px; }
-  .status-dot { width: 5px; height: 5px; border-radius: 50%; background: #f85149; transition: background .3s; }
-  .status-dot.connected { background: #3fb950; }
-  .key { color: #3fb950; font-weight: 600; }
-  .sep { color: #30363d; }
-  .status-right { display: flex; align-items: center; gap: 6px; }
-  @media (max-width: 768px) {
-    .term-top { height: 32px; }
-    .tab { font-size: .6rem; padding: 0 8px; height: 24px; }
-    .act-btn { width: 22px; height: 22px; }
-    .term-body { min-height: 250px; }
-    .status-right { display: none; }
-  }
-</style>

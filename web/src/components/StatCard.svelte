@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Component, Snippet } from 'svelte';
+  import type { Snippet } from 'svelte';
 
   let {
     label,
@@ -13,7 +13,7 @@
     label: string;
     value: string | number;
     hint?: string;
-    icon?: Component<any> | null;
+    icon?: any;
     /** '', 'success', 'warning', 'danger', 'info', 'accent' — colors the icon only */
     tone?: string;
     href?: string;

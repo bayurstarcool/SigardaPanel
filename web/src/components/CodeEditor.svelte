@@ -1,7 +1,9 @@
 <script lang="ts">
+  // Heavy (CodeMirror): import this component lazily, e.g.
+  // {#await import('$components/CodeEditor.svelte') then m}<m.default … />{/await}
   import { onMount, onDestroy } from 'svelte';
   import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
-  import { EditorState } from '@codemirror/state';
+  import { EditorState, Compartment } from '@codemirror/state';
   import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
   import { bracketMatching, foldGutter, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
   import { php } from '@codemirror/lang-php';
@@ -10,26 +12,31 @@
   import { css } from '@codemirror/lang-css';
   import { json } from '@codemirror/lang-json';
   import { python } from '@codemirror/lang-python';
-  import { oneDark } from '@codemirror/theme-one-dark';
+  import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
+  import { Save } from 'lucide-svelte';
+  import { theme as appTheme } from '$lib/theme.svelte';
 
   let {
     content = '',
     value = '',
     language = 'text',
     filename = '',
-    onSave = (content: string) => {},
-    onChange = (content: string) => {},
+    onSave = (_content: string) => {},
+    onChange = (_content: string) => {},
     readOnly = false,
-    theme = 'dark',
+    /** 'auto' follows the app theme; 'dark' / 'light' force one. */
+    theme = 'auto',
     height = '100%',
     hideHeader = false,
     hideFooter = false,
   } = $props();
 
   let editorContainer: HTMLDivElement;
-  let onChangeRef = $state(onChange);
   let editorView: EditorView | undefined;
   let initialized = false;
+  const highlightCompartment = new Compartment();
+
+  const isDark = $derived(theme === 'auto' ? appTheme.isDark : theme === 'dark');
 
   function getLanguageExtension(lang: string) {
     switch (lang) {
@@ -43,8 +50,28 @@
     }
   }
 
+  function highlightFor(dark: boolean) {
+    return [EditorView.darkTheme.of(dark), syntaxHighlighting(dark ? oneDarkHighlightStyle : defaultHighlightStyle)];
+  }
+
   onMount(() => {
     if (!editorContainer) return;
+
+    // Chrome uses the app's CSS variables, so it follows the theme without reconfiguring.
+    const chromeTheme = EditorView.theme({
+      '&': { height: height, width: '100%', backgroundColor: 'var(--c-surface)', color: 'var(--c-fg)' },
+      '&.cm-focused': { outline: 'none' },
+      '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace', fontSize: '12.5px', lineHeight: '1.6' },
+      '.cm-content': { minWidth: '100%', caretColor: 'var(--c-fg)' },
+      '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--c-fg)' },
+      '.cm-gutters': { backgroundColor: 'var(--c-surface)', color: 'var(--c-subtle)', borderRight: '1px solid var(--c-line)' },
+      '.cm-activeLine': { backgroundColor: 'color-mix(in oklab, var(--c-surface-2) 70%, transparent)' },
+      '.cm-activeLineGutter': { backgroundColor: 'var(--c-surface-2)', color: 'var(--c-muted)' },
+      '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
+        { backgroundColor: 'color-mix(in oklab, var(--c-accent) 28%, transparent)' },
+      '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': { backgroundColor: 'color-mix(in oklab, var(--c-accent) 20%, transparent)', outline: 'none' },
+      '.cm-foldPlaceholder': { backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-line)', color: 'var(--c-muted)' },
+    });
 
     const extensions = [
       lineNumbers(),
@@ -54,34 +81,23 @@
       bracketMatching(),
       foldGutter(),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-      syntaxHighlighting(defaultHighlightStyle),
+      highlightCompartment.of(highlightFor(isDark)),
       getLanguageExtension(language),
-      oneDark,
+      chromeTheme,
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           const newContent = update.state.doc.toString();
           content = newContent;
           value = newContent;
-          onChangeRef(newContent);
+          onChange(newContent);
         }
-      }),
-      EditorView.theme({
-        '&': { height: height, width: '100%' },
-        '.cm-scroller': { overflow: 'auto', fontFamily: "'Fira Code', 'Cascadia Code', monospace", fontSize: '12px' },
-        '.cm-content': { minWidth: '100%' },
-        '.cm-gutters': { borderRight: '1px solid rgba(255,255,255,0.06)' },
       }),
     ];
 
     if (readOnly) extensions.push(EditorState.readOnly.of(true));
 
-    const state = EditorState.create({
-      doc: content || '',
-      extensions,
-    });
-
     editorView = new EditorView({
-      state,
+      state: EditorState.create({ doc: content || '', extensions }),
       parent: editorContainer,
     });
 
@@ -90,6 +106,12 @@
 
   onDestroy(() => {
     editorView?.destroy();
+  });
+
+  // Follow the app theme (only the syntax colors change; chrome is CSS-variable based).
+  $effect(() => {
+    const dark = isDark;
+    editorView?.dispatch({ effects: highlightCompartment.reconfigure(highlightFor(dark)) });
   });
 
   // Sync external content changes
@@ -112,107 +134,25 @@
   });
 </script>
 
-<div class="editor-root">
+<div class="flex h-full w-full flex-col overflow-hidden rounded-lg bg-surface">
   {#if !hideHeader}
-    <div class="editor-header">
-      <div class="file-info">
-        <span class="filename">{filename || 'Untitled'}</span>
-      </div>
-      <div class="editor-actions">
-        <span class="language-badge">{language}</span>
-        <button class="save-btn" onclick={() => onSave(content)} disabled={readOnly}>
-          Save
+    <div class="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-2">
+      <span class="truncate font-mono text-xs text-fg">{filename || 'Untitled'}</span>
+      <div class="flex items-center gap-2">
+        <span class="badge">{language}</span>
+        <button class="btn btn-primary btn-xs" onclick={() => onSave(content)} disabled={readOnly}>
+          <Save size={12} /> Save
         </button>
       </div>
     </div>
   {/if}
 
-  <div class="editor-wrapper" bind:this={editorContainer}></div>
+  <div class="min-h-0 flex-1 overflow-hidden" bind:this={editorContainer}></div>
 
-  {#if !hideFooter}<div class="editor-footer">
-    <span>Lines: {content.split('\n').length}</span>
-    <span>Chars: {content.length.toLocaleString()}</span>
-  </div>{/if}
+  {#if !hideFooter}
+    <div class="flex shrink-0 gap-4 border-t border-line px-3 py-1.5 text-xs text-subtle tabular-nums">
+      <span>Lines: {content.split('\n').length}</span>
+      <span>Chars: {content.length.toLocaleString()}</span>
+    </div>
+  {/if}
 </div>
-
-<style>
-  .editor-root {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    width: 100%;
-    background: #1e1e2e;
-    border-radius: 0.5rem;
-    overflow: hidden;
-  }
-
-  .editor-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
-    background: rgba(255,255,255,0.02);
-    flex-shrink: 0;
-  }
-
-  .file-info {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .filename {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: #e2e8f0;
-  }
-
-  .editor-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .language-badge {
-    font-size: 0.6rem;
-    padding: 0.15rem 0.5rem;
-    border-radius: 0.25rem;
-    background: rgba(99, 102, 241, 0.15);
-    color: #818cf8;
-    font-weight: 500;
-  }
-
-  .save-btn {
-    font-size: 0.7rem;
-    padding: 0.25rem 0.75rem;
-    border-radius: 0.375rem;
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
-    color: white;
-    border: none;
-    cursor: pointer;
-    font-weight: 500;
-  }
-
-  .save-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .editor-wrapper {
-    flex: 1;
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  .editor-footer {
-    display: flex;
-    gap: 1rem;
-    padding: 0.35rem 0.75rem;
-    border-top: 1px solid rgba(255,255,255,0.06);
-    background: rgba(255,255,255,0.02);
-    font-size: 0.65rem;
-    color: #64748b;
-    flex-shrink: 0;
-  }
-</style>

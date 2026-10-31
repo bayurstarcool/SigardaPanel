@@ -5,10 +5,13 @@
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import Modal from '$components/Modal.svelte';
   import StatusPill from '$components/StatusPill.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
 
   import {
     DollarSign, Plus, Pencil, Trash2, Loader2, X, Check,
-    Package, Search, Copy, ExternalLink
+    Search, Wand2, Eye, ShieldOff
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
@@ -109,8 +112,11 @@
     }
   }
 
+  let confirmDelete = $state<Plan | null>(null);
+  let confirmDeleteOpen = $state(false);
+  function askDelete(p: Plan) { confirmDelete = p; confirmDeleteOpen = true; }
+
   async function deletePlan(p: Plan) {
-    if (!confirm(`Delete plan "${p.name}"? This cannot be undone.`)) return;
     try {
       await apiFetch(auth.token, 'DELETE', `plans/${p.id}`);
       plans = plans.filter(x => x.id !== p.id);
@@ -139,6 +145,15 @@
     showCreate = true;
   }
 
+  function featuresList(p: Plan): string[] {
+    try {
+      const a = JSON.parse(p.features || '[]');
+      return Array.isArray(a) ? a : [];
+    } catch {
+      return [];
+    }
+  }
+
   function featuresCount(p: Plan) {
     try {
       const arr = JSON.parse(p.features || '[]');
@@ -151,112 +166,67 @@
 
 <DashboardLayout active="Plans">
   {#if !hasRole(auth.user?.role, 'super_admin')}
-    <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl py-20 px-6 text-center">
-      <DollarSign size={48} class="mx-auto mb-4 text-slate-600 opacity-40" />
-      <h2 class="text-lg font-semibold text-slate-300 mb-2">Access Denied</h2>
-      <p class="text-sm text-slate-500">Only super admins can manage plans.</p>
+    <div class="card">
+      <EmptyState icon={ShieldOff as any} title="Access denied" description="Only super admins can manage plans." />
     </div>
   {:else}
-    <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-      <div>
-        <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent">Plans</h1>
-        <p class="text-sm text-slate-500 mt-1">
-          {loading ? 'Loading...' : `${plans.length} plan${plans.length !== 1 ? 's' : ''} total`}
-        </p>
-      </div>
-      <button onclick={openCreate}
-        class="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 hover:shadow-[0_6px_20px_rgba(56,189,248,0.3)] transition-all duration-150 cursor-pointer border-0 whitespace-nowrap">
-        <Plus size={15} /> Create Plan
-      </button>
-    </div>
+    <PageHeader title="Plans" description={loading ? 'Loading…' : `${plans.length} plan${plans.length !== 1 ? 's' : ''} total`}>
+      {#snippet actions()}
+        <button onclick={openCreate} class="btn btn-primary btn-sm"><Plus size={14} /> Create plan</button>
+      {/snippet}
+    </PageHeader>
 
-    <!-- Search -->
-    {#if !loading && plans.length > 0}
-      <div class="relative mb-5">
-        <Search size={16} class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
-        <input bind:value={search} type="text" placeholder="Search plans..."
-          class="w-full bg-white/[0.03] border border-white/[0.07] rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-200 placeholder-slate-600 outline-none focus:border-sky-400/30 focus:ring-1 focus:ring-sky-400/10 transition" />
-        {#if search}
-          <button onclick={() => search = ''} class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition cursor-pointer border-0 bg-transparent p-1"><X size={14} /></button>
-        {/if}
-      </div>
-    {/if}
-
-    <!-- Loading skeleton -->
-    {#if loading}
-      <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl overflow-hidden">
-        <div class="p-5 space-y-0">
-          {#each Array(4) as _}
-            <div class="flex items-center gap-4 py-3.5 border-b border-white/[0.03] last:border-0">
-              <div class="flex-1 space-y-2">
-                <div class="h-3 w-32 bg-white/[0.06] rounded-lg animate-pulse"></div>
-                <div class="h-2.5 w-48 bg-white/[0.04] rounded-lg animate-pulse"></div>
-              </div>
-              <div class="h-5 w-20 bg-white/[0.05] rounded-full animate-pulse"></div>
-            </div>
-          {/each}
+    <div class="card">
+      {#if !loading && plans.length > 0}
+        <div class="flex flex-wrap items-center justify-end gap-3 border-b border-line px-4 py-3">
+          <div class="relative w-full sm:w-64">
+            <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+            <input bind:value={search} type="text" aria-label="Search plans" placeholder="Search plans…" class="input h-8 pr-8 pl-8" />
+            {#if search}
+              <button onclick={() => (search = '')} class="btn btn-ghost btn-xs btn-icon absolute top-1/2 right-0.5 -translate-y-1/2" aria-label="Clear search"><X size={12} /></button>
+            {/if}
+          </div>
         </div>
-      </div>
-    {:else if plans.length === 0}
-      <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl py-16 px-6 text-center">
-        <div class="w-16 h-16 rounded-2xl bg-white/[0.04] flex items-center justify-center mx-auto mb-5"><DollarSign size={28} class="text-slate-600" /></div>
-        <h2 class="text-lg font-semibold text-slate-300 mb-2">No plans yet</h2>
-        <p class="text-sm text-slate-500 mb-6 max-w-sm mx-auto">Create your first plan to start billing users.</p>
-        <button onclick={openCreate} class="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 transition-all duration-150 cursor-pointer border-0"><Plus size={15} /> Create Plan</button>
-      </div>
-    {:else if filtered.length === 0 && search}
-      <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl py-16 px-6 text-center">
-        <Search size={28} class="text-slate-600 mx-auto mb-3" />
-        <h2 class="text-lg font-semibold text-slate-300 mb-2">No results</h2>
-        <p class="text-sm text-slate-500">No plans match "<span class="text-sky-400">{search}</span>"</p>
-        <button onclick={() => search = ''} class="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0"><X size={14} /> Clear</button>
-      </div>
-    {:else}
-      <!-- Desktop table -->
-      <div class="hidden md:block bg-[#040a14] border border-white/[0.07] rounded-2xl overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full border-separate border-spacing-0">
+      {/if}
+
+      {#if loading}
+        <div class="space-y-3 p-4">
+          {#each Array(4) as _, i (i)}<div class="skeleton h-9"></div>{/each}
+        </div>
+      {:else if plans.length === 0}
+        <EmptyState icon={DollarSign as any} title="No plans yet" description="Create your first plan to start billing users." actionLabel="Create plan" onaction={openCreate} />
+      {:else if filtered.length === 0 && search}
+        <EmptyState compact icon={Search as any} title="No results" description={`No plans match "${search}"`} actionLabel="Clear search" onaction={() => (search = '')} />
+      {:else}
+        <div class="table-wrap">
+          <table class="table">
             <thead>
-              <tr class="text-left">
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Name</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Slug</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Price</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Cycle</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Status</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Features</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Actions</th>
+              <tr>
+                <th>Name</th>
+                <th class="max-md:hidden">Slug</th>
+                <th>Price</th>
+                <th class="max-sm:hidden">Cycle</th>
+                <th>Status</th>
+                <th class="max-md:hidden">Features</th>
+                <th class="text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {#each filtered as p (p.id)}
-                <tr class="hover:bg-white/[0.02] transition group">
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <div class="flex items-center gap-2.5">
-                      <div class="w-8 h-8 rounded-lg bg-sky-500/10 flex items-center justify-center"><DollarSign size={14} class="text-sky-400" /></div>
-                      <span class="text-slate-200 font-medium">{p.name}</span>
-                    </div>
+                <tr>
+                  <td>
+                    <button onclick={() => { detailPlan = p; showDetail = true; }} class="cursor-pointer text-left font-medium text-fg hover:text-accent">{p.name}</button>
                   </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] text-slate-400 align-middle">
-                    <code class="text-xs bg-white/[0.04] px-2 py-1 rounded-md">{p.slug}</code>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="text-emerald-400 font-semibold text-sm">{formatIDR(p.price_idr)}</span>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="text-xs px-2.5 py-1 rounded-lg bg-white/[0.04] text-slate-300 capitalize">{p.billing_cycle}</span>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <StatusPill status={p.is_active ? 'active' : 'disabled'} />
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="text-xs text-slate-400">{featuresCount(p)} feature{featuresCount(p) !== 1 ? 's' : ''}</span>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <div class="flex items-center gap-1">
-                      <button onclick={() => { detailPlan = p; showDetail = true; }} class="inline-flex items-center gap-1 text-xs text-indigo-400/70 hover:text-indigo-400 transition px-2 py-1 rounded-lg hover:bg-indigo-400/5 cursor-pointer border-0 bg-transparent"><ExternalLink size={12} /> View</button>
-                      <button onclick={() => openEdit(p)} class="inline-flex items-center gap-1 text-xs text-sky-400/70 hover:text-sky-400 transition px-2 py-1 rounded-lg hover:bg-sky-400/5 cursor-pointer border-0 bg-transparent"><Pencil size={12} /> Edit</button>
-                      <button onclick={() => deletePlan(p)} class="inline-flex items-center gap-1 text-xs text-red-400/50 hover:text-red-400 transition px-2 py-1 rounded-lg hover:bg-red-400/5 cursor-pointer border-0 bg-transparent"><Trash2 size={12} /> Delete</button>
+                  <td class="max-md:hidden"><code class="code text-xs">{p.slug}</code></td>
+                  <td class="font-medium whitespace-nowrap text-fg tabular-nums">{formatIDR(p.price_idr)}</td>
+                  <td class="text-muted capitalize max-sm:hidden">{p.billing_cycle}</td>
+                  <td><StatusPill status={p.is_active ? 'active' : 'disabled'} /></td>
+                  <td class="text-xs text-muted tabular-nums max-md:hidden">{featuresCount(p)} feature{featuresCount(p) !== 1 ? 's' : ''}</td>
+                  <td>
+                    <div class="flex items-center justify-end gap-0.5">
+                      <button onclick={() => { detailPlan = p; showDetail = true; }} class="btn btn-ghost btn-xs btn-icon" aria-label="View {p.name}" title="View"><Eye size={14} /></button>
+                      <button onclick={() => openEdit(p)} class="btn btn-ghost btn-xs btn-icon" aria-label="Edit {p.name}" title="Edit"><Pencil size={14} /></button>
+                      <button onclick={() => askDelete(p)} class="btn btn-danger-ghost btn-xs btn-icon" aria-label="Delete {p.name}" title="Delete"><Trash2 size={14} /></button>
                     </div>
                   </td>
                 </tr>
@@ -264,66 +234,37 @@
             </tbody>
           </table>
         </div>
-      </div>
+      {/if}
+    </div>
 
-      <!-- Mobile cards -->
-      <div class="md:hidden space-y-3">
-        {#each filtered as p (p.id)}
-          <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl p-4 space-y-3">
-            <div class="flex items-start justify-between">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center"><DollarSign size={16} class="text-sky-400" /></div>
-                <div>
-                  <div class="text-sm font-medium text-slate-200">{p.name}</div>
-                  <code class="text-[0.65rem] text-slate-500">{p.slug}</code>
-                </div>
-              </div>
-              <StatusPill status={p.is_active ? 'active' : 'disabled'} />
-            </div>
-            <div class="flex items-center justify-between">
-              <span class="text-emerald-400 font-semibold text-sm">{formatIDR(p.price_idr)}</span>
-              <span class="text-xs text-slate-400 capitalize">{p.billing_cycle}</span>
-            </div>
-            <div class="flex items-center gap-1">
-              <button onclick={() => { detailPlan = p; showDetail = true; }} class="inline-flex items-center gap-1 text-xs text-indigo-400/70 hover:text-indigo-400 transition px-2 py-1 rounded-lg hover:bg-indigo-400/5 cursor-pointer border-0 bg-transparent"><ExternalLink size={12} /></button>
-              <button onclick={() => openEdit(p)} class="inline-flex items-center gap-1 text-xs text-sky-400/70 hover:text-sky-400 transition px-2 py-1 rounded-lg hover:bg-sky-400/5 cursor-pointer border-0 bg-transparent"><Pencil size={12} /> Edit</button>
-              <button onclick={() => deletePlan(p)} class="inline-flex items-center gap-1 text-xs text-red-400/50 hover:text-red-400 transition px-2 py-1 rounded-lg hover:bg-red-400/5 cursor-pointer border-0 bg-transparent"><Trash2 size={12} /> Delete</button>
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-
-    <!-- Create / Edit Modal -->
-    <Modal bind:open={showCreate} title={editingPlan ? 'Edit Plan' : 'Create Plan'} maxWidth="lg">
+    <!-- Create / Edit -->
+    <Modal bind:open={showCreate} title={editingPlan ? 'Edit plan' : 'Create plan'} maxWidth="lg">
       <div class="space-y-4">
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label for="plan-name" class="block text-xs text-slate-500 mb-1.5">Name *</label>
-            <input id="plan-name" bind:value={form.name} oninput={() => { if (!editingPlan && !form.slug) form.slug = autoSlug(form.name); }}
-              class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition" placeholder="e.g. Pro Plan" />
+            <label for="plan-name" class="label">Name <span class="text-danger">*</span></label>
+            <input
+              id="plan-name"
+              bind:value={form.name}
+              oninput={() => { if (!editingPlan && !form.slug) form.slug = autoSlug(form.name); }}
+              class="input"
+              placeholder="e.g. Pro Plan"
+            />
           </div>
           <div>
-            <label for="plan-slug" class="block text-xs text-slate-500 mb-1.5">Slug *</label>
+            <label for="plan-slug" class="label">Slug <span class="text-danger">*</span></label>
             <div class="flex gap-2">
-              <input id="plan-slug" bind:value={form.slug}
-                class="flex-1 bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition" placeholder="pro-plan" />
-              <button onclick={() => { form.slug = autoSlug(form.name); }}
-                class="shrink-0 p-2.5 rounded-xl bg-white/[0.04] border border-white/[0.07] text-slate-400 hover:text-sky-400 hover:bg-sky-400/5 transition cursor-pointer border-0"
-                title="Auto-generate slug"><Copy size={14} /></button>
+              <input id="plan-slug" bind:value={form.slug} class="input font-mono text-[13px]" placeholder="pro-plan" />
+              <button onclick={() => { form.slug = autoSlug(form.name); }} class="btn btn-secondary btn-icon" aria-label="Auto-generate slug" title="Auto-generate slug"><Wand2 size={14} /></button>
             </div>
           </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label for="plan-price" class="block text-xs text-slate-500 mb-1.5">Price (IDR) *</label>
-            <input id="plan-price" type="number" min="0" bind:value={form.price_idr}
-              class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition" />
+            <label for="plan-price" class="label">Price (IDR) <span class="text-danger">*</span></label>
+            <input id="plan-price" type="number" min="0" bind:value={form.price_idr} class="input tabular-nums" />
           </div>
           <div>
-            <label for="plan-cycle" class="block text-xs text-slate-500 mb-1.5">Billing Cycle</label>
-            <select id="plan-cycle" bind:value={form.billing_cycle}
-              class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition">
+            <label for="plan-cycle" class="label">Billing cycle</label>
+            <select id="plan-cycle" bind:value={form.billing_cycle} class="input">
               <option value="monthly">Monthly</option>
               <option value="yearly">Yearly</option>
               <option value="one-time">One-time</option>
@@ -331,77 +272,77 @@
           </div>
         </div>
         <div>
-          <label for="plan-features" class="block text-xs text-slate-500 mb-1.5">Features (JSON array or comma-separated)</label>
-          <textarea id="plan-features" bind:value={form.features} rows={4}
-            class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition font-mono"
-            placeholder='["5 websites", "10GB storage", "Priority support"]'></textarea>
+          <label for="plan-features" class="label">Features</label>
+          <textarea id="plan-features" bind:value={form.features} rows={4} class="input font-mono text-[13px]" placeholder={'["5 websites", "10GB storage", "Priority support"]'}></textarea>
+          <p class="hint">JSON array or comma-separated list.</p>
         </div>
-        <div class="flex items-center gap-3">
-          <label for="plan-active" class="text-xs text-slate-500">Status</label>
-          <button id="plan-active" onclick={() => form.is_active = !form.is_active}
-            class="relative w-10 h-5 rounded-full transition-colors duration-200 cursor-pointer border-0 {form.is_active ? 'bg-emerald-500' : 'bg-white/[0.08]'}">
-            <div class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 {form.is_active ? 'translate-x-5' : ''}"></div>
-          </button>
-          <span class="text-xs text-slate-400">{form.is_active ? 'Active' : 'Inactive'}</span>
-        </div>
+        <label for="plan-active" class="flex cursor-pointer items-center gap-2.5 text-sm text-fg">
+          <input id="plan-active" type="checkbox" bind:checked={form.is_active} class="checkbox" />
+          Active
+          <span class="text-xs text-subtle">— inactive plans can't be ordered</span>
+        </label>
       </div>
       {#snippet footer()}
-        <button onclick={() => { showCreate = false; editingPlan = null; form = { ...formDefault }; }}
-          class="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Cancel</button>
-        <button onclick={savePlan} disabled={busy || !form.name || !form.slug}
-          class="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition disabled:opacity-40 cursor-pointer border-0">
+        <button onclick={() => { showCreate = false; editingPlan = null; form = { ...formDefault }; }} class="btn btn-secondary btn-sm">Cancel</button>
+        <button onclick={savePlan} disabled={busy || !form.name || !form.slug} class="btn btn-primary btn-sm">
           {#if busy}<Loader2 size={14} class="animate-spin" /> Saving...{:else}<Check size={14} /> {editingPlan ? 'Update' : 'Create'}{/if}
         </button>
       {/snippet}
     </Modal>
 
-    <!-- Detail Modal -->
-    <Modal bind:open={showDetail} title={detailPlan?.name || 'Plan Detail'} maxWidth="lg">
+    <!-- Detail -->
+    <Modal bind:open={showDetail} title={detailPlan?.name || 'Plan detail'} maxWidth="lg">
       {#if detailPlan}
-        {@const fc = (() => { try { const a = JSON.parse(detailPlan.features || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } })()}
-        <div class="space-y-4">
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Slug</div>
-              <code class="text-sm text-slate-200 bg-white/[0.04] px-2 py-1 rounded-md">{detailPlan.slug}</code>
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Price</div>
-              <div class="text-sm text-emerald-400 font-semibold">{formatIDR(detailPlan.price_idr)}</div>
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Billing Cycle</div>
-              <div class="text-sm text-slate-200 capitalize">{detailPlan.billing_cycle}</div>
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Status</div>
-              <StatusPill status={detailPlan.is_active ? 'active' : 'disabled'} />
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Users Assigned</div>
-              <div class="text-sm text-slate-200">{detailPlan.user_count ?? 0}</div>
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Created</div>
-              <div class="text-sm text-slate-200">{detailPlan.created_at ? new Date(detailPlan.created_at).toLocaleDateString('id-ID') : '—'}</div>
+        {@const fc = featuresList(detailPlan)}
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-4">
+          <div>
+            <dt class="stat-label">Slug</dt>
+            <dd class="mt-1"><code class="code">{detailPlan.slug}</code></dd>
+          </div>
+          <div>
+            <dt class="stat-label">Price</dt>
+            <dd class="mt-1 text-sm font-semibold text-fg tabular-nums">{formatIDR(detailPlan.price_idr)}</dd>
+          </div>
+          <div>
+            <dt class="stat-label">Billing cycle</dt>
+            <dd class="mt-1 text-sm text-fg capitalize">{detailPlan.billing_cycle}</dd>
+          </div>
+          <div>
+            <dt class="stat-label">Status</dt>
+            <dd class="mt-1"><StatusPill status={detailPlan.is_active ? 'active' : 'disabled'} /></dd>
+          </div>
+          <div>
+            <dt class="stat-label">Users assigned</dt>
+            <dd class="mt-1 text-sm text-fg tabular-nums">{detailPlan.user_count ?? 0}</dd>
+          </div>
+          <div>
+            <dt class="stat-label">Created</dt>
+            <dd class="mt-1 text-sm text-fg">{detailPlan.created_at ? new Date(detailPlan.created_at).toLocaleDateString('id-ID') : '—'}</dd>
+          </div>
+        </dl>
+        {#if fc.length > 0}
+          <div class="mt-5 border-t border-line pt-4">
+            <div class="stat-label mb-2">Features ({fc.length})</div>
+            <div class="flex flex-wrap gap-1.5">
+              {#each fc as feat, i (i)}
+                <span class="badge">{feat}</span>
+              {/each}
             </div>
           </div>
-          {#if fc.length > 0}
-            <div>
-              <div class="text-xs text-slate-500 mb-2">Features ({fc.length})</div>
-              <div class="flex flex-wrap gap-2">
-                {#each fc as feat}
-                  <span class="text-xs bg-sky-500/10 text-sky-400 border border-sky-500/15 px-2.5 py-1 rounded-lg">{feat}</span>
-                {/each}
-              </div>
-            </div>
-          {/if}
-        </div>
+        {/if}
       {/if}
       {#snippet footer()}
-        <button onclick={() => { showDetail = false; detailPlan = null; }}
-          class="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Close</button>
+        <button onclick={() => { showDetail = false; detailPlan = null; }} class="btn btn-secondary btn-sm">Close</button>
       {/snippet}
     </Modal>
+
+    <ConfirmDialog
+      bind:open={confirmDeleteOpen}
+      title="Delete plan"
+      message={confirmDelete ? `Delete plan "${confirmDelete.name}"? This cannot be undone.` : ''}
+      confirmLabel="Delete"
+      destructive
+      onconfirm={() => confirmDelete && deletePlan(confirmDelete)}
+    />
   {/if}
 </DashboardLayout>

@@ -2,7 +2,9 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import Modal from '$components/Modal.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import { hasRole } from '$lib/auth.svelte';
+  import { Copy, Check, RefreshCw } from 'lucide-svelte';
 
   let {
     open = $bindable(false),
@@ -93,8 +95,9 @@
     }
   }
 
+  let confirmRegen = $state(false);
+
   async function regenerateToken() {
-    if (!confirm('Regenerate agent token? The current token will stop working immediately.')) return;
     regenerating = true;
     error = '';
     try {
@@ -109,94 +112,61 @@
 </script>
 
 {#if canManage}
-  <Modal bind:open title="Edit Server" maxWidth="md">
+  <Modal bind:open title="Edit server" maxWidth="md">
     {#snippet footer()}
-      <button
-        onclick={() => (open = false)}
-        class="px-4 py-2 text-sm rounded-lg bg-gray-700/50 text-gray-300 hover:bg-gray-700 transition cursor-pointer border-0"
-      >Cancel</button>
-      <button
-        onclick={save}
-        disabled={saving}
-        class="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] font-semibold hover:-translate-y-0.5 transition-all duration-150 cursor-pointer border-0 disabled:opacity-50"
-      >{saving ? 'Saving...' : 'Save Changes'}</button>
+      <button onclick={() => (open = false)} class="btn btn-secondary btn-sm">Cancel</button>
+      <button onclick={save} disabled={saving} class="btn btn-primary btn-sm">{saving ? 'Saving…' : 'Save changes'}</button>
     {/snippet}
 
     {#if error}
-      <div class="mb-4 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{error}</div>
+      <div class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-[13px] text-danger">{error}</div>
     {/if}
 
-    <div class="flex flex-col gap-4">
+    <div class="space-y-4">
       <div>
-        <label class="block text-sm font-medium text-gray-400 mb-1">Name</label>
-        <input
-          type="text"
-          bind:value={name}
-          class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-          placeholder="My Server"
-        />
+        <label class="label" for="es-name">Name</label>
+        <input id="es-name" type="text" bind:value={name} class="input" placeholder="My server" />
       </div>
       <div>
-        <label class="block text-sm font-medium text-gray-400 mb-1">Hostname</label>
-        <input
-          type="text"
-          bind:value={hostname}
-          class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-          placeholder="example.com"
-        />
+        <label class="label" for="es-hostname">Hostname</label>
+        <input id="es-hostname" type="text" bind:value={hostname} class="input" placeholder="example.com" />
       </div>
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid grid-cols-2 gap-3">
         <div>
-          <label class="block text-sm font-medium text-gray-400 mb-1">IP Address</label>
-          <input
-            type="text"
-            bind:value={ip_address}
-            class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-            placeholder="1.2.3.4"
-          />
+          <label class="label" for="es-ip">IP address</label>
+          <input id="es-ip" type="text" bind:value={ip_address} class="input font-mono text-[13px]" placeholder="1.2.3.4" />
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-400 mb-1">SSH Port</label>
-          <input
-            type="number"
-            bind:value={ssh_port}
-            min="1"
-            max="65535"
-            class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-          />
+          <label class="label" for="es-port">SSH port</label>
+          <input id="es-port" type="number" bind:value={ssh_port} min="1" max="65535" class="input tabular-nums" />
         </div>
       </div>
       <div>
-        <label class="block text-sm font-medium text-gray-400 mb-1">Agent Token</label>
+        <label class="label" for="es-token">Agent token</label>
         <div class="flex gap-2">
-          <input
-            type="text"
-            value={agentToken}
-            readonly
-            class="flex-1 px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm font-mono text-xs focus:outline-none"
-            placeholder="Loading..."
-          />
-          <button
-            onclick={copyToken}
-            class="px-3 py-2 rounded-lg bg-gray-700/50 text-gray-300 hover:bg-gray-700 transition cursor-pointer border-0 text-xs whitespace-nowrap"
-          >{tokenCopied ? 'Copied!' : 'Copy'}</button>
-          <button
-            onclick={regenerateToken}
-            disabled={regenerating}
-            class="px-3 py-2 rounded-lg bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 transition cursor-pointer border-0 text-xs whitespace-nowrap disabled:opacity-50"
-          >{regenerating ? '...' : 'Regen'}</button>
+          <input id="es-token" type="text" value={agentToken} readonly class="input flex-1 font-mono text-xs" placeholder="Loading…" />
+          <button onclick={copyToken} class="btn btn-secondary btn-icon" aria-label="Copy token" title="Copy token">
+            {#if tokenCopied}<Check size={14} class="text-success" />{:else}<Copy size={14} />{/if}
+          </button>
+          <button onclick={() => (confirmRegen = true)} disabled={regenerating} class="btn btn-secondary">
+            <RefreshCw size={14} class={regenerating ? 'animate-spin' : ''} /> Regenerate
+          </button>
         </div>
-        <p class="text-[0.65rem] text-slate-600 mt-1">Used on the target server to authenticate with the panel</p>
+        <p class="hint">Used on the target server to authenticate with the panel.</p>
       </div>
       <div>
-        <label class="block text-sm font-medium text-gray-400 mb-1">Description</label>
-        <textarea
-          bind:value={description}
-          rows="2"
-          class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50 resize-none"
-          placeholder="Optional notes..."
-        ></textarea>
+        <label class="label" for="es-desc">Description</label>
+        <textarea id="es-desc" bind:value={description} rows="2" class="input resize-none" placeholder="Optional notes…"></textarea>
       </div>
     </div>
   </Modal>
+
+  <ConfirmDialog
+    bind:open={confirmRegen}
+    title="Regenerate agent token?"
+    message="The current token will stop working immediately. Update the agent on the server with the new token."
+    confirmLabel="Regenerate"
+    destructive
+    onconfirm={regenerateToken}
+  />
 {/if}

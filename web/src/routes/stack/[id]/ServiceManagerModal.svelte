@@ -3,8 +3,9 @@
   import { apiFetch } from '$lib/api';
   import {
     CheckCircle2, XCircle, Loader2, Download, Check, Plus, Box, Play, Square,
-    RotateCw, Trash2, RefreshCw, ChevronRight, Layers, ArrowUpCircle, Info
+    RotateCw, Trash2, RefreshCw, ArrowUpCircle, X
   } from 'lucide-svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
 
   let {
     open,
@@ -14,7 +15,7 @@
     onChanged
   }: {
     open: boolean;
-    pkg: { name: string; label: string; desc: string; icon: any; color: string; multiVersion?: boolean; versionSupport?: boolean; availableVersions?: string[] } | null;
+    pkg: { name: string; label: string; desc: string; icon: any; color?: string; multiVersion?: boolean; versionSupport?: boolean; availableVersions?: string[] } | null;
     serverId: string;
     onClose: () => void;
     onChanged: () => void;
@@ -99,171 +100,155 @@
 
   function statusColor(status: string) {
     switch (status) {
-      case 'running': return { label: 'Running', bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/20', dot: 'bg-emerald-400' };
-      case 'stopped': return { label: 'Stopped', bg: 'bg-yellow-500/10', text: 'text-yellow-400', border: 'border-yellow-500/20', dot: 'bg-yellow-400' };
-      default: return { label: 'Installed', bg: 'bg-sky-500/10', text: 'text-sky-400', border: 'border-sky-500/20', dot: 'bg-sky-400' };
+      case 'running': return { label: 'Running', badge: 'badge-success' };
+      case 'stopped': return { label: 'Stopped', badge: 'badge-warning' };
+      default: return { label: 'Installed', badge: 'badge-info' };
     }
   }
+
+  let uninstallVersion = $state('');
+  let confirmUninstall = $state(false);
 </script>
 
 {#if open && pkg}
   {@const Icon = pkg.icon || Box}
-  <div class="fixed inset-0 z-50 flex items-start justify-center pt-10 pb-10 overflow-auto bg-black/60 backdrop-blur-sm" onclick={onClose} role="presentation">
-    <div class="w-full max-w-3xl bg-[var(--bg-secondary)] border border-white/[0.06] rounded-2xl shadow-2xl overflow-hidden" onclick={(e) => e.stopPropagation()} role="dialog">
-      <!-- Header -->
-      <div class="p-6 border-b border-white/[0.06] flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 rounded-xl bg-{pkg.color}-500/10 flex items-center justify-center border border-white/[0.06]">
-            <Icon size={18} class="text-{pkg.color}-400" />
+  <div class="overlay animate-fade-in flex items-end justify-center overflow-auto sm:items-start sm:px-4 sm:py-10" onclick={onClose} role="presentation">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="popover animate-pop-in flex max-h-[90dvh] w-full max-w-3xl flex-col max-sm:rounded-b-none sm:max-h-none"
+      onclick={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      aria-label="{pkg.label} version manager"
+      tabindex="-1"
+    >
+      <div class="flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 py-3.5">
+        <div class="flex min-w-0 items-center gap-3">
+          <div class="flex size-9 shrink-0 items-center justify-center rounded-lg border border-line bg-surface-2 text-muted">
+            <Icon size={16} />
           </div>
-          <div>
-            <h2 class="font-semibold text-white">{pkg.label} Version & Service Manager</h2>
-            <p class="text-xs text-slate-500">{pkg.desc} — install, switch, or manage versions</p>
+          <div class="min-w-0">
+            <h2 class="truncate text-[15px] font-semibold text-fg">{pkg.label} versions & service</h2>
+            <p class="truncate text-xs text-subtle">{pkg.desc} — install, switch or manage versions</p>
           </div>
         </div>
-        <div class="flex items-center gap-2">
-          <button onclick={() => loadVersions()} disabled={loading}
-            class="p-2 rounded-xl bg-white/[0.03] border border-white/[0.06] text-slate-400 hover:text-white hover:bg-white/[0.06] transition disabled:opacity-50 cursor-pointer">
+        <div class="flex items-center gap-1">
+          <button onclick={() => loadVersions()} disabled={loading} class="btn btn-ghost btn-icon btn-sm" aria-label="Refresh versions">
             <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
           </button>
-          <button onclick={onClose}
-            class="p-2 rounded-xl bg-white/[0.03] border border-white/[0.06] text-slate-400 hover:text-white hover:bg-white/[0.06] transition cursor-pointer">
-            <XCircle size={14} />
+          <button onclick={onClose} class="btn btn-ghost btn-icon btn-sm" aria-label="Close">
+            <X size={16} />
           </button>
         </div>
       </div>
 
-      <!-- Body -->
-      <div class="p-6">
-        <!-- Toast -->
+      <div class="overflow-y-auto px-5 py-4">
         {#if actionResult}
-          <div class="mb-5 p-4 rounded-xl flex items-center gap-2 text-sm {actionResult.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border border-red-500/20 text-red-400'}">
-            {#if actionResult.type === 'success'}<CheckCircle2 size={16} />{:else}<XCircle size={16} />{/if}
+          <div class="mb-4 flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] {actionResult.type === 'success' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}">
+            {#if actionResult.type === 'success'}<CheckCircle2 size={14} class="shrink-0" />{:else}<XCircle size={14} class="shrink-0" />{/if}
             {actionResult.message}
           </div>
         {/if}
 
         {#if loading}
-          <div class="flex items-center justify-center py-12">
-            <Loader2 size={20} class="text-sky-400 animate-spin" />
-            <span class="ml-2 text-sm text-slate-400">Loading version details...</span>
+          <div class="space-y-2">
+            {#each Array(3) as _, i (i)}<div class="skeleton h-12"></div>{/each}
           </div>
         {:else}
-          <!-- Installed versions -->
-          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-            <Check size={14} class="text-emerald-400" />
-            Installed Versions ({installedVersions.length})
+          <h3 class="mb-2 flex items-center gap-2 text-sm font-semibold text-fg">
+            <Check size={14} class="text-success" />
+            Installed versions <span class="font-normal text-subtle tabular-nums">({installedVersions.length})</span>
           </h3>
 
           {#if installedVersions.length > 0}
-            <div class="space-y-2 mb-6">
-              {#each installedVersions as ver}
+            <div class="mb-6 divide-y divide-line rounded-lg border border-line">
+              {#each installedVersions as ver, i (i)}
                 {@const sc = statusColor(ver.status)}
                 {@const isPending = actionPending.startsWith(ver.version + ':')}
-                <div class="flex items-center justify-between p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06] hover:border-white/[0.1] transition">
-                  <div class="flex items-center gap-3">
-                    <span class="font-mono text-sm font-semibold text-white">v{ver.version}</span>
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[0.65rem] font-medium {sc.bg} {sc.text} border {sc.border}">
-                      <span class="w-1.5 h-1.5 rounded-full {sc.dot}"></span>
-                      {sc.label}
-                    </span>
+                <div class="flex items-center justify-between gap-3 px-3 py-2.5">
+                  <div class="flex min-w-0 items-center gap-2.5">
+                    <span class="font-mono text-[13px] font-semibold text-fg">v{ver.version}</span>
+                    <span class="badge {sc.badge}"><span class="dot"></span>{sc.label}</span>
                     {#if ver.path}
-                      <span class="font-mono text-xs text-slate-500 hidden sm:inline">{ver.path}</span>
+                      <span class="truncate font-mono text-xs text-subtle max-sm:hidden">{ver.path}</span>
                     {/if}
                   </div>
-
-                  <div class="flex items-center gap-1.5">
+                  <div class="flex shrink-0 items-center gap-0.5">
                     {#if ver.status === 'stopped'}
-                      <button onclick={() => doAction(ver.version, 'start')} disabled={isPending}
-                        title="Start"
-                        class="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 transition disabled:opacity-40 cursor-pointer">
-                        {#if isPending}<Loader2 size={11} class="animate-spin" />{:else}<Play size={11} />{/if}
+                      <button onclick={() => doAction(ver.version, 'start')} disabled={isPending} title="Start" aria-label="Start" class="btn btn-ghost btn-icon btn-xs text-success">
+                        {#if isPending}<Loader2 size={12} class="animate-spin" />{:else}<Play size={12} />{/if}
                       </button>
                     {/if}
                     {#if ver.status === 'running'}
-                      <button onclick={() => doAction(ver.version, 'stop')} disabled={isPending}
-                        title="Stop"
-                        class="p-1.5 rounded-lg bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 border border-yellow-500/20 transition disabled:opacity-40 cursor-pointer">
-                        {#if isPending}<Loader2 size={11} class="animate-spin" />{:else}<Square size={11} />{/if}
+                      <button onclick={() => doAction(ver.version, 'stop')} disabled={isPending} title="Stop" aria-label="Stop" class="btn btn-ghost btn-icon btn-xs text-warning">
+                        {#if isPending}<Loader2 size={12} class="animate-spin" />{:else}<Square size={12} />{/if}
                       </button>
                     {/if}
-                    <button onclick={() => doAction(ver.version, 'restart')} disabled={isPending}
-                      title="Restart"
-                      class="p-1.5 rounded-lg bg-white/[0.03] text-slate-400 hover:text-white hover:bg-white/[0.06] border border-white/[0.06] transition disabled:opacity-40 cursor-pointer">
-                      <RotateCw size={11} />
+                    <button onclick={() => doAction(ver.version, 'restart')} disabled={isPending} title="Restart" aria-label="Restart" class="btn btn-ghost btn-icon btn-xs">
+                      <RotateCw size={12} />
                     </button>
-                    <button onclick={() => doAction(ver.version, 'update')} disabled={isPending}
-                      title="Update/Rebuild"
-                      class="p-1.5 rounded-lg bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-sky-500/20 transition disabled:opacity-40 cursor-pointer">
-                      <ArrowUpCircle size={11} />
+                    <button onclick={() => doAction(ver.version, 'update')} disabled={isPending} title="Update/Rebuild" aria-label="Update" class="btn btn-ghost btn-icon btn-xs">
+                      <ArrowUpCircle size={12} />
                     </button>
-                    <button onclick={() => { if (confirm(`Uninstall ${pkg.label} ${ver.version}?`)) doAction(ver.version, 'uninstall'); }} disabled={isPending}
+                    <button
+                      onclick={() => { uninstallVersion = ver.version; confirmUninstall = true; }}
+                      disabled={isPending}
                       title="Uninstall"
-                      class="p-1.5 rounded-lg bg-red-500/5 text-red-400/60 hover:bg-red-500/10 hover:text-red-400 border border-red-500/10 transition disabled:opacity-40 cursor-pointer">
-                      <Trash2 size={11} />
+                      aria-label="Uninstall"
+                      class="btn btn-danger-ghost btn-icon btn-xs"
+                    >
+                      <Trash2 size={12} />
                     </button>
                   </div>
                 </div>
               {/each}
             </div>
           {:else}
-            <div class="p-6 rounded-xl bg-white/[0.02] border border-white/[0.06] text-center mb-6">
-              <Box size={24} class="mx-auto mb-2 text-slate-500" />
-              <p class="text-sm text-slate-400">No {pkg.label} versions currently installed</p>
+            <div class="mb-6 rounded-lg border border-dashed border-line px-4 py-6 text-center">
+              <Box size={18} class="mx-auto mb-2 text-subtle" />
+              <p class="text-[13px] text-muted">No {pkg.label} versions currently installed</p>
             </div>
           {/if}
 
-          <!-- Available / Install Other Versions -->
-          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-            <Plus size={14} class="text-sky-400" />
-            Install Other / Newer Versions
+          <h3 class="mb-2 flex items-center gap-2 text-sm font-semibold text-fg">
+            <Plus size={14} class="text-accent" />
+            Install other versions
           </h3>
 
           {#if availableVersions.length > 0}
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mb-4">
-              {#each availableVersions as ver}
+            <div class="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+              {#each availableVersions as ver, i (i)}
                 {@const installed = ver.installed || installedVersions.some(iv => iv.version === ver.version)}
                 {@const isPending = actionPending.startsWith(ver.version + ':install')}
                 <button
                   onclick={() => { if (!installed) doAction(ver.version, 'install'); }}
                   disabled={installed || isPending}
-                  class="rounded-xl border p-3 text-center transition-all duration-200 {installed
-                    ? 'border-emerald-500/15 bg-emerald-500/5 cursor-default'
-                    : 'border-white/[0.06] bg-white/[0.02] hover:border-indigo-500/30 hover:bg-indigo-500/5 cursor-pointer'} disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="rounded-lg border px-3 py-2.5 text-center transition-colors duration-150 disabled:cursor-not-allowed {installed
+                    ? 'border-success/20 bg-success/5'
+                    : 'cursor-pointer border-line bg-surface hover:border-accent/40 hover:bg-accent/5'} {isPending ? 'opacity-60' : ''}"
                 >
-                  <div class="font-mono text-sm font-semibold text-white mb-1">
-                    v{ver.version}
-                  </div>
+                  <div class="mb-0.5 font-mono text-[13px] font-semibold text-fg">v{ver.version}</div>
                   {#if installed}
-                    <span class="text-[0.65rem] text-emerald-400 font-medium inline-flex items-center gap-1">
-                      <Check size={10} /> Installed
-                    </span>
+                    <span class="inline-flex items-center gap-1 text-[11px] font-medium text-success"><Check size={10} /> Installed</span>
                   {:else if isPending}
-                    <span class="text-[0.65rem] text-sky-400 font-medium inline-flex items-center gap-1">
-                      <Loader2 size={10} class="animate-spin" /> Installing...
-                    </span>
+                    <span class="inline-flex items-center gap-1 text-[11px] font-medium text-accent"><Loader2 size={10} class="animate-spin" /> Installing…</span>
                   {:else}
-                    <span class="text-[0.65rem] text-slate-400 hover:text-sky-300 font-medium inline-flex items-center gap-1">
-                      <Download size={10} /> Click to Install
-                    </span>
+                    <span class="inline-flex items-center gap-1 text-[11px] font-medium text-subtle"><Download size={10} /> Install</span>
                   {/if}
                 </button>
               {/each}
             </div>
           {/if}
 
-          <!-- Custom version input -->
-          <div class="mt-4 p-4 rounded-xl bg-white/[0.02] border border-white/[0.06]">
-            <label for="custom-ver-input" class="block text-xs font-semibold text-slate-400 mb-2">
-              Install Specific Version (or custom tag)
-            </label>
+          <div class="mt-4 rounded-lg border border-line bg-surface-2/50 p-3">
+            <label for="custom-ver-input" class="label">Install a specific version (or custom tag)</label>
             <div class="flex items-center gap-2">
               <input
                 id="custom-ver-input"
                 type="text"
                 placeholder={pkg.name === 'go' ? 'e.g. 1.24.0' : pkg.name === 'node' ? 'e.g. 20' : 'e.g. 8.4'}
                 bind:value={customVersion}
-                class="flex-1 bg-white/[0.05] border border-white/[0.08] rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50"
+                class="input flex-1 font-mono text-[13px]"
               />
               <button
                 onclick={() => {
@@ -273,9 +258,9 @@
                   }
                 }}
                 disabled={!customVersion.trim() || actionPending !== ''}
-                class="px-4 py-2 rounded-xl bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 border border-sky-500/30 text-xs font-medium transition cursor-pointer disabled:opacity-40"
+                class="btn btn-primary"
               >
-                Install
+                <Download size={14} /> Install
               </button>
             </div>
           </div>
@@ -283,4 +268,13 @@
       </div>
     </div>
   </div>
+
+  <ConfirmDialog
+    bind:open={confirmUninstall}
+    title="Uninstall {pkg.label} {uninstallVersion}?"
+    message="This version will be removed from the server."
+    confirmLabel="Uninstall"
+    destructive
+    onconfirm={() => { if (uninstallVersion) doAction(uninstallVersion, 'uninstall'); }}
+  />
 {/if}

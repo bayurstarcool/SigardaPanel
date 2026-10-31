@@ -2,9 +2,12 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import Pagination from '$components/Pagination.svelte';
   import StatusPill from '$components/StatusPill.svelte';
-  import { Globe, Search, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { Globe, Search, Plus, ArrowUp, ArrowDown, ChevronRight, Star, Download, TriangleAlert, X } from 'lucide-svelte';
+  import { onMount, untrack } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
   let sites = $state<any[]>([]);
@@ -16,14 +19,14 @@
 
   // Docker language presets
   const dockerPresets = [
-    { lang: 'static', label: 'Static HTML', icon: '🌐', image: 'nginx:alpine', desc: 'Plain HTML/CSS/JS' },
-    { lang: 'node', label: 'Node.js', icon: '🟢', image: 'node:20-alpine', desc: 'Express, Fastify, etc.' },
-    { lang: 'python', label: 'Python', icon: '🐍', image: 'python:3.12-slim', desc: 'Flask, Django, FastAPI' },
-    { lang: 'php', label: 'PHP', icon: '🐘', image: 'php:8.3-apache', desc: 'Laravel, WordPress' },
-    { lang: 'go', label: 'Go', icon: '🐹', image: 'golang:1.22-alpine', desc: 'Echo, Gin, Chi' },
-    { lang: 'ruby', label: 'Ruby', icon: '💎', image: 'ruby:3.3-alpine', desc: 'Rails, Sinatra' },
-    { lang: 'java', label: 'Java', icon: '☕', image: 'eclipse-temurin:21-jre', desc: 'Spring Boot, Quarkus' },
-    { lang: 'rust', label: 'Rust', icon: '🦀', image: 'rust:1.78-slim', desc: 'Actix, Axum' },
+    { lang: 'static', label: 'Static HTML', image: 'nginx:alpine', desc: 'Plain HTML/CSS/JS' },
+    { lang: 'node', label: 'Node.js', image: 'node:20-alpine', desc: 'Express, Fastify, etc.' },
+    { lang: 'python', label: 'Python', image: 'python:3.12-slim', desc: 'Flask, Django, FastAPI' },
+    { lang: 'php', label: 'PHP', image: 'php:8.3-apache', desc: 'Laravel, WordPress' },
+    { lang: 'go', label: 'Go', image: 'golang:1.22-alpine', desc: 'Echo, Gin, Chi' },
+    { lang: 'ruby', label: 'Ruby', image: 'ruby:3.3-alpine', desc: 'Rails, Sinatra' },
+    { lang: 'java', label: 'Java', image: 'eclipse-temurin:21-jre', desc: 'Spring Boot, Quarkus' },
+    { lang: 'rust', label: 'Rust', image: 'rust:1.78-slim', desc: 'Actix, Axum' },
   ];
   let selectedPreset = $state('');
 
@@ -117,7 +120,7 @@
   let statusFilter = $state('');
   let page = $state(1);
   let pageSize = $state(10);
-  let sortKey = $state<'domain' | 'runtime' | 'status' | 'created_at'>('domain');
+  let sortKey = $state<'domain' | 'runtime' | 'status' | 'created_at' | 'managed_by'>('domain');
   let sortDir = $state<'asc' | 'desc'>('asc');
   const PAGE_SIZES = [10, 25, 50, 100];
 
@@ -159,13 +162,11 @@
     } catch {}
   }
 
-  onMount(() => { fetchSites(); fetchServers().then(() => {
-    if (servers.length === 1 && form.server_id === 0) form.server_id = servers[0].id;
-  }); });
-  $effect(() => { page; pageSize; runtimeFilter; statusFilter; fetchSites(); });
+  onMount(() => { fetchServers(); });
+  // Refetch whenever paging or filters change (also runs once on mount).
+  $effect(() => { page; pageSize; runtimeFilter; statusFilter; untrack(fetchSites); });
   $effect(() => { if (servers.length === 1 && form.server_id === 0) form.server_id = servers[0].id; });
 
-  const totalPages = $derived(Math.max(1, Math.ceil(totalCount / pageSize)));
   const sortedSites = $derived((() => {
     const arr = [...sites];
     arr.sort((a: any, b: any) => {
@@ -173,25 +174,11 @@
       const vb = b[sortKey] || '';
       return sortDir === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
     });
-    return arr;})())
+    return arr;})());
 
   function toggleSort(key: string) {
     if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
     else { sortKey = key as any; sortDir = 'asc'; }
-  }
-
-  function pages(): (number | string)[] {
-    const p: (number | string)[] = [];
-    const tp = totalPages;
-    if (tp <= 7) { for (let i = 1; i <= tp; i++) p.push(i); }
-    else {
-      p.push(1);
-      if (page > 3) p.push('...');
-      for (let i = Math.max(2, page - 1); i <= Math.min(tp - 1, page + 1); i++) p.push(i);
-      if (page < tp - 2) p.push('...');
-      p.push(tp);
-    }
-    return p;
   }
 
   async function createSite() {
@@ -216,326 +203,289 @@
   function onSearch(e: Event) {
     searchInput = (e.target as HTMLInputElement).value;
     clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => { page = 1; fetchSites(); }, 300);
+    // Resetting the page refetches via the effect; otherwise fetch directly.
+    searchTimeout = setTimeout(() => { if (page !== 1) page = 1; else fetchSites(); }, 300);
   }
 
-  function SortIcon({ col }: { col: string }) {
-    return sortKey === col ? (sortDir === 'asc' ? '↑' : '↓') : '';
-  }
+  const columns: { key: string | null; label: string; cls?: string }[] = [
+    { key: 'domain', label: 'Domain' },
+    { key: 'runtime', label: 'Runtime' },
+    { key: 'managed_by', label: 'Managed', cls: 'max-2xl:hidden' },
+    { key: null, label: 'System user', cls: 'max-2xl:hidden' },
+    { key: null, label: 'Root / proxy', cls: 'max-md:hidden' },
+    { key: 'status', label: 'Status' },
+    { key: null, label: 'SSL', cls: 'max-sm:hidden' },
+    { key: 'created_at', label: 'Created', cls: 'max-md:hidden' },
+  ];
+
+  const createDisabled = $derived(
+    busy || !form.name || !form.domain || form.server_id <= 0 ||
+    (form.runtime === 'docker' ? !showDockerConfig : form.runtime === 'proxy' && !form.proxy_pass_url.trim()),
+  );
 </script>
 
 <DashboardLayout active="Sites">
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-    <div>
-      <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent">Sites</h1>
-      <p class="text-sm text-slate-500 mt-1">{loading ? 'Loading...' : `${totalCount} site(s) total`}</p>
-    </div>
-    <div class="flex items-center gap-3">
-      <div class="relative">
-        <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-        <input type="text" placeholder="Search domains..." value={searchInput} oninput={onSearch}
-          class="bg-white/[0.04] border border-white/[0.07] rounded-xl pl-9 pr-3 py-2 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition w-48" />
-      </div>
-      <button onclick={() => showCreate = !showCreate}
-        class="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 hover:shadow-[0_6px_20px_rgba(56,189,248,0.3)] transition-all duration-150 cursor-pointer border-0 whitespace-nowrap">
-        + Create Site
+  <PageHeader title="Sites" description={loading ? 'Loading…' : `${totalCount} site${totalCount === 1 ? '' : 's'} total`}>
+    {#snippet actions()}
+      <button onclick={() => (showCreate = !showCreate)} class="btn btn-primary btn-sm">
+        {#if showCreate}<X size={14} /> Close{:else}<Plus size={14} /> Create site{/if}
       </button>
-    </div>
-  </div>
+    {/snippet}
+  </PageHeader>
 
   <!-- Create form -->
   {#if showCreate}
-    <div class="mb-6 bg-white/[0.03] border border-white/[0.07] rounded-xl p-6">
-      <h3 class="text-sm font-semibold text-slate-200 mb-4">Create New Site</h3>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <label class="block text-xs text-slate-500 mb-1.5">Server</label>
-          <select bind:value={form.server_id} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40">
-            <option value={0}>Select server...</option>
-            {#each servers as s}<option value={s.id}>{s.name} ({s.hostname})</option>{/each}
-          </select>
-        </div>
-        <div>
-          <label for="site-name" class="block text-xs text-slate-500 mb-1.5">Site Name</label>
-          <input id="site-name" bind:value={form.name} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40" placeholder="my-site" />
-        </div>
-        <div>
-          <label for="site-domain" class="block text-xs text-slate-500 mb-1.5">Domain</label>
-          <input id="site-domain" bind:value={form.domain} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40" placeholder="example.com" />
-        </div>
-        <div>
-          <label class="block text-xs text-slate-500 mb-1.5">Runtime</label>
-          <select bind:value={form.runtime} onchange={onRuntimeChange} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40">
-            {#each ['static', 'php', 'node', 'python', 'go', 'proxy', 'docker'] as r}<option value={r}>{r}</option>{/each}
-          </select>
-        </div>
-        {#if form.runtime === 'php'}
+    <div class="card mb-6 animate-fade-in">
+      <div class="card-header"><h2 class="card-title">Create new site</h2></div>
+      <div class="card-body">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label class="block text-xs text-slate-500 mb-1.5">PHP Version</label>
-            <select bind:value={form.php_version} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 font-mono">
-              {#each phpVersions as v}<option value={v}>PHP {v}</option>{/each}
+            <label for="site-server" class="label">Server</label>
+            <select id="site-server" bind:value={form.server_id} class="input">
+              <option value={0}>Select server…</option>
+              {#each servers as s (s.id)}<option value={s.id}>{s.name} ({s.hostname})</option>{/each}
             </select>
           </div>
-        {/if}
-        <div>
-          <label class="block text-xs text-slate-500 mb-1.5">Root Path</label>
-          <input bind:value={form.root_path} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40" placeholder="/home/user/htdocs/example.com (auto if empty)" />
-        </div>
-        <div class="flex items-end">
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" bind:checked={cfEnabled} class="rounded border-white/20 bg-white/[0.04] text-sky-400 focus:ring-sky-400/20" />
-            <span class="text-xs text-slate-400">Cloudflare DNS</span>
-          </label>
-        </div>
-      </div>
-      {#if form.runtime === 'docker'}
-        <div class="mt-4 pt-4 border-t border-white/[0.05]">
-          <div class="flex items-center gap-2 mb-3">
-            <span class="text-xs font-semibold text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-full">1</span>
-            <label class="block text-xs text-slate-400 font-medium">Pilih Bahasa / Stack</label>
+          <div>
+            <label for="site-name" class="label">Site name</label>
+            <input id="site-name" bind:value={form.name} class="input" placeholder="my-site" />
           </div>
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {#each dockerPresets as p}
-              <button type="button" onclick={() => selectPreset(p)}
-                class="flex flex-col items-center gap-1 px-3 py-3 rounded-xl text-xs transition-all duration-150 cursor-pointer border {form.docker_language === p.lang ? 'bg-sky-500/15 border-sky-400/40 text-sky-300 shadow-[0_0_12px_rgba(56,189,248,0.1)]' : 'bg-white/[0.03] border-white/[0.07] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200'}">
-                <span class="text-xl">{p.icon}</span>
-                <span class="font-medium">{p.label}</span>
-                <span class="text-[0.65rem] opacity-60 leading-tight text-center">{p.desc}</span>
-              </button>
-            {/each}
+          <div>
+            <label for="site-domain" class="label">Domain</label>
+            <input id="site-domain" bind:value={form.domain} class="input" placeholder="example.com" />
           </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 pt-4 border-t border-white/[0.05]">
-          <div class="flex items-center gap-2 mb-1 sm:col-span-2">
-            <span class="text-xs font-semibold text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-full">2</span>
-            <label class="block text-xs text-slate-400 font-medium">Konfigurasi Container</label>
+          <div>
+            <label for="site-runtime" class="label">Runtime</label>
+            <select id="site-runtime" bind:value={form.runtime} onchange={onRuntimeChange} class="input">
+              {#each ['static', 'php', 'node', 'python', 'go', 'proxy', 'docker'] as r (r)}<option value={r}>{r}</option>{/each}
+            </select>
           </div>
-          <div class="sm:col-span-2">
-            <label class="block text-xs text-slate-500 mb-1.5">Docker Image</label>
-            <div class="relative">
-              <input
-                value={imageSearch}
-                oninput={(e) => onImageSearchInput(e.currentTarget.value)}
-                onfocus={() => { if (imageSearchResults.length > 0) imageSearchOpen = true; }}
-                onblur={() => setTimeout(() => { imageSearchOpen = false; }, 200)}
-                class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 font-mono"
-                placeholder="Search Docker Hub or type image:tag..."
-              />
-              {#if imageSearchOpen && imageSearchResults.length > 0}
-                <div class="absolute z-50 top-full mt-1 w-full bg-[#0c0d0f] border border-white/[0.1] rounded-xl shadow-2xl shadow-black/50 overflow-hidden max-h-64 overflow-y-auto">
-                  {#each imageSearchResults as img}
-                    <button
-                      onmousedown={() => selectImageResult(img)}
-                      class="w-full flex items-start gap-3 px-4 py-2.5 hover:bg-white/[0.05] transition text-left border-b border-white/[0.04] last:border-0 cursor-pointer"
-                    >
-                      <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-2">
-                          <span class="text-sm font-medium text-white truncate">{img.name}</span>
-                          {#if img.official}
-                            <span class="px-1.5 py-0.5 rounded text-[0.6rem] font-bold bg-sky-500/20 text-sky-300">OFFICIAL</span>
-                          {/if}
-                        </div>
-                        {#if img.description}
-                          <p class="text-[0.7rem] text-slate-500 truncate mt-0.5">{img.description}</p>
-                        {/if}
-                        <div class="flex gap-3 mt-0.5 text-[0.65rem] text-slate-600">
-                          <span>⭐ {fmtPulls(img.stars)}</span>
-                          <span>⬇ {fmtPulls(img.pulls)}</span>
-                        </div>
-                      </div>
-                    </button>
-                  {/each}
-                </div>
-              {/if}
+          {#if form.runtime === 'php'}
+            <div>
+              <label for="site-php" class="label">PHP version</label>
+              <select id="site-php" bind:value={form.php_version} class="input font-mono">
+                {#each phpVersions as v (v)}<option value={v}>PHP {v}</option>{/each}
+              </select>
             </div>
-            <p class="text-[0.65rem] text-slate-600 mt-1">Pilih dari preset di atas, search, atau ketik manual.</p>
-          </div>
+          {/if}
           <div>
-            <label class="block text-xs text-slate-500 mb-1.5">Container Name</label>
-            <input bind:value={form.docker_name} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40" placeholder="auto: site-name" />
+            <label for="site-root" class="label">Root path</label>
+            <input id="site-root" bind:value={form.root_path} class="input font-mono text-[13px]" placeholder="/home/user/htdocs/example.com (auto if empty)" />
           </div>
-          <div>
-            <label class="block text-xs text-slate-500 mb-1.5">Port Mapping</label>
-            <input bind:value={form.docker_ports} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40" placeholder="auto" />
-          </div>
-          <div>
-            <label class="block text-xs text-slate-500 mb-1.5">Volumes</label>
-            <input bind:value={form.docker_volume} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40" placeholder="/host/path:/container/path" />
-          </div>
-          <div>
-            <label class="block text-xs text-slate-500 mb-1.5">Restart Policy</label>
-            <select bind:value={form.docker_restart} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40">
-              <option value="unless-stopped">Unless Stopped</option>
-              <option value="always">Always</option>
-              <option value="no">No</option>
-            </select>
-          </div>
-          <div class="sm:col-span-2">
-            <label class="block text-xs text-slate-500 mb-1.5">Environment (one per line: KEY=value)</label>
-            <textarea bind:value={form.docker_env} rows={2} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 font-mono resize-none" placeholder="APP_ENV=production&#10;PORT=3000"></textarea>
+          <div class="flex items-end">
+            <label class="flex h-9 cursor-pointer items-center gap-2 text-sm text-muted">
+              <input type="checkbox" bind:checked={cfEnabled} class="checkbox" />
+              Cloudflare DNS
+            </label>
           </div>
         </div>
-      {/if}
-      {#if form.runtime === 'proxy'}
-        <div class="grid grid-cols-1 gap-4 mt-4 pt-4 border-t border-white/[0.05]">
-          <div>
-            <label class="block text-xs text-slate-500 mb-1.5">Proxy Pass URL <span class="text-red-400">*</span></label>
-            <input bind:value={form.proxy_pass_url} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40" placeholder="http://127.0.0.1:3000" />
-          </div>
-        </div>
-      {/if}
-      <!-- Create/Cancel buttons -->
-      <div class="flex gap-3 mt-4">
+
         {#if form.runtime === 'docker'}
-          <!-- Docker: require preset selection before enabling create -->
-          <button onclick={createSite} disabled={busy || !form.name || !form.domain || form.server_id <= 0 || !showDockerConfig}
-            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition disabled:opacity-40 cursor-pointer border-0">
-            {busy ? 'Creating...' : showDockerConfig ? 'Create' : 'Pilih bahasa dulu ↓'}
-          </button>
-        {:else}
-          <button onclick={createSite} disabled={busy || !form.name || !form.domain || form.server_id <= 0 || (form.runtime === 'proxy' && !form.proxy_pass_url.trim())}
-            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition disabled:opacity-40 cursor-pointer border-0">
-            {busy ? 'Creating...' : 'Create'}
-          </button>
+          <div class="mt-5 border-t border-line pt-5">
+            <p class="mb-3 flex items-center gap-2 text-sm font-semibold text-fg">
+              <span class="badge badge-accent">1</span> Pilih bahasa / stack
+            </p>
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {#each dockerPresets as p (p.lang)}
+                <button type="button" onclick={() => selectPreset(p)}
+                  class="flex cursor-pointer flex-col items-start gap-0.5 rounded-lg border px-3 py-2.5 text-left transition-colors duration-150 {form.docker_language === p.lang ? 'border-accent bg-accent/10' : 'border-line bg-surface hover:border-line-strong hover:bg-surface-2'}">
+                  <span class="text-sm font-medium {form.docker_language === p.lang ? 'text-accent' : 'text-fg'}">{p.label}</span>
+                  <span class="text-xs leading-tight text-subtle">{p.desc}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+          <div class="mt-5 grid grid-cols-1 gap-4 border-t border-line pt-5 sm:grid-cols-2">
+            <p class="flex items-center gap-2 text-sm font-semibold text-fg sm:col-span-2">
+              <span class="badge badge-accent">2</span> Konfigurasi container
+            </p>
+            <div class="sm:col-span-2">
+              <label for="site-docker-image" class="label">Docker image</label>
+              <div class="relative">
+                <input
+                  id="site-docker-image"
+                  value={imageSearch}
+                  oninput={(e) => onImageSearchInput(e.currentTarget.value)}
+                  onfocus={() => { if (imageSearchResults.length > 0) imageSearchOpen = true; }}
+                  onblur={() => setTimeout(() => { imageSearchOpen = false; }, 200)}
+                  class="input font-mono text-[13px]"
+                  placeholder="Search Docker Hub or type image:tag…"
+                  autocomplete="off"
+                />
+                {#if imageSearchOpen && imageSearchResults.length > 0}
+                  <div class="popover absolute top-full z-50 mt-1 max-h-64 w-full overflow-y-auto py-1">
+                    {#each imageSearchResults as img (img.name)}
+                      <button
+                        onmousedown={() => selectImageResult(img)}
+                        class="flex w-full cursor-pointer flex-col px-3 py-2 text-left transition-colors hover:bg-surface-2"
+                      >
+                        <span class="flex items-center gap-2">
+                          <span class="truncate font-mono text-[13px] text-fg">{img.name}</span>
+                          {#if img.official}<span class="badge badge-accent">Official</span>{/if}
+                        </span>
+                        {#if img.description}
+                          <span class="mt-0.5 truncate text-xs text-muted">{img.description}</span>
+                        {/if}
+                        <span class="mt-0.5 flex gap-3 text-xs text-subtle tabular-nums">
+                          <span class="inline-flex items-center gap-1"><Star size={11} /> {fmtPulls(img.stars)}</span>
+                          <span class="inline-flex items-center gap-1"><Download size={11} /> {fmtPulls(img.pulls)}</span>
+                        </span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+              <p class="hint">Pilih dari preset di atas, search, atau ketik manual.</p>
+            </div>
+            <div>
+              <label for="site-docker-name" class="label">Container name</label>
+              <input id="site-docker-name" bind:value={form.docker_name} class="input" placeholder="auto: site-name" />
+            </div>
+            <div>
+              <label for="site-docker-ports" class="label">Port mapping</label>
+              <input id="site-docker-ports" bind:value={form.docker_ports} class="input font-mono text-[13px]" placeholder="auto" />
+            </div>
+            <div>
+              <label for="site-docker-volume" class="label">Volumes</label>
+              <input id="site-docker-volume" bind:value={form.docker_volume} class="input font-mono text-[13px]" placeholder="/host/path:/container/path" />
+            </div>
+            <div>
+              <label for="site-docker-restart" class="label">Restart policy</label>
+              <select id="site-docker-restart" bind:value={form.docker_restart} class="input">
+                <option value="unless-stopped">Unless stopped</option>
+                <option value="always">Always</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+            <div class="sm:col-span-2">
+              <label for="site-docker-env" class="label">Environment (one per line: KEY=value)</label>
+              <textarea id="site-docker-env" bind:value={form.docker_env} rows={2} class="input resize-none font-mono text-[13px]" placeholder="APP_ENV=production&#10;PORT=3000"></textarea>
+            </div>
+          </div>
         {/if}
-        <button onclick={() => showCreate = false} class="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Cancel</button>
-      </div>
-      {#if cfResult}
-        <div class="mt-3 text-xs {cfResult.provisioned ? 'text-emerald-400' : 'text-amber-400'}">
-          {cfResult.provisioned ? `DNS provisioned in zone ${cfResult.zone}` : cfResult.error}
+
+        {#if form.runtime === 'proxy'}
+          <div class="mt-5 border-t border-line pt-5">
+            <label for="site-proxy" class="label">Proxy pass URL <span class="text-danger">*</span></label>
+            <input id="site-proxy" bind:value={form.proxy_pass_url} class="input font-mono text-[13px]" placeholder="http://127.0.0.1:3000" />
+          </div>
+        {/if}
+
+        <div class="mt-5 flex flex-wrap items-center gap-2">
+          <button onclick={createSite} disabled={createDisabled} class="btn btn-primary btn-sm">
+            {busy ? 'Creating…' : form.runtime === 'docker' && !showDockerConfig ? 'Pilih bahasa dulu' : 'Create site'}
+          </button>
+          <button onclick={() => (showCreate = false)} class="btn btn-ghost btn-sm">Cancel</button>
         </div>
-      {/if}
+        {#if cfResult}
+          <p class="mt-3 text-xs {cfResult.provisioned ? 'text-success' : 'text-warning'}">
+            {cfResult.provisioned ? `DNS provisioned in zone ${cfResult.zone}` : cfResult.error}
+          </p>
+        {/if}
+      </div>
     </div>
   {/if}
 
-  <!-- Filters -->
-  <div class="flex items-center gap-3 mb-4">
-    <select bind:value={runtimeFilter} onchange={() => { page = 1; fetchSites(); }}
-      class="bg-white/[0.04] border border-white/[0.07] rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-sky-400/40">
-      <option value="">All runtimes</option>
-      {#each ['static', 'php', 'node', 'python', 'go', 'docker', 'proxy'] as r}<option value={r}>{r}</option>{/each}
-    </select>
-    <select bind:value={statusFilter} onchange={() => { page = 1; fetchSites(); }}
-      class="bg-white/[0.04] border border-white/[0.07] rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-sky-400/40">
-      <option value="">All statuses</option>
-      {#each ['active', 'pending', 'deploying', 'disabled'] as s}<option value={s}>{s}</option>{/each}
-    </select>
-  </div>
-
-  {#if loading}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20"><div class="animate-pulse text-[var(--text-muted)]">Loading sites...</div></div>
-  {:else if sites.length === 0}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-      <Globe size={48} class="mb-4 opacity-30 mx-auto" />
-      <h2 class="text-lg font-semibold mb-2">No Sites</h2>
-      <p class="text-sm text-slate-500 mb-6">Create your first site to get started.</p>
-      <button onclick={() => showCreate = true} class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition cursor-pointer border-0">+ Create Site</button>
+  <div class="card">
+    <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
+      <div class="relative w-full sm:w-64">
+        <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+        <input type="search" aria-label="Search domains" placeholder="Search domains…" value={searchInput} oninput={onSearch} class="input h-8 pl-8" />
+      </div>
+      <select aria-label="Runtime filter" bind:value={runtimeFilter} onchange={() => (page = 1)} class="input h-8 w-auto text-[13px]">
+        <option value="">All runtimes</option>
+        {#each ['static', 'php', 'node', 'python', 'go', 'docker', 'proxy'] as r (r)}<option value={r}>{r}</option>{/each}
+      </select>
+      <select aria-label="Status filter" bind:value={statusFilter} onchange={() => (page = 1)} class="input h-8 w-auto text-[13px]">
+        <option value="">All statuses</option>
+        {#each ['active', 'pending', 'deploying', 'disabled'] as s (s)}<option value={s}>{s}</option>{/each}
+      </select>
+      <label class="ml-auto flex items-center gap-2 text-xs text-subtle">
+        Per page
+        <select bind:value={pageSize} onchange={() => (page = 1)} class="input h-8 w-auto text-[13px]">
+          {#each PAGE_SIZES as ps (ps)}<option value={ps}>{ps}</option>{/each}
+        </select>
+      </label>
     </div>
-  {:else}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full border-separate border-spacing-0">
-          <thead><tr class="text-left">
-            {#each [
-              { key: 'domain', label: 'Domain' },
-              { key: 'runtime', label: 'Runtime' },
-              { key: 'managed_by', label: 'Managed' },
-              { key: null, label: 'System User' },
-              { key: null, label: 'Root / Proxy' },
-              { key: 'status', label: 'Status' },
-              { key: null, label: 'SSL' },
-              { key: 'created_at', label: 'Created' },
-              { key: null, label: '' },
-            ] as col}
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] whitespace-nowrap {col.key ? 'cursor-pointer hover:text-slate-300' : ''}"
-                onclick={() => col.key && toggleSort(col.key)}>
-                {col.label} {col.key && sortKey === col.key ? (sortDir === 'asc' ? '↑' : '↓') : ''}
-              </th>
-            {/each}
-          </tr></thead>
+
+    {#if loading}
+      <div class="space-y-3 p-4">
+        {#each Array(5) as _, i (i)}<div class="skeleton h-9"></div>{/each}
+      </div>
+    {:else if sites.length === 0}
+      <EmptyState icon={Globe} title="No sites" description="Create your first site to get started." actionLabel="Create site" onaction={() => (showCreate = true)} />
+    {:else}
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              {#each columns as col (col.label)}
+                <th class={col.cls ?? ''}>
+                  {#if col.key}
+                    <button class="inline-flex cursor-pointer items-center gap-1 hover:text-fg" onclick={() => toggleSort(col.key!)}>
+                      {col.label}
+                      {#if sortKey === col.key}
+                        {#if sortDir === 'asc'}<ArrowUp size={12} />{:else}<ArrowDown size={12} />{/if}
+                      {/if}
+                    </button>
+                  {:else}
+                    {col.label}
+                  {/if}
+                </th>
+              {/each}
+              <th><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
           <tbody>
-            {#each sortedSites as s}
-              <tr class="hover:bg-white/[0.02] transition">
-                <td class="px-5 py-3.5 border-b border-white/[0.03] font-medium align-middle">
-                  <a href="/sites/{s.id}" class="text-sky-400 hover:text-sky-300 hover:underline transition-colors">{s.domain}</a>
+            {#each sortedSites as s (s.id)}
+              <tr>
+                <td class="font-medium">
+                  <a href="/sites/{s.id}" class="text-fg hover:text-accent">{s.domain}</a>
                 </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] text-xs align-middle">
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[0.72rem] font-medium bg-white/[0.05] text-slate-300">{s.runtime}</span>
-                </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[0.72rem] font-medium bg-sky-500/10 text-sky-300">
-                    <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span>{s.managed_by || 'sigardapanel'}
-                  </span>
-                </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] text-xs text-slate-400 align-middle">{s.system_user || '—'}</td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] text-xs text-slate-500 align-middle max-w-[18rem] truncate" title={s.proxy_pass_url || s.root_path || s.conf_file || ''}>{s.proxy_pass_url || s.root_path || '—'}</td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                  <div class="flex flex-col gap-1">
+                <td><span class="badge">{s.runtime}</span></td>
+                <td class="max-2xl:hidden"><span class="badge badge-accent">{s.managed_by || 'sigardapanel'}</span></td>
+                <td class="font-mono text-[13px] text-muted max-2xl:hidden">{s.system_user || '—'}</td>
+                <td class="max-w-[18rem] truncate font-mono text-[13px] text-muted max-md:hidden" title={s.proxy_pass_url || s.root_path || s.conf_file || ''}>{s.proxy_pass_url || s.root_path || '—'}</td>
+                <td>
+                  <div class="flex flex-col items-start gap-1">
                     <StatusPill status={s.status} />
                     {#if s.status === 'pending'}
-                      <span class="text-[0.6rem] text-amber-400/70 leading-tight">
-                        {#if !s.conf_file}
-                          ⚠ nginx config belum terdaftar
-                        {:else}
-                          ⚠ menunggu provisioning
-                        {/if}
+                      <span class="inline-flex items-center gap-1 text-xs leading-tight text-warning">
+                        <TriangleAlert size={11} />
+                        {!s.conf_file ? 'nginx config belum terdaftar' : 'menunggu provisioning'}
                       </span>
                     {/if}
                   </div>
                 </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] text-xs align-middle">
-                  {#if s.ssl_status && s.ssl_status !== 'none'}
-                    <span class="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[0.72rem] font-medium bg-emerald-500/10 text-emerald-400"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>{s.ssl_status}</span>
-                  {:else}
-                    <span class="text-slate-600">—</span>
-                  {/if}
-                  {#if s.app_status}
-                    <span class="inline-flex items-center gap-1 ml-1.5 {s.app_status === 'running' ? 'text-emerald-400' : 'text-slate-500'}">
-                      <span class="w-1 h-1 rounded-full {s.app_status === 'running' ? 'bg-emerald-400' : 'bg-slate-600'}"></span>
-                      <span class="text-[0.65rem]">{s.app_status}</span>
-                    </span>
-                  {/if}
+                <td class="max-sm:hidden">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    {#if s.ssl_status && s.ssl_status !== 'none'}
+                      <span class="badge badge-success"><span class="dot"></span>{s.ssl_status}</span>
+                    {:else}
+                      <span class="text-subtle">—</span>
+                    {/if}
+                    {#if s.app_status}
+                      <span class="inline-flex items-center gap-1 text-xs {s.app_status === 'running' ? 'text-success' : 'text-subtle'}">
+                        <span class="dot"></span>{s.app_status}
+                      </span>
+                    {/if}
+                  </div>
                 </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] text-xs text-slate-500 align-middle whitespace-nowrap">
+                <td class="whitespace-nowrap text-muted tabular-nums max-md:hidden">
                   {new Date(s.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
                 </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                  <a href="/sites/{s.id}" class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:bg-white/[0.05] hover:text-slate-200 transition-all duration-150 cursor-pointer whitespace-nowrap">Manage →</a>
+                <td class="text-right">
+                  <a href="/sites/{s.id}" class="btn btn-ghost btn-xs">Manage <ChevronRight size={12} /></a>
                 </td>
               </tr>
             {/each}
           </tbody>
         </table>
       </div>
-    </div>
+    {/if}
+  </div>
 
-    <!-- Pagination -->
-    <div class="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6">
-      <div class="flex items-center gap-3 text-xs text-slate-500">
-        <span>Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalCount)} of {totalCount}</span>
-        <span class="text-slate-700">&middot;</span>
-        <div class="flex items-center gap-1.5">
-          <span>Per page</span>
-          <select bind:value={pageSize} onchange={() => { page = 1; fetchSites(); }}
-            class="bg-white/[0.04] border border-white/[0.07] rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none focus:border-sky-400/40">
-            {#each PAGE_SIZES as ps}<option value={ps}>{ps}</option>{/each}
-          </select>
-        </div>
-      </div>
-      <div class="flex items-center gap-1">
-        <button disabled={page <= 1} onclick={() => page--}
-          class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-xs font-medium text-slate-400 hover:bg-white/[0.05] hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"><ChevronLeft size={14} /></button>
-        {#each pages() as p}
-          {#if p === '...'}
-            <span class="w-8 h-8 flex items-center justify-center text-xs text-slate-600">…</span>
-          {:else}
-            <button onclick={() => page = p as number}
-              class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-xs font-medium transition-all duration-150 {p === page ? 'bg-sky-500/20 text-sky-300 border border-sky-400/30 shadow-[0_0_12px_rgba(56,189,248,0.1)]' : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'}">{p}</button>
-          {/if}
-        {/each}
-        <button disabled={page >= totalPages} onclick={() => page++}
-          class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-xs font-medium text-slate-400 hover:bg-white/[0.05] hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"><ChevronRight size={14} /></button>
-      </div>
-    </div>
+  {#if !loading && sites.length > 0}
+    <Pagination totalItems={totalCount} {pageSize} currentPage={page} onPageChange={(p) => (page = p)} />
   {/if}
 </DashboardLayout>

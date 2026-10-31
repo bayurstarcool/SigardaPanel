@@ -1,7 +1,8 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { ScrollText, RefreshCw, AlertTriangle, Globe, Server, Box } from 'lucide-svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import { ScrollText, RefreshCw, TriangleAlert, Globe, Server, Box } from 'lucide-svelte';
   import { toasts } from '$lib/toast.svelte';
 
   let { siteId }: { siteId: number } = $props();
@@ -54,38 +55,48 @@
 
   const isDocker = $derived(site?.runtime === 'docker');
   const logOptions = $derived(isDocker
-    ? [{ key: 'container', label: 'Container Logs', icon: Box }]
-    : [{ key: 'error', label: 'Nginx Error', icon: AlertTriangle }, { key: 'access', label: 'Nginx Access', icon: Globe }, { key: 'php', label: 'PHP-FPM', icon: Server }]
+    ? [{ key: 'container', label: 'Container logs', icon: Box }]
+    : [{ key: 'error', label: 'Nginx error', icon: TriangleAlert }, { key: 'access', label: 'Nginx access', icon: Globe }, { key: 'php', label: 'PHP-FPM', icon: Server }]
   );
+
+  function lineClass(entry: string): string {
+    const l = entry.toLowerCase();
+    if (l.includes('error') || l.includes('fatal') || entry.includes('[crit]')) return 'text-danger';
+    if (l.includes('warn')) return 'text-warning';
+    return 'text-muted';
+  }
 </script>
 
-<div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300">
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-white/[0.05]">
-    <div class="flex items-center gap-2.5"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-sky-400/10 flex items-center justify-center"><ScrollText size={13} class="text-sky-400" /></div><span class="text-sm font-semibold text-slate-200">{isDocker ? 'Docker' : 'Site'} Logs</span>{#if logEntries.length > 0}<span class="text-[0.65rem] text-slate-500 bg-white/[0.04] px-2 py-0.5 rounded-full border border-white/[0.06]">{logEntries.length} lines</span>{/if}</div>
-    <button onclick={() => { logLoaded = false; loadLogs(); }} class="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition"><RefreshCw size={12} class={logLoading ? 'animate-spin' : ''} /> Refresh</button>
+<div class="card overflow-hidden">
+  <div class="card-header">
+    <div class="flex items-center gap-2">
+      <ScrollText size={16} class="text-subtle" />
+      <h3 class="card-title">{isDocker ? 'Docker' : 'Site'} logs</h3>
+      {#if logEntries.length > 0}<span class="badge tabular-nums">{logEntries.length} lines</span>{/if}
+    </div>
+    <button onclick={() => { logLoaded = false; loadLogs(); }} class="btn btn-ghost btn-sm"><RefreshCw size={14} class={logLoading ? 'animate-spin' : ''} /> Refresh</button>
   </div>
-  <div class="flex gap-1 px-5 pt-3 pb-0 overflow-x-auto scrollbar-hide">
-    {#each logOptions as logOpt}
-      <button onclick={() => { logType = logOpt.key; logLoaded = false; loadLogs(); }} class="flex items-center gap-2 px-3.5 py-2.5 rounded-t-xl text-xs font-medium transition-all duration-200 whitespace-nowrap border border-b-0 {logType === logOpt.key ? 'bg-white/[0.05] text-slate-200 border-white/[0.08]' : 'text-slate-500 hover:text-slate-400 hover:bg-white/[0.02] border-transparent'}"><svelte:component this={logOpt.icon} size={13} /><span>{logOpt.label}</span></button>
-    {/each}
-  </div>
-  <div class="px-5 py-2 bg-white/[0.01] border-b border-white/[0.04] flex items-center justify-between">
-    <span class="text-[0.65rem] text-slate-600">{#if isDocker}Docker container logs{:else if logType === 'error'}Nginx error log{:else if logType === 'access'}Nginx access log{:else if logType === 'php'}PHP-FPM log{/if}</span>
-    {#if logPath}<span class="text-[0.6rem] text-slate-600 font-mono truncate max-w-[300px]" title={logPath}>{logPath}</span>{/if}
+  <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+    <div class="segmented">
+      {#each logOptions as logOpt (logOpt.key)}
+        <button onclick={() => { logType = logOpt.key; logLoaded = false; loadLogs(); }} class="segment {logType === logOpt.key || isDocker ? 'segment-active' : ''}">
+          <logOpt.icon size={12} /> {logOpt.label}
+        </button>
+      {/each}
+    </div>
+    {#if logPath}<span class="max-w-[300px] truncate font-mono text-xs text-subtle" title={logPath}>{logPath}</span>{/if}
   </div>
   {#if logLoading}
-    <div class="p-6 space-y-2">{#each Array(12) as _, i}<div class="flex items-center gap-3"><div class="h-2 w-16 bg-white/[0.03] rounded animate-pulse flex-shrink-0"></div><div class="h-2.5 bg-gradient-to-r from-white/[0.03] via-white/[0.06] to-white/[0.03] rounded animate-pulse" style="width: {40 + (i * 7) % 50}%"></div></div>{/each}</div>
+    <div class="space-y-2 p-5">{#each Array(12) as _, i (i)}<div class="skeleton h-2.5" style="width: {40 + (i * 7) % 50}%"></div>{/each}</div>
   {:else if !logExists}
-    <div class="flex flex-col items-center justify-center py-14"><ScrollText size={22} class="text-white/[0.08] mb-3" /><p class="text-sm font-medium text-slate-400 mb-0.5">{isDocker ? 'Container not found' : 'Log file not found'}</p></div>
+    <EmptyState compact icon={ScrollText} title={isDocker ? 'Container not found' : 'Log file not found'} />
   {:else if logEntries.length === 0}
-    <div class="flex flex-col items-center justify-center py-14"><ScrollText size={22} class="text-white/[0.08] mb-3" /><p class="text-sm font-medium text-slate-400 mb-0.5">Log is empty</p></div>
+    <EmptyState compact icon={ScrollText} title="Log is empty" />
   {:else}
-    <div class="p-1 max-h-[60vh] overflow-y-auto">
-      <pre class="bg-[#0d1117] text-emerald-300 font-mono text-[11px] leading-relaxed p-4 rounded-b-2xl overflow-x-auto whitespace-pre-wrap border border-white/[0.04]">{#each logEntries as entry}{@const isErr = entry.toLowerCase().includes('error') || entry.toLowerCase().includes('fatal') || entry.includes('[crit]')}{@const isWarn = entry.toLowerCase().includes('warn')}{#if isErr}<span class="text-red-400">{entry}</span>{:else if isWarn}<span class="text-amber-400">{entry}</span>{:else}<span class="text-emerald-300/80">{entry}</span>{/if}
+    <div class="max-h-[60vh] overflow-y-auto bg-surface-2/40">
+      <pre class="overflow-x-auto p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{#each logEntries as entry, i (i)}<span class={lineClass(entry)}>{entry}</span>
 {/each}</pre>
     </div>
-    <div class="px-5 py-2 border-t border-white/[0.04] bg-white/[0.01] flex items-center justify-between">
-      <span class="text-[0.65rem] text-slate-600">Showing last {logEntries.length} lines</span>
-    </div>
+    <div class="border-t border-line px-5 py-2 text-xs text-subtle tabular-nums">Showing last {logEntries.length} lines</div>
   {/if}
 </div>

@@ -3,40 +3,51 @@
   import { apiFetch } from '$lib/api';
   import { fmtRelative } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
   import StatusPill from '$components/StatusPill.svelte';
   import {
-    Zap, X, RefreshCw,
-    Globe, Trash2, Rocket,
-    ShieldCheck, RotateCw,
-    Server, Database, Users, UserMinus,
-    Play, Square, RefreshCw as RefreshIcon,
-    HardDrive, Download, Upload,
-    RotateCcw
+    Zap, X, RefreshCw, Globe, Trash2, Rocket, ShieldCheck, Server, Database, Users, UserMinus,
+    Play, Square, HardDrive, Download, RotateCcw,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
   let jobs = $state<any[]>([]);
   let loading = $state(true);
+  let refreshing = $state(false);
+  let inFlight = false;
   let statusFilter = $state('');
   let cancelling = $state<string | null>(null);
-
-  let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
   onMount(() => {
     if (!auth.user) { loading = false; return; }
     loadJobs();
-    refreshInterval = setInterval(loadJobs, 5000);
-    return () => { if (refreshInterval) clearInterval(refreshInterval); };
+    // Poll every 5s, but only while the tab is visible.
+    const interval = setInterval(() => { if (!document.hidden) loadJobs(); }, 5000);
+    const onVisible = () => { if (!document.hidden) loadJobs(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   });
 
   async function loadJobs() {
-    if (!auth.user) return;
+    if (!auth.user || inFlight) return;
+    inFlight = true;
     try {
       const d = await apiFetch(auth.token, 'GET', 'jobs');
       jobs = d?.jobs || [];
     } catch {}
+    inFlight = false;
     if (loading) loading = false;
+  }
+
+  async function manualRefresh() {
+    refreshing = true;
+    await loadJobs();
+    refreshing = false;
   }
 
   async function cancelJob(id: string) {
@@ -50,8 +61,6 @@
     } finally { cancelling = null; }
   }
 
-  const filteredJobs = $derived(statusFilter ? jobs.filter((j: any) => j.status === statusFilter) : jobs);
-
   const statusOptions = [
     { value: '', label: 'All' },
     { value: 'running', label: 'Running' },
@@ -60,193 +69,132 @@
     { value: 'succeeded', label: 'Completed' },
   ];
 
-  const jobTypeLabels: Record<string, string> = {
-    'site.create': 'Create Site',
-    'site.delete': 'Delete Site',
-    'site.deploy': 'Deploy Site',
-    'ssl.issue': 'Issue SSL',
-    'ssl.renew': 'Renew SSL',
-    'ssl.auto-renew': 'Auto-Renew SSL',
-    'nginx.reload': 'Reload Nginx',
-    'backup.create': 'Create Backup',
-    'backup.restore': 'Restore Backup',
-    'backup.upload': 'Upload Backup',
-    'database.create': 'Create Database',
-    'database.delete': 'Delete Database',
-    'dbuser.create': 'Create DB User',
-    'dbuser.delete': 'Delete DB User',
-    'app.start': 'Start App',
-    'app.stop': 'Stop App',
-    'app.restart': 'Restart App',
-    'db_backup.create': 'Backup Database',
+  const counts = $derived(
+    jobs.reduce((acc: Record<string, number>, j: any) => { acc[j.status] = (acc[j.status] || 0) + 1; return acc; }, {}),
+  );
+  const filteredJobs = $derived(statusFilter ? jobs.filter((j: any) => j.status === statusFilter) : jobs);
+
+  const jobTypes: Record<string, { label: string; icon: any; danger?: boolean }> = {
+    'site.create': { label: 'Create Site', icon: Globe },
+    'site.delete': { label: 'Delete Site', icon: Trash2, danger: true },
+    'site.deploy': { label: 'Deploy Site', icon: Rocket },
+    'ssl.issue': { label: 'Issue SSL', icon: ShieldCheck },
+    'ssl.renew': { label: 'Renew SSL', icon: ShieldCheck },
+    'ssl.auto-renew': { label: 'Auto-Renew SSL', icon: ShieldCheck },
+    'nginx.reload': { label: 'Reload Nginx', icon: RotateCcw },
+    'backup.create': { label: 'Create Backup', icon: HardDrive },
+    'backup.restore': { label: 'Restore Backup', icon: Download },
+    'backup.upload': { label: 'Upload Backup', icon: HardDrive },
+    'database.create': { label: 'Create Database', icon: Database },
+    'database.delete': { label: 'Delete Database', icon: Trash2, danger: true },
+    'dbuser.create': { label: 'Create DB User', icon: Users },
+    'dbuser.delete': { label: 'Delete DB User', icon: UserMinus, danger: true },
+    'app.start': { label: 'Start App', icon: Play },
+    'app.stop': { label: 'Stop App', icon: Square },
+    'app.restart': { label: 'Restart App', icon: RefreshCw },
+    'db_backup.create': { label: 'Backup Database', icon: Database },
   };
 
-  function jobLabel(type: string): string {
-    return jobTypeLabels[type] || type;
-  }
-
-  const jobTypeColors: Record<string, string> = {
-    'site.create': 'text-emerald-400 bg-emerald-500/10',
-    'site.delete': 'text-red-400 bg-red-500/10',
-    'site.deploy': 'text-sky-400 bg-sky-500/10',
-    'ssl.issue': 'text-amber-400 bg-amber-500/10',
-    'ssl.renew': 'text-amber-400 bg-amber-500/10',
-    'ssl.auto-renew': 'text-amber-400 bg-amber-500/10',
-    'nginx.reload': 'text-purple-400 bg-purple-500/10',
-    'backup.create': 'text-cyan-400 bg-cyan-500/10',
-    'backup.restore': 'text-cyan-400 bg-cyan-500/10',
-    'backup.upload': 'text-cyan-400 bg-cyan-500/10',
-    'database.create': 'text-violet-400 bg-violet-500/10',
-    'database.delete': 'text-red-400 bg-red-500/10',
-    'dbuser.create': 'text-indigo-400 bg-indigo-500/10',
-    'dbuser.delete': 'text-red-400 bg-red-500/10',
-    'app.start': 'text-emerald-400 bg-emerald-500/10',
-    'app.stop': 'text-orange-400 bg-orange-500/10',
-    'app.restart': 'text-sky-400 bg-sky-500/10',
-    'db_backup.create': 'text-cyan-400 bg-cyan-500/10',
-  };
-
-  function jobColor(type: string): string {
-    return jobTypeColors[type] || 'text-slate-400 bg-slate-500/10';
-  }
-
-  const jobIconBg: Record<string, string> = {
-    'site.create': 'bg-emerald-500/15 text-emerald-400',
-    'site.delete': 'bg-red-500/15 text-red-400',
-    'site.deploy': 'bg-sky-500/15 text-sky-400',
-    'ssl.issue': 'bg-amber-500/15 text-amber-400',
-    'ssl.renew': 'bg-amber-500/15 text-amber-400',
-    'ssl.auto-renew': 'bg-amber-500/15 text-amber-400',
-    'nginx.reload': 'bg-purple-500/15 text-purple-400',
-    'backup.create': 'bg-cyan-500/15 text-cyan-400',
-    'backup.restore': 'bg-cyan-500/15 text-cyan-400',
-    'backup.upload': 'bg-cyan-500/15 text-cyan-400',
-    'database.create': 'bg-violet-500/15 text-violet-400',
-    'database.delete': 'bg-red-500/15 text-red-400',
-    'dbuser.create': 'bg-indigo-500/15 text-indigo-400',
-    'dbuser.delete': 'bg-red-500/15 text-red-400',
-    'app.start': 'bg-emerald-500/15 text-emerald-400',
-    'app.stop': 'bg-orange-500/15 text-orange-400',
-    'app.restart': 'bg-sky-500/15 text-sky-400',
-    'db_backup.create': 'bg-cyan-500/15 text-cyan-400',
-  };
-
-  function iconBg(type: string): string {
-    return jobIconBg[type] || 'bg-slate-500/15 text-slate-400';
+  function jobType(type: string) {
+    return jobTypes[type] ?? { label: type, icon: Zap };
   }
 </script>
 
 <DashboardLayout active="Jobs">
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-    <div>
-      <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent">Jobs</h1>
-      <p class="text-sm text-slate-500 mt-1">{loading ? 'Loading...' : `${jobs.length} job(s) total`}</p>
-    </div>
-    <div class="flex items-center gap-3">
-      <select bind:value={statusFilter}
-        class="bg-white/[0.04] border border-white/[0.07] rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-sky-400/40">
-        {#each statusOptions as opt}
-          <option value={opt.value}>{opt.label}</option>
-        {/each}
-      </select>
-      <button onclick={loadJobs}
-        class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium text-slate-400 hover:bg-white/[0.05] hover:text-slate-200 transition cursor-pointer border border-white/[0.07]">
-        <RefreshCw size={14} /> Refresh
+  <PageHeader title="Jobs" description={loading ? 'Loading…' : `${jobs.length} job(s) total`}>
+    {#snippet actions()}
+      <button onclick={manualRefresh} class="btn btn-secondary btn-sm" disabled={refreshing}>
+        <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} /> Refresh
       </button>
-    </div>
-  </div>
+    {/snippet}
+  </PageHeader>
 
-  {#if loading}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-      <div class="animate-pulse text-[var(--text-muted)]">Loading...</div>
-    </div>
-  {:else if filteredJobs.length === 0}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-      <Zap size={48} class="mb-4 opacity-30 mx-auto" />
-      <h2 class="text-lg font-semibold mb-2">{statusFilter ? `No ${statusFilter} jobs` : 'No Jobs'}</h2>
-      <p class="text-sm text-slate-500">Jobs will appear here when tasks are running.</p>
-    </div>
-  {:else}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-      <div class="divide-y divide-white/5">
-        {#each filteredJobs as j}
-          {@const canCancel = j.status === 'queued' || j.status === 'running'}
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-4 hover:bg-white/[0.02] transition">
-            <div class="flex items-start gap-3 min-w-0 flex-1">
-              <div class="shrink-0 w-9 h-9 rounded-lg flex items-center justify-center {iconBg(j.type)}">
-                {#if j.type === 'site.create'}
-                  <Globe size={16} />
-                {:else if j.type === 'site.delete'}
-                  <Trash2 size={16} />
-                {:else if j.type === 'site.deploy'}
-                  <Rocket size={16} />
-                {:else if j.type === 'ssl.issue' || j.type === 'ssl.renew' || j.type === 'ssl.auto-renew'}
-                  <ShieldCheck size={16} />
-                {:else if j.type === 'nginx.reload'}
-                  <RotateCcw size={16} />
-                {:else if j.type === 'backup.create' || j.type === 'backup.upload'}
-                  <HardDrive size={16} />
-                {:else if j.type === 'backup.restore'}
-                  <Download size={16} />
-                {:else if j.type === 'database.create'}
-                  <Database size={16} />
-                {:else if j.type === 'database.delete'}
-                  <Trash2 size={16} />
-                {:else if j.type === 'dbuser.create'}
-                  <Users size={16} />
-                {:else if j.type === 'dbuser.delete'}
-                  <UserMinus size={16} />
-                {:else if j.type === 'app.start'}
-                  <Play size={16} />
-                {:else if j.type === 'app.stop'}
-                  <Square size={16} />
-                {:else if j.type === 'app.restart'}
-                  <RefreshCw size={16} />
-                {:else if j.type === 'db_backup.create'}
-                  <Database size={16} />
-                {:else}
-                  <Zap size={16} />
-                {/if}
-              </div>
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm font-medium text-slate-200">{jobLabel(j.type)}</span>
-                </div>
-                {#if j.description}
-                  <div class="text-xs text-slate-400 mt-0.5 truncate">{j.description}</div>
-                {/if}
-                <div class="flex items-center gap-1.5 mt-1 text-xs text-slate-500">
-                  {#if j.server_id}
-                    <Server size={11} />
-                    <span>#{j.server_id}</span>
-                  {/if}
-                  {#if j.site_id}
-                    <span class="text-slate-600">&bull;</span>
-                    <Globe size={11} />
-                    <span>Site #{j.site_id}</span>
-                  {/if}
-                  <span class="text-slate-600">&bull;</span>
-                  <span>{fmtRelative(j.created_at)}</span>
-                  {#if j.attempts > 1}
-                    <span class="text-slate-600">&bull;</span>
-                    <span>Attempt {j.attempts}/{j.max_attempts}</span>
-                  {/if}
-                </div>
-              </div>
-            </div>
-            <div class="flex items-center gap-3 shrink-0">
-              <StatusPill status={j.status} />
-              {#if canCancel}
-                <button onclick={() => cancelJob(j.id)} disabled={cancelling === j.id}
-                  class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-all duration-150 cursor-pointer border-0 whitespace-nowrap disabled:opacity-40">
-                  <X size={12} />
-                  {cancelling === j.id ? 'Cancelling...' : 'Cancel'}
-                </button>
-              {/if}
-            </div>
-          </div>
+  <div class="card">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+      <div class="segmented max-w-full overflow-x-auto">
+        {#each statusOptions as opt (opt.value)}
+          <button class="segment {statusFilter === opt.value ? 'segment-active' : ''}" onclick={() => (statusFilter = opt.value)}>
+            {opt.label}
+            {#if opt.value && counts[opt.value]}<span class="text-subtle tabular-nums">{counts[opt.value]}</span>{/if}
+          </button>
         {/each}
       </div>
+      <span class="text-xs text-subtle max-sm:hidden">Auto-refreshes every 5s</span>
     </div>
-  {/if}
+
+    {#if loading}
+      <div class="space-y-3 p-4">
+        {#each Array(5) as _, i (i)}<div class="skeleton h-10"></div>{/each}
+      </div>
+    {:else if filteredJobs.length === 0}
+      <EmptyState
+        compact
+        icon={Zap as any}
+        title={statusFilter ? `No ${statusOptions.find((o) => o.value === statusFilter)?.label.toLowerCase()} jobs` : 'No jobs'}
+        description="Jobs will appear here when tasks are running." />
+    {:else}
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th class="max-sm:hidden">Target</th>
+              <th>Status</th>
+              <th class="max-sm:hidden">Created</th>
+              <th class="text-right"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each filteredJobs as j (j.id)}
+              {@const t = jobType(j.type)}
+              {@const canCancel = j.status === 'queued' || j.status === 'running'}
+              <tr>
+                <td class="max-w-0 min-w-56">
+                  <div class="flex items-start gap-3">
+                    <div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 {t.danger ? 'text-danger' : 'text-muted'}">
+                      <t.icon size={16} />
+                    </div>
+                    <div class="min-w-0">
+                      <div class="font-medium text-fg">{t.label}</div>
+                      {#if j.description}
+                        <div class="truncate text-[13px] text-muted" title={j.description}>{j.description}</div>
+                      {/if}
+                      {#if j.status === 'failed' && j.error}
+                        <div class="truncate font-mono text-xs text-danger" title={j.error}>{j.error}</div>
+                      {/if}
+                      <div class="text-xs text-subtle sm:hidden">{fmtRelative(j.created_at)}</div>
+                    </div>
+                  </div>
+                </td>
+                <td class="whitespace-nowrap text-[13px] text-muted max-sm:hidden">
+                  {#if j.site_id}
+                    <a href="/sites/{j.site_id}" class="inline-flex items-center gap-1.5 hover:text-accent"><Globe size={14} /> Site #{j.site_id}</a>
+                  {:else if j.server_id}
+                    <span class="inline-flex items-center gap-1.5"><Server size={14} /> Server #{j.server_id}</span>
+                  {:else}
+                    <span class="text-subtle">—</span>
+                  {/if}
+                  {#if j.attempts > 1}
+                    <div class="text-xs text-subtle tabular-nums">Attempt {j.attempts}/{j.max_attempts}</div>
+                  {/if}
+                </td>
+                <td><StatusPill status={j.status} /></td>
+                <td class="whitespace-nowrap text-muted tabular-nums max-sm:hidden" title={j.created_at ? new Date(j.created_at).toLocaleString('id-ID') : ''}>
+                  {fmtRelative(j.created_at)}
+                </td>
+                <td class="text-right">
+                  {#if canCancel}
+                    <button onclick={() => cancelJob(j.id)} disabled={cancelling === j.id} class="btn btn-danger-ghost btn-xs">
+                      <X size={14} />
+                      {cancelling === j.id ? 'Cancelling…' : 'Cancel'}
+                    </button>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
 </DashboardLayout>

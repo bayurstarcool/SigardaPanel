@@ -1,6 +1,8 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
-  import { Shield, Copy, Check, ExternalLink, Server, Globe, Zap, Activity } from 'lucide-svelte';
+  import { Shield, Copy, Check, ArrowRight, Server, Globe, Activity, Key, CreditCard, LayoutDashboard } from 'lucide-svelte';
+  import StatCard from '$components/StatCard.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
   import { onMount } from 'svelte';
 
   let token = $state('');
@@ -29,97 +31,70 @@
     copied = true;
     setTimeout(() => copied = false, 2000);
   }
+
+  const links = [
+    { href: '/member/api-keys', title: 'API Keys', desc: 'Manage your API tokens and access.', icon: Key },
+    { href: '/member/billing', title: 'Billing', desc: 'View plans and manage subscription.', icon: CreditCard },
+    { href: '/dashboard', title: 'Panel Dashboard', desc: 'Go to VPS management panel.', icon: LayoutDashboard },
+  ];
 </script>
 
 <svelte:head>
   <title>Member Dashboard — SigardaPanel</title>
 </svelte:head>
 
-<div class="space-y-8">
-  <!-- Welcome -->
-  <div>
-    <h1 class="text-2xl font-bold text-white mb-1">Welcome back, {auth.user?.username}</h1>
-    <p class="text-sm text-slate-500">Manage your account and API access.</p>
-  </div>
+<PageHeader title="Welcome back, {auth.user?.username ?? ''}" description="Manage your account and API access." />
 
-  <!-- Plan Card -->
-  <div class="relative p-6 rounded-2xl border border-sky-400/20 bg-gradient-to-br from-sky-400/[0.06] to-indigo-400/[0.04] overflow-hidden">
-    <div class="absolute top-0 right-0 w-32 h-32 bg-sky-400/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
-    <div class="relative">
-      <div class="flex items-center gap-2 mb-3">
-        <Shield size={18} class="text-sky-400" />
-        <span class="text-sm font-semibold text-sky-400">Community Plan</span>
-        <span class="px-2 py-0.5 rounded-full text-[0.6rem] font-bold bg-emerald-500/10 text-emerald-400">Active</span>
-      </div>
-      <p class="text-sm text-slate-400 mb-4">You're using the free Community plan. Upgrade for multi-server management and priority support.</p>
-      <a href="/pricing" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-white/[0.08] border border-white/[0.12] hover:bg-white/[0.15] text-white transition-all">
-        View Plans <ExternalLink size={12} />
-      </a>
+<div class="space-y-6">
+  <!-- Plan -->
+  <section class="card card-body">
+    <div class="flex flex-wrap items-center gap-2">
+      <Shield size={16} class="text-accent" />
+      <span class="text-sm font-semibold text-fg">Community Plan</span>
+      <span class="badge badge-success"><span class="dot"></span>Active</span>
     </div>
+    <p class="mt-2 text-[13px] text-muted">You're using the free Community plan. Upgrade for multi-server management and priority support.</p>
+    <a href="/pricing" class="btn btn-secondary btn-sm mt-4">View plans <ArrowRight size={14} /></a>
+  </section>
+
+  <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <StatCard label="Servers" value={servers} icon={Server as any} />
+    <StatCard label="Sites" value={sites} icon={Globe as any} />
+    <StatCard label="Plan" value="Free" icon={Shield as any} tone="accent" />
+    <StatCard label="Status" value="Active" icon={Activity as any} tone="success" />
   </div>
 
-  <!-- Stats Grid -->
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-    {#each [
-      { label: 'Servers', value: servers, icon: Server, color: 'sky' },
-      { label: 'Sites', value: sites, icon: Globe, color: 'emerald' },
-      { label: 'Plan', value: 'Free', icon: Shield, color: 'violet' },
-      { label: 'Status', value: 'Active', icon: Activity, color: 'green' },
-    ] as stat}
-      <div class="p-4 rounded-xl border border-white/[0.06] bg-white/[0.02]">
-        <div class="flex items-center gap-2 mb-2">
-          <stat.icon size={14} class="text-{stat.color}-400" />
-          <span class="text-[0.65rem] text-slate-500 uppercase tracking-wider">{stat.label}</span>
+  <!-- API token -->
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">API token</h2>
+    </div>
+    <div class="card-body">
+      <p class="mb-3 text-[13px] text-muted">Use this token to authenticate API requests and CLI commands.</p>
+      <div class="flex items-center gap-2">
+        <div class="min-w-0 flex-1 truncate rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[13px] text-muted">
+          {token || 'No token available'}
         </div>
-        <div class="text-xl font-bold text-white">{stat.value}</div>
+        <button onclick={copyToken} class="btn btn-secondary btn-icon" aria-label="Copy token" title="Copy token" disabled={!token}>
+          {#if copied}<Check size={14} class="text-success" />{:else}<Copy size={14} />{/if}
+        </button>
       </div>
+      <div class="mt-4 rounded-lg border border-line bg-surface-2 p-3">
+        <p class="mb-1.5 text-xs text-subtle">Quick start with CLI:</p>
+        <code class="font-mono text-[13px] break-all text-fg">sigardapanel login --api-url https://panel.sigarda.dev</code>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+    {#each links as l (l.href)}
+      <a href={l.href} class="card group p-5 transition-colors duration-150 hover:border-line-strong hover:bg-surface-2">
+        <div class="mb-3 flex size-9 items-center justify-center rounded-lg bg-accent/10 text-accent">
+          <l.icon size={16} />
+        </div>
+        <h3 class="text-sm font-semibold text-fg">{l.title}</h3>
+        <p class="mt-1 text-[13px] text-muted">{l.desc}</p>
+      </a>
     {/each}
-  </div>
-
-  <!-- API Token -->
-  <div class="p-6 rounded-2xl border border-white/[0.06] bg-white/[0.02]">
-    <h2 class="text-sm font-semibold text-white mb-4">API Token</h2>
-    <p class="text-xs text-slate-500 mb-4">Use this token to authenticate API requests and CLI commands.</p>
-    <div class="flex items-center gap-2">
-      <div class="flex-1 font-mono text-xs text-slate-400 bg-black/20 rounded-xl px-4 py-3 border border-white/[0.06] truncate">
-        {token || 'No token available'}
-      </div>
-      <button onclick={copyToken} class="px-4 py-3 rounded-xl bg-white/[0.06] border border-white/[0.08] hover:bg-white/[0.1] transition-all">
-        {#if copied}
-          <Check size={14} class="text-emerald-400" />
-        {:else}
-          <Copy size={14} class="text-slate-400" />
-        {/if}
-      </button>
-    </div>
-    <div class="mt-4 p-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
-      <p class="text-[0.65rem] text-slate-500 mb-2">Quick start with CLI:</p>
-      <code class="text-xs font-mono text-emerald-400/70">sigardapanel login --api-url https://panel.sigarda.dev</code>
-    </div>
-  </div>
-
-  <!-- Quick Links -->
-  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-    <a href="/member/api-keys" class="p-5 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12] hover:bg-white/[0.04] transition-all group">
-      <div class="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-        <svg class="w-5 h-5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-      </div>
-      <h3 class="text-sm font-semibold text-white mb-1">API Keys</h3>
-      <p class="text-xs text-slate-500">Manage your API tokens and access.</p>
-    </a>
-    <a href="/member/billing" class="p-5 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12] hover:bg-white/[0.04] transition-all group">
-      <div class="w-10 h-10 rounded-xl bg-violet-500/10 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-        <svg class="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-      </div>
-      <h3 class="text-sm font-semibold text-white mb-1">Billing</h3>
-      <p class="text-xs text-slate-500">View plans and manage subscription.</p>
-    </a>
-    <a href="/dashboard" class="p-5 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12] hover:bg-white/[0.04] transition-all group">
-      <div class="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-        <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-      </div>
-      <h3 class="text-sm font-semibold text-white mb-1">Panel Dashboard</h3>
-      <p class="text-xs text-slate-500">Go to VPS management panel.</p>
-    </a>
   </div>
 </div>

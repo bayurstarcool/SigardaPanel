@@ -1,24 +1,24 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
+  import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
 
+  // Shortcut route: jump to the first server's terminal page.
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
+    let target = '/servers';
     try {
       const d = await apiFetch(auth.token, 'GET', 'servers');
       const servers = d?.servers ?? [];
-      if (servers.length > 0) {
-        window.location.href = `/server/${servers[0].id}/terminal`;
-      } else {
-        window.location.href = '/servers';
-      }
+      if (servers.length > 0) target = `/server/${servers[0].id}/terminal`;
     } catch {
-      window.location.href = '/servers';
+      // fall through to the server list
     }
+    goto(target, { replaceState: true });
   });
 </script>
 
-<div class="flex items-center justify-center min-h-[50vh]">
-  <p class="text-sm text-slate-500">Redirecting to terminal...</p>
+<div class="flex min-h-[50vh] items-center justify-center">
+  <p class="text-sm text-subtle">Redirecting to terminal…</p>
 </div>

@@ -3,12 +3,17 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import Modal from '$components/Modal.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import StatusPill from '$components/StatusPill.svelte';
-  import { ArrowLeft, Plus, Trash2, X, Edit, Globe, RefreshCw, Check, AlertTriangle } from 'lucide-svelte';
+  import { Plus, Trash2, X, Pencil, Globe, RefreshCw, ListChecks, LoaderCircle } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
   const zoneId = $derived($page.params.id);
+  const RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'NS', 'CAA'];
 
   let zone = $state<any>(null);
   let records = $state<any[]>([]);
@@ -24,6 +29,11 @@
   let showPurgeConfirm = $state(false);
   let purging = $state(false);
 
+  // Delete confirmations
+  let deleteTarget = $state<any>(null);
+  let showDeleteConfirm = $state(false);
+  let showBulkConfirm = $state(false);
+
   // Bulk select
   let bulkMode = $state(false);
   let selectedIds = $state<Set<string>>(new Set());
@@ -32,15 +42,9 @@
   // Filter
   let filterType = $state('');
 
-  function typeBadgeColor(type: string): string {
-    const t = (type || '').toUpperCase();
-    if (t === 'A') return 'bg-sky-400/15 text-sky-400 border-sky-400/30';
-    if (t === 'AAAA') return 'bg-indigo-400/15 text-indigo-400 border-indigo-400/30';
-    if (t === 'CNAME') return 'bg-pink-400/15 text-pink-400 border-pink-400/30';
-    if (t === 'MX') return 'bg-amber-400/15 text-amber-400 border-amber-400/30';
-    if (t === 'TXT') return 'bg-emerald-400/15 text-emerald-400 border-emerald-400/30';
-    return 'bg-slate-400/15 text-slate-400 border-slate-400/30';
-  }
+  const typeTone: Record<string, string> = {
+    A: 'badge-info', AAAA: 'badge-accent', CNAME: 'badge-success', MX: 'badge-warning',
+  };
 
   function formatTTL(ttl: number): string {
     if (!ttl || ttl === 1) return 'Auto';
@@ -51,7 +55,7 @@
   }
 
   function formatDate(d: string): string {
-    if (!d) return '-';
+    if (!d) return '—';
     try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
     catch { return d; }
   }
@@ -62,7 +66,7 @@
     try {
       const [zoneData, dnsData] = await Promise.all([
         apiFetch(auth.token, 'GET', `cloudflare/zones/${zoneId}`),
-        apiFetch(auth.token, 'GET', `cloudflare/zones/${zoneId}/dns${filterType ? `?type=${filterType}` : ''}`)
+        apiFetch(auth.token, 'GET', `cloudflare/zones/${zoneId}/dns${filterType ? `?type=${filterType}` : ''}`),
       ]);
       zone = zoneData;
       records = dnsData?.records || [];
@@ -85,7 +89,7 @@
       type: record.type || 'A',
       content: record.content || '',
       ttl: record.ttl || 1,
-      proxied: record.proxied ?? true
+      proxied: record.proxied ?? true,
     };
     showModal = true;
   }
@@ -99,15 +103,12 @@
   async function saveRecord() {
     saving = true;
     try {
+      const body = { name: form.name, type: form.type, content: form.content, ttl: form.ttl, proxied: form.proxied };
       if (editingRecord) {
-        await apiFetch(auth.token, 'PUT', `cloudflare/zones/${zoneId}/dns/${editingRecord.id}`, {
-          name: form.name, type: form.type, content: form.content, ttl: form.ttl, proxied: form.proxied
-        });
+        await apiFetch(auth.token, 'PUT', `cloudflare/zones/${zoneId}/dns/${editingRecord.id}`, body);
         toasts.success('Record updated');
       } else {
-        await apiFetch(auth.token, 'POST', `cloudflare/zones/${zoneId}/dns`, {
-          name: form.name, type: form.type, content: form.content, ttl: form.ttl, proxied: form.proxied
-        });
+        await apiFetch(auth.token, 'POST', `cloudflare/zones/${zoneId}/dns`, body);
         toasts.success('Record created');
       }
       closeModal();
@@ -119,14 +120,14 @@
   async function deleteRecord(recordId: string) {
     try {
       await apiFetch(auth.token, 'DELETE', `cloudflare/zones/${zoneId}/dns/${recordId}`);
-      records = records.filter(r => r.id !== recordId);
+      records = records.filter((r) => r.id !== recordId);
       toasts.success('Record deleted');
     } catch (e: any) { toasts.error(e.message); }
   }
 
-  function confirmDelete(recordId: string) {
-    if (!confirm('Delete this DNS record? This cannot be undone.')) return;
-    deleteRecord(recordId);
+  function confirmDelete(record: any) {
+    deleteTarget = record;
+    showDeleteConfirm = true;
   }
 
   async function toggleProxied(record: any) {
@@ -164,20 +165,19 @@
     if (selectedIds.size === records.length) {
       selectedIds = new Set();
     } else {
-      selectedIds = new Set(records.map(r => r.id));
+      selectedIds = new Set(records.map((r) => r.id));
     }
   }
 
   async function bulkDelete() {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Delete ${selectedIds.size} selected record(s)? This cannot be undone.`)) return;
     bulkDeleting = true;
     try {
       await apiFetch(auth.token, 'POST', `cloudflare/zones/${zoneId}/dns/bulk-delete`, {
-        record_ids: Array.from(selectedIds)
+        record_ids: Array.from(selectedIds),
       });
       const removed = selectedIds;
-      records = records.filter(r => !removed.has(r.id));
+      records = records.filter((r) => !removed.has(r.id));
       selectedIds = new Set();
       bulkMode = false;
       toasts.success(`Deleted ${removed.size} record(s)`);
@@ -186,351 +186,197 @@
   }
 </script>
 
+{#snippet proxySwitch(on: boolean, onclick: () => void, label: string)}
+  <button
+    type="button"
+    role="switch"
+    aria-checked={on}
+    aria-label={label}
+    title={on ? 'Proxied (click to disable)' : 'DNS only (click to enable)'}
+    {onclick}
+    class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-150 {on ? 'bg-accent' : 'bg-line-strong'}">
+    <span class="inline-block size-3.5 rounded-full bg-accent-fg transition-transform duration-150 {on ? 'translate-x-[18px]' : 'translate-x-[3px]'}"></span>
+  </button>
+{/snippet}
+
 <DashboardLayout active="Cloudflare">
-  <div class="max-w-7xl mx-auto">
-    <!-- Header -->
-    <a href="/cloudflare" class="inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-sky-400 transition mb-6">
-      <ArrowLeft size={14} />
-      Back to Cloudflare
-    </a>
-
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-      <div>
-        <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent flex items-center gap-2">
-          <Globe size={22} class="text-sky-400" />
-          {zone?.name || 'Loading...'}
-        </h1>
-        <p class="text-sm text-slate-500 mt-1">
-          {loading ? 'Loading...' : `${records.length} DNS record${records.length !== 1 ? 's' : ''}`}
-          {#if zone?.status}
-            <span class="ml-2 inline-flex items-center gap-1">
-              <StatusPill status={zone.status} />
-            </span>
-          {/if}
-        </p>
-      </div>
-    </div>
-
-    <!-- Actions Bar -->
-    <div class="flex flex-wrap items-center gap-3 mb-5">
-      <button
-        onclick={openCreateModal}
-        class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-400 text-sm font-medium border border-sky-500/20 transition"
-      >
-        <Plus size={15} />
-        Create Record
+  <PageHeader
+    title={zone?.name || 'Loading…'}
+    description={loading ? 'Loading…' : `${records.length} DNS record${records.length !== 1 ? 's' : ''}`}
+    back="/cloudflare"
+    backLabel="Cloudflare">
+    {#snippet meta()}
+      {#if zone?.status}<StatusPill status={zone.status} />{/if}
+    {/snippet}
+    {#snippet actions()}
+      <button onclick={() => (showPurgeConfirm = true)} disabled={purging} class="btn btn-secondary btn-sm">
+        <RefreshCw size={14} class={purging ? 'animate-spin' : ''} /> {purging ? 'Purging…' : 'Purge cache'}
       </button>
+      <button onclick={openCreateModal} class="btn btn-primary btn-sm"><Plus size={14} /> Create record</button>
+    {/snippet}
+  </PageHeader>
 
-      <button
-        onclick={() => showPurgeConfirm = true}
-        class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-400 text-sm font-medium border border-indigo-500/20 transition"
-      >
-        <RefreshCw size={15} />
-        Purge Cache
+  <div class="card">
+    <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
+      <button onclick={toggleBulkMode} class="btn btn-sm {bulkMode ? 'btn-secondary' : 'btn-ghost'}">
+        {#if bulkMode}<X size={14} /> Cancel select{:else}<ListChecks size={14} /> Bulk select{/if}
       </button>
-
-      <button
-        onclick={toggleBulkMode}
-        class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border transition
-          {bulkMode
-            ? 'bg-amber-500/20 text-amber-400 border-amber-500/30 hover:bg-amber-500/30'
-            : 'bg-white/[0.04] text-slate-400 border-white/[0.08] hover:bg-white/[0.08]'}"
-      >
-        {#if bulkMode}
-          <X size={15} />
-          Cancel Select
-        {:else}
-          <Check size={15} />
-          Bulk Select
-        {/if}
-      </button>
-
       {#if bulkMode && selectedIds.size > 0}
-        <button
-          onclick={bulkDelete}
-          disabled={bulkDeleting}
-          class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-400 text-sm font-medium border border-red-500/20 transition disabled:opacity-50"
-        >
-          <Trash2 size={15} />
-          Delete {selectedIds.size} Selected
+        <button onclick={() => (showBulkConfirm = true)} disabled={bulkDeleting} class="btn btn-danger btn-sm">
+          <Trash2 size={14} /> Delete {selectedIds.size}
         </button>
       {/if}
-
-      <!-- Filter -->
-      <div class="ml-auto">
-        <select
-          bind:value={filterType}
-          onchange={loadData}
-          class="bg-white/[0.04] border border-white/[0.08] rounded-xl px-3 py-2 text-sm text-slate-300 outline-none focus:border-sky-500/40 transition appearance-none cursor-pointer"
-        >
-          <option value="">All Types</option>
-          <option value="A">A</option>
-          <option value="AAAA">AAAA</option>
-          <option value="CNAME">CNAME</option>
-          <option value="MX">MX</option>
-          <option value="TXT">TXT</option>
-          <option value="SRV">SRV</option>
-          <option value="NS">NS</option>
-          <option value="CAA">CAA</option>
+      <div class="ml-auto w-36">
+        <label for="dns-filter-type" class="sr-only">Record type</label>
+        <select id="dns-filter-type" bind:value={filterType} onchange={loadData} class="input h-8 text-[13px]">
+          <option value="">All types</option>
+          {#each RECORD_TYPES as t (t)}<option value={t}>{t}</option>{/each}
         </select>
       </div>
     </div>
 
-    <!-- DNS Records Table -->
     {#if loading}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-6 text-center py-20">
-        <div class="animate-pulse text-slate-500 flex items-center justify-center gap-2">
-          <RefreshCw size={16} class="animate-spin" />
-          Loading DNS records...
-        </div>
+      <div class="space-y-3 p-4">
+        {#each Array(6) as _, i (i)}<div class="skeleton h-9"></div>{/each}
       </div>
     {:else if records.length === 0}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-12 text-center">
-        <Globe size={40} class="mx-auto text-slate-600 mb-4" />
-        <p class="text-slate-400 text-sm">No DNS records found</p>
-        <button onclick={openCreateModal} class="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-400 text-sm font-medium border border-sky-500/20 transition">
-          <Plus size={15} />
-          Create your first record
-        </button>
-      </div>
+      <EmptyState
+        compact
+        icon={Globe as any}
+        title="No DNS records found"
+        description={filterType ? `No ${filterType} records in this zone.` : 'This zone has no DNS records yet.'}
+        actionLabel="Create record"
+        onaction={openCreateModal} />
     {:else}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full border-separate border-spacing-0">
-            <thead>
-              <tr class="text-left">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              {#if bulkMode}
+                <th class="w-10">
+                  <input
+                    type="checkbox"
+                    class="checkbox"
+                    aria-label="Select all records"
+                    checked={selectedIds.size === records.length && records.length > 0}
+                    onchange={toggleSelectAll} />
+                </th>
+              {/if}
+              <th class="w-20">Type</th>
+              <th>Name</th>
+              <th class="max-sm:hidden">Content</th>
+              <th class="max-sm:hidden">TTL</th>
+              <th>Proxy</th>
+              <th class="max-md:hidden">Created</th>
+              <th class="text-right"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each records as r (r.id)}
+              <tr class="group">
                 {#if bulkMode}
-                  <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] w-10">
+                  <td>
                     <input
                       type="checkbox"
-                      checked={selectedIds.size === records.length && records.length > 0}
-                      onchange={toggleSelectAll}
-                      class="rounded border-white/20 bg-white/5 text-sky-500 focus:ring-sky-500/40 cursor-pointer"
-                    />
-                  </th>
+                      class="checkbox"
+                      aria-label="Select {r.name}"
+                      checked={selectedIds.has(r.id)}
+                      onchange={() => toggleSelect(r.id)} />
+                  </td>
                 {/if}
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Type</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Name</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Content</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">TTL</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Proxied</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Created</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each records as r (r.id)}
-                <tr class="hover:bg-white/[0.02] transition group">
-                  {#if bulkMode}
-                    <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle w-10">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(r.id)}
-                        onchange={() => toggleSelect(r.id)}
-                        class="rounded border-white/20 bg-white/5 text-sky-500 focus:ring-sky-500/40 cursor-pointer"
-                      />
-                    </td>
-                  {/if}
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-lg text-[0.72rem] font-semibold border {typeBadgeColor(r.type)}">
-                      {r.type}
-                    </span>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] font-medium text-sm align-middle">
-                    {r.name}
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] text-xs text-slate-400 align-middle max-w-xs truncate" title={r.content}>
-                    {r.content}
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] text-xs text-slate-500 align-middle">
-                    {formatTTL(r.ttl)}
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <button
-                      onclick={() => toggleProxied(r)}
-                      class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors {r.proxied ? 'bg-sky-500' : 'bg-white/10'}"
-                      title={r.proxied ? 'Proxied (click to disable)' : 'DNS only (click to enable)'}
-                    >
-                      <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform {r.proxied ? 'translate-x-[18px]' : 'translate-x-[3px]'}" />
+                <td><span class="badge font-mono {typeTone[(r.type || '').toUpperCase()] ?? ''}">{r.type}</span></td>
+                <td class="max-w-0 min-w-36">
+                  <div class="truncate font-medium text-fg" title={r.name}>{r.name}</div>
+                  <div class="truncate font-mono text-xs text-subtle sm:hidden" title={r.content}>{r.content}</div>
+                </td>
+                <td class="max-w-xs truncate font-mono text-[13px] text-muted max-sm:hidden" title={r.content}>{r.content}</td>
+                <td class="whitespace-nowrap text-muted tabular-nums max-sm:hidden">{formatTTL(r.ttl)}</td>
+                <td>{@render proxySwitch(!!r.proxied, () => toggleProxied(r), `Proxy ${r.name}`)}</td>
+                <td class="whitespace-nowrap text-muted max-md:hidden">{formatDate(r.created_on || r.created)}</td>
+                <td class="text-right">
+                  <div class="flex items-center justify-end gap-0.5 transition-opacity duration-150 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
+                    <button onclick={() => openEditModal(r)} class="btn btn-ghost btn-icon btn-xs" title="Edit" aria-label="Edit {r.name}">
+                      <Pencil size={14} />
                     </button>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] text-xs text-slate-500 align-middle">
-                    {formatDate(r.created_on || r.created)}
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onclick={() => openEditModal(r)}
-                        class="text-xs text-slate-400 hover:text-sky-400 transition p-1.5 rounded-lg hover:bg-sky-400/10"
-                        title="Edit"
-                      >
-                        <Edit size={14} />
-                      </button>
-                      <button
-                        onclick={() => confirmDelete(r.id)}
-                        class="text-xs text-slate-400 hover:text-red-400 transition p-1.5 rounded-lg hover:bg-red-400/10"
-                        title="Delete"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+                    <button onclick={() => confirmDelete(r)} class="btn btn-danger-ghost btn-icon btn-xs" title="Delete" aria-label="Delete {r.name}">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </div>
     {/if}
   </div>
 
-  <!-- Purge Cache Confirm Dialog -->
-  {#if showPurgeConfirm}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" role="dialog" onkeydown={(e) => e.key === 'Escape' && (showPurgeConfirm = false)}>
-      <div class="bg-[#0a1122] border border-white/[0.1] rounded-2xl p-6 w-full max-w-md shadow-2xl shadow-black/50">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 rounded-xl bg-amber-500/15">
-            <AlertTriangle size={20} class="text-amber-400" />
-          </div>
-          <h3 class="text-lg font-semibold text-white">Purge Cache</h3>
+  <ConfirmDialog
+    bind:open={showPurgeConfirm}
+    title="Purge cache"
+    message={`This will purge all cached content for ${zone?.name || 'this zone'}. All visitors will need to re-fetch resources. This action cannot be undone.`}
+    confirmLabel="Purge everything"
+    destructive
+    onconfirm={purgeCache} />
+
+  <ConfirmDialog
+    bind:open={showDeleteConfirm}
+    title="Delete DNS record?"
+    message={`Delete ${deleteTarget?.type ?? ''} record ${deleteTarget?.name ?? ''}? This cannot be undone.`}
+    confirmLabel="Delete"
+    destructive
+    onconfirm={() => deleteTarget && deleteRecord(deleteTarget.id)}
+    oncancel={() => (deleteTarget = null)} />
+
+  <ConfirmDialog
+    bind:open={showBulkConfirm}
+    title="Delete selected records?"
+    message={`Delete ${selectedIds.size} selected record(s)? This cannot be undone.`}
+    confirmLabel="Delete"
+    destructive
+    onconfirm={bulkDelete} />
+
+  <Modal bind:open={showModal} title={editingRecord ? 'Edit DNS record' : 'Create DNS record'} maxWidth="lg" onclose={closeModal}>
+    <form id="dns-form" class="space-y-4" onsubmit={(e) => { e.preventDefault(); saveRecord(); }}>
+      <div>
+        <label for="dns-name" class="label">Name</label>
+        <input id="dns-name" type="text" bind:value={form.name} placeholder="e.g. subdomain or @ for root" class="input" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label for="dns-type" class="label">Type</label>
+          <select id="dns-type" bind:value={form.type} class="input">
+            {#each RECORD_TYPES as t (t)}<option value={t}>{t}</option>{/each}
+          </select>
         </div>
-        <p class="text-sm text-slate-400 mb-6">
-          This will purge all cached content for <span class="text-white font-medium">{zone?.name || 'this zone'}</span>.
-          All visitors will need to re-fetch resources. This action cannot be undone.
-        </p>
-        <div class="flex justify-end gap-3">
-          <button
-            onclick={() => showPurgeConfirm = false}
-            class="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition"
-          >
-            Cancel
-          </button>
-          <button
-            onclick={purgeCache}
-            disabled={purging}
-            class="px-4 py-2 rounded-xl text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 transition disabled:opacity-50 flex items-center gap-2"
-          >
-            {#if purging}
-              <RefreshCw size={14} class="animate-spin" />
-              Purging...
-            {:else}
-              <RefreshCw size={14} />
-              Purge Everything
-            {/if}
-          </button>
+        <div>
+          <label for="dns-ttl" class="label">TTL</label>
+          <select id="dns-ttl" bind:value={form.ttl} class="input">
+            <option value={1}>Auto</option>
+            <option value={60}>60s</option>
+            <option value={300}>5 min</option>
+            <option value={3600}>1 hour</option>
+            <option value={86400}>1 day</option>
+          </select>
         </div>
       </div>
-    </div>
-  {/if}
-
-  <!-- Create / Edit Modal -->
-  {#if showModal}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" role="dialog" onkeydown={(e) => e.key === 'Escape' && closeModal()}>
-      <div class="bg-[#0a1122] border border-white/[0.1] rounded-2xl p-6 w-full max-w-lg shadow-2xl shadow-black/50">
-        <!-- Modal Header -->
-        <div class="flex items-center justify-between mb-6">
-          <h3 class="text-lg font-semibold text-white">
-            {editingRecord ? 'Edit DNS Record' : 'Create DNS Record'}
-          </h3>
-          <button onclick={closeModal} class="p-1.5 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-white/[0.05] transition">
-            <X size={18} />
-          </button>
-        </div>
-
-        <!-- Form -->
-        <div class="space-y-4">
-          <!-- Name -->
-          <div>
-            <label for="dns-name" class="block text-xs font-medium text-slate-400 mb-1.5">Name</label>
-            <input
-              id="dns-name"
-              type="text"
-              bind:value={form.name}
-              placeholder="e.g. subdomain or @ for root"
-              class="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white placeholder-slate-600 outline-none focus:border-sky-500/40 transition"
-            />
-          </div>
-
-          <!-- Type & Proxied row -->
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label for="dns-type" class="block text-xs font-medium text-slate-400 mb-1.5">Type</label>
-              <select
-                id="dns-type"
-                bind:value={form.type}
-                class="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white outline-none focus:border-sky-500/40 transition appearance-none cursor-pointer"
-              >
-                {#each ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'NS', 'CAA'] as t}
-                  <option value={t}>{t}</option>
-                {/each}
-              </select>
-            </div>
-            <div>
-              <label for="dns-ttl" class="block text-xs font-medium text-slate-400 mb-1.5">TTL</label>
-              <select
-                id="dns-ttl"
-                bind:value={form.ttl}
-                class="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white outline-none focus:border-sky-500/40 transition appearance-none cursor-pointer"
-              >
-                <option value={1}>Auto</option>
-                <option value={60}>60s</option>
-                <option value={300}>5 min</option>
-                <option value={3600}>1 hour</option>
-                <option value={86400}>1 day</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Content -->
-          <div>
-            <label for="dns-content" class="block text-xs font-medium text-slate-400 mb-1.5">Content</label>
-            <input
-              id="dns-content"
-              type="text"
-              bind:value={form.content}
-              placeholder="e.g. 1.2.3.4 or target.example.com"
-              class="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white placeholder-slate-600 outline-none focus:border-sky-500/40 transition"
-            />
-          </div>
-
-          <!-- Proxied toggle -->
-          <div class="flex items-center justify-between rounded-xl bg-white/[0.03] border border-white/[0.06] px-4 py-3">
-            <div>
-              <p class="text-sm text-white font-medium">Proxy</p>
-              <p class="text-xs text-slate-500">Route traffic through Cloudflare</p>
-            </div>
-            <button
-              type="button"
-              onclick={() => form.proxied = !form.proxied}
-              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {form.proxied ? 'bg-sky-500' : 'bg-white/10'}"
-            >
-              <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {form.proxied ? 'translate-x-[22px]' : 'translate-x-[4px]'}" />
-            </button>
-          </div>
-        </div>
-
-        <!-- Modal Footer -->
-        <div class="flex justify-end gap-3 mt-6">
-          <button
-            onclick={closeModal}
-            class="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition"
-          >
-            Cancel
-          </button>
-          <button
-            onclick={saveRecord}
-            disabled={saving || !form.name || !form.content}
-            class="px-4 py-2 rounded-xl text-sm font-medium text-white bg-sky-500 hover:bg-sky-600 transition disabled:opacity-50 flex items-center gap-2"
-          >
-            {#if saving}
-              <RefreshCw size={14} class="animate-spin" />
-              Saving...
-            {:else}
-              {editingRecord ? 'Update Record' : 'Create Record'}
-            {/if}
-          </button>
-        </div>
+      <div>
+        <label for="dns-content" class="label">Content</label>
+        <input id="dns-content" type="text" bind:value={form.content} placeholder="e.g. 1.2.3.4 or target.example.com" class="input font-mono" />
       </div>
-    </div>
-  {/if}
+      <div class="flex items-center justify-between gap-3 rounded-lg border border-line bg-surface-2 px-4 py-3">
+        <div>
+          <p class="text-sm font-medium text-fg">Proxy</p>
+          <p class="text-xs text-subtle">Route traffic through Cloudflare</p>
+        </div>
+        {@render proxySwitch(form.proxied, () => (form.proxied = !form.proxied), 'Proxy through Cloudflare')}
+      </div>
+    </form>
+    {#snippet footer()}
+      <button class="btn btn-secondary btn-sm" onclick={closeModal}>Cancel</button>
+      <button type="submit" form="dns-form" class="btn btn-primary btn-sm" disabled={saving || !form.name || !form.content}>
+        {#if saving}<LoaderCircle size={14} class="animate-spin" /> Saving…{:else}{editingRecord ? 'Update record' : 'Create record'}{/if}
+      </button>
+    {/snippet}
+  </Modal>
 </DashboardLayout>

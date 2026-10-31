@@ -1,17 +1,13 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { Search, Server, Globe, Database, ArrowRight, X, Loader2 } from 'lucide-svelte';
-  import { onMount, onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { Search, Server, Globe, Database, CornerDownLeft, LoaderCircle } from 'lucide-svelte';
+  import { tick } from 'svelte';
 
+  // ⌘K / Ctrl+K toggling is owned by DashboardLayout; this component handles
+  // everything once open (Escape, arrows, Enter).
   let { open, onClose }: { open: boolean; onClose: () => void } = $props();
-  let query = $state('');
-  let results = $state<any[]>([]);
-  let loading = $state(false);
-  let selectedIndex = $state(0);
-  let inputEl = $state<HTMLInputElement>();
-
-  let debounceTimer: ReturnType<typeof setTimeout>;
 
   interface SearchResult {
     type: 'server' | 'site' | 'database';
@@ -21,170 +17,185 @@
     href: string;
   }
 
-  onMount(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        if (open) {
-          onClose();
-        } else {
-          // Dispatch event to open
-          window.dispatchEvent(new CustomEvent('open-search'));
-        }
-      }
-      if (e.key === 'Escape' && open) {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  });
+  let query = $state('');
+  let selectedIndex = $state(0);
+  let inputEl = $state<HTMLInputElement>();
+  let listEl = $state<HTMLDivElement>();
+
+  // The three lists are fetched once per opening (in parallel) and filtered locally.
+  let index = $state<SearchResult[] | null>(null);
+  let indexing = $state(false);
+  let indexPromise: Promise<void> | null = null;
 
   $effect(() => {
-    if (open && inputEl) {
-      setTimeout(() => inputEl?.focus(), 100);
+    if (open) {
       query = '';
-      results = [];
       selectedIndex = 0;
+      index = null;
+      indexPromise = null;
+      tick().then(() => inputEl?.focus());
     }
   });
 
+  function buildIndex(): Promise<void> {
+    if (indexPromise) return indexPromise;
+    if (!auth.user) return Promise.resolve();
+    indexing = true;
+    indexPromise = (async () => {
+      const [servers, sites, dbs] = await Promise.allSettled([
+        apiFetch(auth.token, 'GET', 'servers'),
+        apiFetch(auth.token, 'GET', 'sites'),
+        apiFetch(auth.token, 'GET', 'databases'),
+      ]);
+      const all: SearchResult[] = [];
+      if (servers.status === 'fulfilled') {
+        for (const s of servers.value?.servers ?? []) {
+          all.push({ type: 'server', id: s.id, title: s.name, subtitle: [s.hostname, s.status].filter(Boolean).join(' · '), href: '/servers' });
+        }
+      }
+      if (sites.status === 'fulfilled') {
+        for (const s of sites.value?.sites ?? []) {
+          all.push({ type: 'site', id: s.id, title: s.domain || s.name, subtitle: [s.runtime, s.status].filter(Boolean).join(' · '), href: `/sites/${s.id}` });
+        }
+      }
+      if (dbs.status === 'fulfilled') {
+        for (const d of dbs.value?.databases ?? []) {
+          all.push({ type: 'database', id: d.id, title: d.name, subtitle: [d.type, d.charset].filter(Boolean).join(' · '), href: '/databases' });
+        }
+      }
+      index = all;
+      indexing = false;
+    })();
+    return indexPromise;
+  }
+
+  function haystack(r: SearchResult): string {
+    return `${r.title} ${r.subtitle}`.toLowerCase();
+  }
+
+  const q = $derived(query.trim().toLowerCase());
+  const results = $derived(q.length < 2 || !index ? [] : index.filter((r) => haystack(r).includes(q)).slice(0, 10));
+  const loading = $derived(q.length >= 2 && indexing);
+
   function onInput() {
-    clearTimeout(debounceTimer);
-    if (query.length < 2) {
-      results = [];
-      return;
-    }
-    loading = true;
-    debounceTimer = setTimeout(() => search(query), 200);
-  }
-
-  async function search(q: string) {
-    if (!auth.user) return;
-    const all: SearchResult[] = [];
-
-    try {
-      // Search servers
-      const servers: any = await apiFetch(auth.token, 'GET', 'servers');
-      for (const s of servers?.servers ?? []) {
-        if (match(`${s.name} ${s.hostname} ${s.status}`, q)) {
-          all.push({ type: 'server', id: s.id, title: s.name, subtitle: `${s.hostname} • ${s.status}`, href: '/servers' });
-        }
-      }
-
-      // Search sites
-      const sites: any = await apiFetch(auth.token, 'GET', 'sites');
-      for (const s of sites?.sites ?? []) {
-        if (match(`${s.name} ${s.domain} ${s.runtime} ${s.status}`, q)) {
-          all.push({ type: 'site', id: s.id, title: s.domain || s.name, subtitle: `${s.runtime} • ${s.status}`, href: `/sites/${s.id}` });
-        }
-      }
-
-      // Search databases
-      const dbs: any = await apiFetch(auth.token, 'GET', 'databases');
-      for (const d of dbs?.databases ?? []) {
-        if (match(`${d.name} ${d.type}`, q)) {
-          all.push({ type: 'database', id: d.id, title: d.name, subtitle: `${d.type} • ${d.charset || ''}`, href: '/databases' });
-        }
-      }
-    } catch {}
-
-    results = all.slice(0, 10);
-    loading = false;
     selectedIndex = 0;
+    if (query.trim().length >= 2) buildIndex();
   }
 
-  function match(text: string, q: string): boolean {
-    return text.toLowerCase().includes(q.toLowerCase());
-  }
-
-  function navigate(href: string) {
-    window.location.href = href;
+  function close() {
     onClose();
+  }
+
+  async function scrollSelected() {
+    await tick();
+    listEl?.querySelector<HTMLElement>(`[data-index="${selectedIndex}"]`)?.scrollIntoView({ block: 'nearest' });
   }
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, results.length - 1);
+      if (results.length) selectedIndex = (selectedIndex + 1) % results.length;
+      scrollSelected();
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      selectedIndex = Math.max(selectedIndex - 1, 0);
+      if (results.length) selectedIndex = (selectedIndex - 1 + results.length) % results.length;
+      scrollSelected();
     } else if (e.key === 'Enter' && results[selectedIndex]) {
-      navigate(results[selectedIndex].href);
+      e.preventDefault();
+      const href = results[selectedIndex].href;
+      close();
+      goto(href);
     }
   }
 
-  function typeIcon(type: string) {
-    if (type === 'server') return Server;
-    if (type === 'site') return Globe;
-    return Database;
-  }
-
-  function typeColor(type: string) {
-    if (type === 'server') return 'text-sky-400';
-    if (type === 'site') return 'text-emerald-400';
-    return 'text-purple-400';
-  }
+  const typeMeta = {
+    server: { icon: Server, label: 'Server' },
+    site: { icon: Globe, label: 'Site' },
+    database: { icon: Database, label: 'Database' },
+  } as const;
 </script>
+
+<svelte:window onkeydown={(e) => { if (open && e.key === 'Escape') close(); }} />
 
 {#if open}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-start justify-center pt-[15vh] p-4"
-    onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()}>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="overlay animate-fade-in flex items-start justify-center p-4 pt-[12vh]" onclick={close}>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="bg-[#0c0d0f] border border-white/[0.08] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl shadow-black/50"
-      onclick={(e) => e.stopPropagation()} onkeydown={onKeydown}>
-
-      <!-- Search Input -->
-      <div class="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06]">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="popover animate-pop-in flex w-full max-w-lg flex-col overflow-hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Search"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={onKeydown}
+    >
+      <div class="flex items-center gap-3 border-b border-line px-4">
         {#if loading}
-          <Loader2 size={18} class="text-sky-400 animate-spin" />
+          <LoaderCircle size={16} class="shrink-0 animate-spin text-subtle" />
         {:else}
-          <Search size={18} class="text-slate-500" />
+          <Search size={16} class="shrink-0 text-subtle" />
         {/if}
-        <input bind:this={inputEl} bind:value={query} oninput={onInput}
-          placeholder="Search servers, sites, databases..."
-          class="flex-1 bg-transparent border-0 outline-none text-sm text-white placeholder-slate-500" />
-        <kbd class="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[0.6rem] font-mono text-slate-500 bg-white/[0.05] border border-white/[0.08] rounded">ESC</kbd>
+        <input
+          bind:this={inputEl}
+          bind:value={query}
+          oninput={onInput}
+          placeholder="Search servers, sites, databases…"
+          aria-label="Search"
+          role="combobox"
+          aria-expanded={results.length > 0}
+          aria-controls="global-search-results"
+          aria-activedescendant={results[selectedIndex] ? `gs-${selectedIndex}` : undefined}
+          autocomplete="off"
+          spellcheck="false"
+          class="h-12 flex-1 border-0 bg-transparent text-sm text-fg outline-none placeholder:text-subtle"
+        />
+        <kbd class="kbd max-sm:hidden">esc</kbd>
       </div>
 
-      <!-- Results -->
-      <div class="max-h-80 overflow-auto">
-        {#if query.length < 2}
-          <div class="px-5 py-8 text-center">
-            <p class="text-xs text-slate-500">Type at least 2 characters to search</p>
-            <p class="text-[0.65rem] text-slate-600 mt-2">Search across servers, sites, and databases</p>
+      <div bind:this={listEl} id="global-search-results" role="listbox" class="max-h-80 overflow-y-auto">
+        {#if q.length < 2}
+          <p class="px-4 py-8 text-center text-[13px] text-muted">Type at least 2 characters to search servers, sites and databases.</p>
+        {:else if loading}
+          <div class="space-y-1 p-2">
+            {#each Array(3) as _, i (i)}<div class="skeleton h-11"></div>{/each}
           </div>
-        {:else if results.length === 0 && !loading}
-          <div class="px-5 py-8 text-center">
-            <p class="text-xs text-slate-500">No results for "{query}"</p>
-          </div>
+        {:else if results.length === 0}
+          <p class="px-4 py-8 text-center text-[13px] text-muted">No results for “{query.trim()}”</p>
         {:else}
-          <div class="py-1">
-            {#each results as r, i}
-              {@const Icon = typeIcon(r.type)}
-              <button onclick={() => navigate(r.href)}
-                class="w-full flex items-center gap-3 px-5 py-3 text-left transition-colors {i === selectedIndex ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]'}">
-                <div class="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center">
-                  <Icon size={14} class={typeColor(r.type)} />
+          <div class="p-1.5">
+            {#each results as r, i (`${r.type}:${r.id}`)}
+              {@const meta = typeMeta[r.type]}
+              <a
+                href={r.href}
+                id="gs-{i}"
+                data-index={i}
+                role="option"
+                aria-selected={i === selectedIndex}
+                onclick={close}
+                onmousemove={() => (selectedIndex = i)}
+                class="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors {i === selectedIndex ? 'bg-surface-2' : ''}"
+              >
+                <div class="flex size-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-subtle">
+                  <meta.icon size={15} strokeWidth={1.75} />
                 </div>
-                <div class="flex-1 min-w-0">
-                  <div class="text-sm font-medium text-white truncate">{r.title}</div>
-                  <div class="text-[0.7rem] text-slate-500 truncate">{r.subtitle}</div>
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-sm font-medium text-fg">{r.title}</div>
+                  <div class="truncate text-xs text-subtle">{meta.label}{r.subtitle ? ` · ${r.subtitle}` : ''}</div>
                 </div>
-                <ArrowRight size={14} class="text-slate-600" />
-              </button>
+                {#if i === selectedIndex}<CornerDownLeft size={14} class="shrink-0 text-subtle" />{/if}
+              </a>
             {/each}
           </div>
         {/if}
       </div>
 
-      <!-- Footer -->
-      <div class="px-5 py-2.5 border-t border-white/[0.06] flex items-center gap-4 text-[0.6rem] text-slate-600">
-        <span><kbd class="px-1 py-0.5 bg-white/[0.05] border border-white/[0.08] rounded font-mono">↑↓</kbd> navigate</span>
-        <span><kbd class="px-1 py-0.5 bg-white/[0.05] border border-white/[0.08] rounded font-mono">↵</kbd> select</span>
-        <span><kbd class="px-1 py-0.5 bg-white/[0.05] border border-white/[0.08] rounded font-mono">esc</kbd> close</span>
+      <div class="flex items-center gap-4 border-t border-line px-4 py-2 text-xs text-subtle max-sm:hidden">
+        <span class="flex items-center gap-1"><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd> navigate</span>
+        <span class="flex items-center gap-1"><kbd class="kbd">↵</kbd> open</span>
+        <span class="flex items-center gap-1"><kbd class="kbd">esc</kbd> close</span>
       </div>
     </div>
   </div>

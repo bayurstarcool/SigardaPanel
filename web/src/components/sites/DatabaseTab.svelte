@@ -1,10 +1,8 @@
 <script lang="ts">
-    import { auth } from '$lib/auth.svelte';
+  import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-    import {
-    Database, Globe, ArrowLeft, Plus, Trash2, Pencil, Check, Search,
-    Loader2, Users, UserPlus, Key, AlertTriangle, Copy,
-  } from 'lucide-svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import { Database, Globe, Plus, Trash2, Pencil, Check, Search, LoaderCircle, Users, UserPlus, Key, TriangleAlert, Copy, ArrowRight, ArrowLeft } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
@@ -119,15 +117,9 @@
     try { const res = await apiFetch(auth.token, 'POST', `databases/${dbId}/users/${dbUserId}/rotate-password`); dbUserNewPwd = res?.password || ''; toasts.success('Password rotated'); }
     catch (e: any) { toasts.error(e.message); } finally { dbUserBusy = null; }
   }
-  async function openAssignDbUser() {
-    showAssignDbUser = true; showCreateDbUser = false;
-    assignDbUserData = { database_id: 0, username: '', host_pattern: '%', privileges: 'ALL' };
-    if (dbs.length === 0) { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbs = d?.databases || []; }
-    if (dbs.length > 0 && !availableDbUsers.length) {
-      loadingAvailableUsers = true;
-      try { const data = await apiFetch(auth.token, 'GET', `databases/${dbs[0].id}/available-users`); availableDbUsers = data?.users || []; } catch { availableDbUsers = []; }
-      finally { loadingAvailableUsers = false; }
-    }
+  function showAssignExisting() {
+    showAssignDbUser = true;
+    if (dbs.length === 0) apiFetch(auth.token, 'GET', `sites/${siteId}/databases`).then((d: any) => { dbs = d?.databases || []; });
   }
   async function loadAvailableForDb(dbId: number) {
     loadingAvailableUsers = true;
@@ -146,6 +138,18 @@
     catch (e: any) { toasts.error(e.message); } finally { cancelEditDbUser(); }
   }
 
+  function privLabel(p: string): string {
+    if (p === 'ALL') return 'ALL';
+    if (p === 'SELECT,INSERT,UPDATE,DELETE' || p === 'READ_WRITE') return 'Read+Write';
+    if (p === 'SELECT' || p === 'READ_ONLY') return 'Read Only';
+    return p;
+  }
+  function privBadge(p: string): string {
+    if (p === 'ALL') return 'badge-success';
+    if (p === 'SELECT,INSERT,UPDATE,DELETE' || p === 'READ_WRITE') return 'badge-info';
+    return '';
+  }
+
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
     try { site = await apiFetch(auth.token, 'GET', `sites/${siteId}`); } catch (e: any) { if (e.message === 'session expired') return; toasts.error(e.message); } finally { loading = false; }
@@ -153,200 +157,244 @@
   });
 </script>
 
-
-  {#if loading}
-    <div class="space-y-4"><div class="h-8 w-32 bg-white/[0.04] rounded-lg animate-pulse"></div></div>
-  {:else if !site}
-    <div class="flex flex-col items-center justify-center py-32"><Globe size={36} class="text-white/[0.08]" /><h2 class="text-lg font-semibold text-slate-300 mt-4">Site not found</h2></div>
-  {:else}
-    <div class="flex items-center gap-3 mb-6">
-      <div class="w-10 h-10 rounded-xl bg-violet-400/10 flex items-center justify-center"><Database size={18} class="text-violet-400" /></div>
-      <div><h1 class="text-lg font-bold text-slate-200">Databases</h1><p class="text-xs text-slate-500">{site.domain}</p></div>
-    </div>
-
-    <div class="space-y-0">
-      <!-- ═══ Card: Databases ═══ -->
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300">
-        <div class="flex items-center justify-between px-3 sm:px-4 lg:px-5 py-2 sm:py-2.5 lg:py-3 border-b border-white/[0.05]">
-          <div class="flex items-center gap-2 min-w-0">
-            <div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-sky-400/10 flex items-center justify-center shrink-0"><Database size={13} class="text-sky-400" /></div>
-            <span class="text-xs sm:text-sm font-semibold text-slate-200 truncate">Databases</span>
-            <span class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 bg-white/[0.04] px-1.5 sm:px-2 py-0.5 rounded-full border border-white/[0.06] shrink-0">{dbs.length}</span>
-          </div>
-          <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <div class="relative"><Search size={11} class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-600 pointer-events-none" />
-              <input type="text" bind:value={dbSearch} placeholder="Search..." class="w-24 sm:w-44 bg-white/[0.04] border border-white/[0.07] rounded-lg pl-6 sm:pl-7 pr-2 sm:pr-3 py-1 sm:py-1.5 text-[0.65rem] sm:text-xs text-slate-200 outline-none focus:border-sky-400/50 placeholder:text-slate-600 transition" />
-            </div>
-            <button onclick={() => showCreateDb = !showCreateDb} class="inline-flex items-center gap-1 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl text-[0.65rem] sm:text-xs font-medium bg-sky-400/[0.08] text-sky-400 border border-sky-400/15 hover:bg-sky-400/[0.12] hover:border-sky-400/25 transition-all duration-200"><Plus size={11} /> <span class="hidden sm:inline">Create</span><span class="sm:hidden">New</span></button>
-          </div>
+{#if loading}
+  <div class="space-y-4">
+    <div class="skeleton h-48 rounded-xl"></div>
+    <div class="skeleton h-64 rounded-xl"></div>
+  </div>
+{:else if !site}
+  <div class="card"><EmptyState icon={Globe} title="Site not found" /></div>
+{:else}
+  <div class="space-y-4">
+    <!-- Databases -->
+    <div class="card">
+      <div class="card-header">
+        <div class="flex min-w-0 items-center gap-2">
+          <Database size={16} class="shrink-0 text-subtle" />
+          <h3 class="card-title truncate">Databases</h3>
+          <span class="badge tabular-nums">{dbs.length}</span>
         </div>
-        {#if showCreateDb}
-          <div class="px-3 sm:px-4 lg:px-5 py-3 border-b border-white/[0.05] bg-white/[0.01]">
-            <div class="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-3">
-              <div class="flex-1 min-w-0"><label class="block text-[0.6rem] text-slate-500 mb-0.5 uppercase tracking-wider">Name</label><input bind:value={newDb.name} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 outline-none focus:border-sky-400/50 font-mono placeholder:text-slate-600" placeholder="mydb" /></div>
-              <div class="w-full sm:w-36"><label class="block text-[0.6rem] text-slate-500 mb-0.5 uppercase tracking-wider">Type</label>
-                <select bind:value={newDb.type} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 outline-none focus:border-sky-400 appearance-none cursor-pointer"><option value="mysql">MySQL / MariaDB</option><option value="postgres">PostgreSQL</option></select>
-              </div>
-              <div class="flex gap-1.5 sm:gap-2 shrink-0">
-                <button onclick={createDB} disabled={dbBusy || !newDb.name} class="px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-[0.7rem] sm:text-xs font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] hover:-translate-y-0.5 transition-all disabled:opacity-40 cursor-pointer border-0">{dbBusy ? '...' : 'Create'}</button>
-                <button onclick={() => showCreateDb = false} class="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg text-[0.7rem] sm:text-xs text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Cancel</button>
-              </div>
-            </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <div class="relative">
+            <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+            <input type="text" bind:value={dbSearch} aria-label="Filter databases" placeholder="Filter…" class="input h-8 w-28 pl-8 sm:w-44" />
           </div>
-        {/if}
-        {#if dbLoading}
-          <div class="divide-y divide-white/5">{#each Array(3) as _}<div class="px-3 sm:px-5 py-2.5 sm:py-3 flex items-center gap-3"><div class="h-3.5 w-32 bg-white/[0.04] rounded-lg animate-pulse"></div><div class="h-4 w-16 bg-white/[0.03] rounded-full animate-pulse"></div></div>{/each}</div>
-        {:else if dbs.length === 0}
-          <div class="flex flex-col items-center justify-center py-10 sm:py-14"><Database size={20} class="text-white/[0.08] mb-3" /><p class="text-xs sm:text-sm font-medium text-slate-400 mb-0.5">No databases</p><p class="text-[0.65rem] sm:text-xs text-slate-600">Create a database for this site</p></div>
-        {:else}
-          <div class="divide-y divide-white/[0.04]">
-            {#each dbFiltered as db (db.id)}
-              <div>
-                <div class="flex items-center justify-between px-3 sm:px-4 lg:px-5 py-2.5 sm:py-3 hover:bg-white/[0.02] transition">
-                  <div class="flex items-center gap-2 sm:gap-3 min-w-0">
-                    <span class="text-[0.8rem] sm:text-sm font-medium text-slate-200 truncate">{db.name}</span>
-                    <span class="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full text-[0.55rem] sm:text-[0.65rem] font-medium shrink-0 {db.type === 'mysql' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-sky-500/10 text-sky-400'}"><span class="w-1 h-1 rounded-full bg-current"></span>{db.type || 'mysql'}</span>
-                    {#if db.charset}<span class="hidden sm:inline text-[0.6rem] sm:text-[0.65rem] text-slate-500 font-mono bg-white/[0.04] px-1.5 py-0.5 rounded border border-white/[0.06] shrink-0">{db.charset}</span>{/if}
-                    {#if db.size_bytes}<span class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 font-mono shrink-0">{fmtBytes(db.size_bytes)}</span>{/if}
-                  </div>
-                  <div class="flex items-center gap-0.5 sm:gap-1 shrink-0">
-                    <button onclick={() => startEditDb(db)} class="p-1 sm:p-1.5 rounded-lg text-slate-500 hover:text-sky-400 hover:bg-sky-400/10 transition border-0 cursor-pointer" title="Edit charset/collation"><Pencil size={11} /></button>
-                    <button onclick={() => deleteDB(db)} class="p-1 sm:p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-400/10 transition border-0 cursor-pointer" title="Delete database"><Trash2 size={11} /></button>
-                  </div>
-                </div>
-                {#if editDbId === db.id}
-                  <div class="px-3 sm:px-4 lg:px-5 py-2.5 sm:py-3 bg-sky-500/[0.03] border-t border-white/[0.03]">
-                    <div class="flex items-center gap-1.5 mb-1.5 sm:mb-2"><Pencil size={11} class="text-sky-400" /><span class="text-[0.6rem] sm:text-[0.65rem] font-semibold text-slate-400 uppercase tracking-wider">Edit Charset & Collation</span></div>
-                    <div class="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-3">
-                      <div class="flex-1 min-w-0"><label class="text-[0.55rem] sm:text-[0.6rem] text-slate-600 block mb-0.5 uppercase tracking-wider">Charset</label><input bind:value={editCharset} placeholder="utf8mb4" class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 font-mono outline-none focus:border-sky-400 placeholder:text-slate-600" /></div>
-                      <div class="flex-1 min-w-0"><label class="text-[0.55rem] sm:text-[0.6rem] text-slate-600 block mb-0.5 uppercase tracking-wider">Collation</label><input bind:value={editCollation} placeholder="utf8mb4_unicode_ci" class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 font-mono outline-none focus:border-sky-400 placeholder:text-slate-600" /></div>
-                      <div class="flex gap-1.5 shrink-0">
-                        <button onclick={() => saveEditDb(db.id)} disabled={dbBusy} class="inline-flex items-center gap-1 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-[0.7rem] sm:text-xs font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] hover:-translate-y-0.5 transition disabled:opacity-40 border-0 cursor-pointer">{#if dbBusy}<Loader2 size={10} class="animate-spin" />{:else}<Check size={10} />{/if} Save</button>
-                        <button onclick={cancelEditDb} class="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg text-[0.7rem] sm:text-xs text-slate-500 hover:bg-white/[0.05] transition border-0 cursor-pointer">Cancel</button>
-                      </div>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-          {#if dbFiltered.length !== dbs.length}<div class="px-3 sm:px-5 py-1.5 border-t border-white/5 bg-white/[0.01] text-[0.6rem] sm:text-[0.65rem] text-slate-500">Showing {dbFiltered.length} of {dbs.length} databases</div>{/if}
-        {/if}
+          <button onclick={() => (showCreateDb = !showCreateDb)} class="btn btn-secondary btn-sm"><Plus size={14} /> Create</button>
+        </div>
       </div>
-
-      <!-- ═══ Card: Database Users ═══ -->
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300 mt-3 sm:mt-4">
-        <!-- Add User To Database -->
-        <div class="px-3 sm:px-4 lg:px-5 py-2.5 sm:py-3 lg:py-4 border-b border-white/[0.05]">
-          <div class="flex items-center gap-2 mb-2.5 sm:mb-3"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-sky-400/10 flex items-center justify-center shrink-0"><UserPlus size={13} class="text-sky-400" /></div><span class="text-xs sm:text-sm font-semibold text-slate-200">Add User To Database</span></div>
-          {#if !showAssignDbUser}
-            <div class="space-y-2.5">
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                <div><label class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 block mb-0.5">User</label><input bind:value={newDbUser.username} placeholder="new_user" class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 font-mono outline-none focus:border-sky-400/50 placeholder:text-slate-600" /></div>
-                <div><label class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 block mb-0.5">Database</label>
-                  <select bind:value={newDbUser.database_id} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 outline-none focus:border-sky-400 appearance-none cursor-pointer"><option value={0}>— Select —</option>{#each dbs as db}<option value={db.id}>{db.name}</option>{/each}</select>
-                </div>
-              </div>
-              <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-                <div><label class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 block mb-0.5">Password <span class="text-slate-700">(opt)</span></label><input bind:value={newDbUser.password} type="password" placeholder="Auto" class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 font-mono outline-none focus:border-sky-400/50 placeholder:text-slate-600" /></div>
-                <div><label class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 block mb-0.5">Host</label><input bind:value={newDbUser.host_pattern} placeholder="%" class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 font-mono outline-none focus:border-sky-400/50 placeholder:text-slate-600" /></div>
-                <div><label class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 block mb-0.5">Privileges</label>
-                  <select bind:value={newDbUser.privileges} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 outline-none focus:border-sky-400 appearance-none cursor-pointer"><option value="ALL">ALL</option><option value="SELECT,INSERT,UPDATE,DELETE">Read+Write</option><option value="SELECT">Read Only</option></select>
-                </div>
-              </div>
-              <div class="flex items-center gap-2">
-                <button onclick={createDbUser} disabled={dbUserBusy !== null || !newDbUser.database_id || !newDbUser.username} class="inline-flex items-center gap-1 px-3 sm:px-5 py-1.5 sm:py-2 rounded-xl text-[0.75rem] sm:text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.15)] hover:-translate-y-0.5 transition-all disabled:opacity-40 border-0 cursor-pointer">{#if dbUserBusy !== null}<Loader2 size={11} class="animate-spin" />{:else}<UserPlus size={11} />{/if} Add</button>
-                <button onclick={() => { showAssignDbUser = true; if (dbs.length === 0) apiFetch(auth.token, 'GET', `sites/${siteId}/databases`).then((d: any) => { dbs = d?.databases || []; }); }} class="text-[0.65rem] sm:text-xs text-indigo-400/70 hover:text-indigo-300 transition cursor-pointer bg-transparent border-0 p-0">Or assign existing user →</button>
-              </div>
-            </div>
-          {:else}
-            <div class="space-y-2.5">
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                <div><label class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 block mb-0.5">Database</label>
-                  <select bind:value={assignDbUserData.database_id} onchange={(e: any) => { const dbId = parseInt(e.target.value); if (dbId) loadAvailableForDb(dbId); }} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 outline-none focus:border-indigo-400 appearance-none cursor-pointer"><option value={0}>— Select —</option>{#each dbs as db}<option value={db.id}>{db.name}</option>{/each}</select>
-                </div>
-                <div><label class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 block mb-0.5">User</label>
-                  {#if loadingAvailableUsers}<div class="flex items-center gap-2 text-[0.65rem] sm:text-xs text-slate-500 py-1.5 sm:py-2"><Loader2 size={10} class="animate-spin" /> Loading...</div>
-                  {:else}<select bind:value={assignDbUserData.username} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 outline-none focus:border-indigo-400 appearance-none cursor-pointer"><option value="">— Select —</option>{#each availableDbUsers as u}<option value={u.username}>{u.username}</option>{/each}</select>{/if}
-                </div>
-              </div>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                <div><label class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 block mb-0.5">Host</label><input bind:value={assignDbUserData.host_pattern} placeholder="%" class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 font-mono outline-none focus:border-indigo-400/50 placeholder:text-slate-600" /></div>
-                <div><label class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 block mb-0.5">Privileges</label>
-                  <select bind:value={assignDbUserData.privileges} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1.5 sm:py-2 text-[0.75rem] sm:text-xs text-slate-200 outline-none focus:border-indigo-400 appearance-none cursor-pointer"><option value="ALL">ALL</option><option value="READ_WRITE">Read+Write</option><option value="READ_ONLY">Read Only</option></select>
-                </div>
-              </div>
-              <div class="flex items-center gap-2">
-                <button onclick={assignDbUserSubmit} disabled={dbUserBusy !== null || !assignDbUserData.database_id || !assignDbUserData.username} class="inline-flex items-center gap-1 px-3 sm:px-5 py-1.5 sm:py-2 rounded-xl text-[0.75rem] sm:text-sm font-semibold bg-gradient-to-r from-indigo-400 to-sky-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.15)] hover:-translate-y-0.5 transition-all disabled:opacity-40 border-0 cursor-pointer">{#if dbUserBusy !== null}<Loader2 size={11} class="animate-spin" />{:else}<UserPlus size={11} />{/if} Add</button>
-                <button onclick={() => showAssignDbUser = false} class="text-[0.65rem] sm:text-xs text-slate-400 hover:text-slate-200 transition cursor-pointer bg-transparent border-0 p-0">← Create new user</button>
-              </div>
-            </div>
-          {/if}
-        </div>
-
-        <!-- Password display -->
-        {#if dbUserNewPwd}
-          <div class="px-3 sm:px-4 lg:px-5 py-2 sm:py-2.5 bg-amber-500/[0.06] border-b border-amber-500/10">
-            <div class="flex items-center justify-between gap-2"><div class="flex items-center gap-1.5 sm:gap-2 min-w-0"><Key size={11} class="text-amber-400 shrink-0" /><span class="text-[0.65rem] sm:text-xs text-amber-300 font-medium shrink-0">New password:</span><code class="text-[0.65rem] sm:text-xs text-amber-200 font-mono bg-amber-500/10 px-1.5 sm:px-2 py-0.5 rounded truncate">{dbUserNewPwd}</code></div><button onclick={() => copyText(dbUserNewPwd, 'dbpwd')} class="text-[0.65rem] sm:text-xs text-amber-400/60 hover:text-amber-300 transition shrink-0">{#if copiedField === 'dbpwd'}<Check size={11} />{:else}<Copy size={11} />{/if}</button></div>
-            <p class="text-[0.55rem] sm:text-[0.6rem] text-amber-400/50 mt-0.5 sm:mt-1 flex items-center gap-1"><AlertTriangle size={9} /> Save this password — it won't be shown again.</p>
+      {#if showCreateDb}
+        <div class="flex flex-col gap-3 border-b border-line bg-surface-2/50 px-5 py-4 sm:flex-row sm:items-end">
+          <div class="min-w-0 flex-1">
+            <label for="db-name" class="label">Name</label>
+            <input id="db-name" bind:value={newDb.name} class="input font-mono text-[13px]" placeholder="mydb" />
           </div>
-        {/if}
-
-        <!-- Current Users -->
-        <div class="px-3 sm:px-4 lg:px-5 py-2 sm:py-2.5 lg:py-3 border-b border-white/[0.05]">
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2 min-w-0"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-sky-400/10 flex items-center justify-center shrink-0"><Users size={13} class="text-sky-400" /></div><span class="text-xs sm:text-sm font-semibold text-slate-200 truncate">Current Users</span><span class="text-[0.6rem] sm:text-[0.65rem] text-slate-500 bg-white/[0.04] px-1.5 sm:px-2 py-0.5 rounded-full border border-white/[0.06] shrink-0">{dbUsersAll.length}</span></div>
-            <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
-              <select bind:value={dbUserFilter} class="bg-white/[0.04] border border-white/[0.07] rounded-lg px-2 sm:px-3 py-1 sm:py-1.5 text-[0.6rem] sm:text-xs text-slate-200 outline-none focus:border-sky-400 appearance-none cursor-pointer shrink-0"><option value={0}>All DBs</option>{#each dbs as db}<option value={db.id}>{db.name}</option>{/each}</select>
-              <div class="relative"><Search size={10} class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-600 pointer-events-none" /><input type="text" bind:value={dbUserSearch} placeholder="Search..." class="w-20 sm:w-32 bg-white/[0.04] border border-white/[0.07] rounded-lg pl-5 sm:pl-7 pr-2 sm:pr-3 py-1 sm:py-1.5 text-[0.6rem] sm:text-xs text-slate-200 outline-none focus:border-sky-400/50 placeholder:text-slate-600 transition" /></div>
-            </div>
+          <div class="sm:w-44">
+            <label for="db-type" class="label">Type</label>
+            <select id="db-type" bind:value={newDb.type} class="input"><option value="mysql">MySQL / MariaDB</option><option value="postgres">PostgreSQL</option></select>
+          </div>
+          <div class="flex shrink-0 gap-2">
+            <button onclick={createDB} disabled={dbBusy || !newDb.name} class="btn btn-primary">{dbBusy ? 'Creating…' : 'Create'}</button>
+            <button onclick={() => (showCreateDb = false)} class="btn btn-ghost">Cancel</button>
           </div>
         </div>
-        {#if dbUsersLoading}
-          <div class="divide-y divide-white/5">{#each Array(3) as _}<div class="px-3 sm:px-5 py-2 sm:py-3 flex items-center gap-3"><div class="h-3 w-24 bg-white/[0.04] rounded-lg animate-pulse"></div><div class="h-4 w-16 bg-white/[0.03] rounded-full animate-pulse"></div></div>{/each}</div>
-        {:else if dbUsersFiltered.length === 0}
-          <div class="flex flex-col items-center justify-center py-10 sm:py-14"><Users size={20} class="text-white/[0.08] mb-3" /><p class="text-xs sm:text-sm font-medium text-slate-400 mb-0.5">{dbUsersAll.length === 0 ? 'No users yet' : 'No matching users'}</p><p class="text-[0.6rem] sm:text-[0.65rem] sm:text-xs text-slate-600">{dbUsersAll.length === 0 ? 'Add a user above' : 'Try different search'}</p></div>
-        {:else}
-          <div class="divide-y divide-white/[0.04]">
-            {#each dbUsersFiltered as u (u.id + '-' + u.database_id)}
-              {#if editingDbUserId === u.id}
-                <div class="px-3 sm:px-4 lg:px-5 py-2.5 sm:py-3 bg-sky-500/[0.03]">
-                  <div class="flex items-center gap-1.5 mb-1.5 sm:mb-2"><code class="text-[0.7rem] sm:text-xs font-mono text-slate-300">{u.username}@<span class="text-slate-500">{u.host_pattern || '%'}</span></code><span class="text-[0.55rem] sm:text-[0.6rem] text-sky-400/70 bg-sky-400/[0.06] px-1 sm:px-1.5 py-0.5 rounded">{u.database_name}</span></div>
-                  <div class="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
-                    <input bind:value={editDbUserHost} placeholder="Host pattern" class="flex-1 bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1 sm:py-1.5 text-[0.7rem] sm:text-xs text-slate-200 font-mono outline-none focus:border-sky-400" />
-                    <select bind:value={editDbUserPrivs} class="bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 sm:px-3 py-1 sm:py-1.5 text-[0.7rem] sm:text-xs text-slate-200 outline-none focus:border-sky-400 cursor-pointer"><option value="ALL">ALL</option><option value="SELECT,INSERT,UPDATE,DELETE">Read+Write</option><option value="SELECT">Read Only</option></select>
-                    <div class="flex items-center gap-1">
-                      <button onclick={() => saveEditDbUser(u)} class="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[0.65rem] sm:text-xs font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition border-0 cursor-pointer"><Check size={10} /> Save</button>
-                      <button onclick={cancelEditDbUser} class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[0.65rem] sm:text-xs text-slate-500 hover:bg-white/[0.05] transition border-0 cursor-pointer">Cancel</button>
-                    </div>
-                  </div>
+      {/if}
+      {#if dbLoading}
+        <div class="space-y-3 p-4">{#each Array(3) as _, i (i)}<div class="skeleton h-9"></div>{/each}</div>
+      {:else if dbs.length === 0}
+        <EmptyState compact icon={Database} title="No databases" description="Create a database for this site." />
+      {:else}
+        <ul class="divide-y divide-line">
+          {#each dbFiltered as db (db.id)}
+            <li>
+              <div class="flex items-center justify-between gap-3 px-5 py-3 transition-colors duration-100 hover:bg-surface-2/60">
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="truncate text-sm font-medium text-fg">{db.name}</span>
+                  <span class="badge {db.type === 'mysql' ? 'badge-success' : 'badge-info'}"><span class="dot"></span>{db.type || 'mysql'}</span>
+                  {#if db.charset}<span class="badge font-mono max-sm:hidden">{db.charset}</span>{/if}
+                  {#if db.size_bytes}<span class="font-mono text-xs text-subtle tabular-nums">{fmtBytes(db.size_bytes)}</span>{/if}
                 </div>
-              {:else}
-                <div class="px-3 sm:px-4 lg:px-5 py-2 sm:py-2.5 hover:bg-white/[0.02] transition">
-                  <div class="flex items-center justify-between gap-2 sm:gap-3">
-                    <div class="flex items-center gap-2 sm:gap-3 min-w-0">
-                      <Users size={12} class="text-slate-500/50 shrink-0" />
-                      <div class="min-w-0">
-                        <code class="text-[0.75rem] sm:text-sm font-mono text-slate-200 block truncate">{u.username}@<span class="text-slate-500">{u.host_pattern || '%'}</span></code>
-                        <div class="flex items-center gap-1.5 mt-0.5">
-                          <span class="text-[0.55rem] sm:text-[0.6rem] text-sky-400/70 bg-sky-400/[0.06] px-1 sm:px-1.5 py-0.5 rounded">{u.database_name}</span>
-                          <span class="inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[0.55rem] sm:text-[0.6rem] font-medium {u.privileges === 'ALL' ? 'bg-emerald-500/10 text-emerald-400' : u.privileges === 'SELECT,INSERT,UPDATE,DELETE' || u.privileges === 'READ_WRITE' ? 'bg-sky-500/10 text-sky-400' : 'bg-slate-400/10 text-slate-400'}">{u.privileges === 'ALL' ? 'ALL' : u.privileges === 'SELECT,INSERT,UPDATE,DELETE' || u.privileges === 'READ_WRITE' ? 'Read+Write' : u.privileges === 'SELECT' || u.privileges === 'READ_ONLY' ? 'Read Only' : u.privileges}</span>
-                        </div>
-                      </div>
+                <div class="flex shrink-0 items-center gap-0.5">
+                  <button onclick={() => startEditDb(db)} class="btn btn-ghost btn-icon btn-xs" aria-label="Edit charset and collation of {db.name}" title="Edit charset/collation"><Pencil size={13} /></button>
+                  <button onclick={() => deleteDB(db)} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Delete database {db.name}" title="Delete database"><Trash2 size={13} /></button>
+                </div>
+              </div>
+              {#if editDbId === db.id}
+                <div class="border-t border-line bg-surface-2/50 px-5 py-3">
+                  <p class="mb-2 text-xs font-medium text-muted">Edit charset & collation</p>
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
+                    <div class="min-w-0 flex-1">
+                      <label for="db-charset-{db.id}" class="label">Charset</label>
+                      <input id="db-charset-{db.id}" bind:value={editCharset} placeholder="utf8mb4" class="input h-8 font-mono text-[13px]" />
                     </div>
-                    <div class="flex items-center gap-0.5 sm:gap-1 shrink-0">
-                      <button onclick={() => startEditDbUser(u)} class="p-1 sm:p-1.5 rounded-lg text-slate-500 hover:text-sky-400 hover:bg-sky-400/10 transition border-0 cursor-pointer" title="Edit privileges"><Pencil size={11} /></button>
-                      <button onclick={() => rotateDbUserPwdFromTab(u.database_id, u.id)} disabled={dbUserBusy === u.id} class="p-1 sm:p-1.5 rounded-lg text-slate-500 hover:text-amber-400 hover:bg-amber-400/10 transition border-0 cursor-pointer" title="Change password">{#if dbUserBusy === u.id}<Loader2 size={11} class="animate-spin" />{:else}<Key size={11} />{/if}</button>
-                      <button onclick={() => deleteDbUserFromTab(u.id, u.database_id)} disabled={dbUserBusy === u.id} class="p-1 sm:p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-400/10 transition border-0 cursor-pointer" title="Delete user"><Trash2 size={11} /></button>
+                    <div class="min-w-0 flex-1">
+                      <label for="db-collation-{db.id}" class="label">Collation</label>
+                      <input id="db-collation-{db.id}" bind:value={editCollation} placeholder="utf8mb4_unicode_ci" class="input h-8 font-mono text-[13px]" />
+                    </div>
+                    <div class="flex shrink-0 gap-1.5">
+                      <button onclick={() => saveEditDb(db.id)} disabled={dbBusy} class="btn btn-primary btn-sm">{#if dbBusy}<LoaderCircle size={13} class="animate-spin" />{:else}<Check size={13} />{/if} Save</button>
+                      <button onclick={cancelEditDb} class="btn btn-ghost btn-sm">Cancel</button>
                     </div>
                   </div>
                 </div>
               {/if}
-            {/each}
+            </li>
+          {/each}
+        </ul>
+        {#if dbFiltered.length !== dbs.length}<div class="border-t border-line px-5 py-2 text-xs text-subtle">Showing {dbFiltered.length} of {dbs.length} databases</div>{/if}
+      {/if}
+    </div>
+
+    <!-- Database users -->
+    <div class="card">
+      <div class="border-b border-line px-5 py-4">
+        <div class="mb-3 flex items-center gap-2">
+          <UserPlus size={16} class="text-subtle" />
+          <h3 class="card-title">Add user to database</h3>
+        </div>
+        {#if !showAssignDbUser}
+          <div class="space-y-3">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label for="dbu-user" class="label">User</label>
+                <input id="dbu-user" bind:value={newDbUser.username} placeholder="new_user" class="input font-mono text-[13px]" />
+              </div>
+              <div>
+                <label for="dbu-db" class="label">Database</label>
+                <select id="dbu-db" bind:value={newDbUser.database_id} class="input"><option value={0}>— Select —</option>{#each dbs as db (db.id)}<option value={db.id}>{db.name}</option>{/each}</select>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div>
+                <label for="dbu-pass" class="label">Password <span class="text-subtle">(optional)</span></label>
+                <input id="dbu-pass" bind:value={newDbUser.password} type="password" placeholder="Auto" autocomplete="new-password" class="input font-mono text-[13px]" />
+              </div>
+              <div>
+                <label for="dbu-host" class="label">Host</label>
+                <input id="dbu-host" bind:value={newDbUser.host_pattern} placeholder="%" class="input font-mono text-[13px]" />
+              </div>
+              <div class="col-span-2 sm:col-span-1">
+                <label for="dbu-privs" class="label">Privileges</label>
+                <select id="dbu-privs" bind:value={newDbUser.privileges} class="input"><option value="ALL">ALL</option><option value="SELECT,INSERT,UPDATE,DELETE">Read+Write</option><option value="SELECT">Read Only</option></select>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+              <button onclick={createDbUser} disabled={dbUserBusy !== null || !newDbUser.database_id || !newDbUser.username} class="btn btn-primary btn-sm">
+                {#if dbUserBusy !== null}<LoaderCircle size={14} class="animate-spin" />{:else}<UserPlus size={14} />{/if} Add
+              </button>
+              <button onclick={showAssignExisting} class="link inline-flex items-center gap-1 text-[13px]">Or assign existing user <ArrowRight size={13} /></button>
+            </div>
           </div>
-          {#if dbUsersFiltered.length !== dbUsersAll.length}<div class="px-3 sm:px-5 py-1 border-t border-white/5 bg-white/[0.01] text-[0.55rem] sm:text-[0.6rem] text-slate-500">Showing {dbUsersFiltered.length} of {dbUsersAll.length} users</div>{/if}
+        {:else}
+          <div class="space-y-3">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label for="dba-db" class="label">Database</label>
+                <select id="dba-db" bind:value={assignDbUserData.database_id} onchange={(e: any) => { const dbId = parseInt(e.target.value); if (dbId) loadAvailableForDb(dbId); }} class="input"><option value={0}>— Select —</option>{#each dbs as db (db.id)}<option value={db.id}>{db.name}</option>{/each}</select>
+              </div>
+              <div>
+                <label for="dba-user" class="label">User</label>
+                {#if loadingAvailableUsers}
+                  <div class="flex h-9 items-center gap-2 text-[13px] text-subtle"><LoaderCircle size={13} class="animate-spin" /> Loading…</div>
+                {:else}
+                  <select id="dba-user" bind:value={assignDbUserData.username} class="input"><option value="">— Select —</option>{#each availableDbUsers as u (u.username)}<option value={u.username}>{u.username}</option>{/each}</select>
+                {/if}
+              </div>
+            </div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label for="dba-host" class="label">Host</label>
+                <input id="dba-host" bind:value={assignDbUserData.host_pattern} placeholder="%" class="input font-mono text-[13px]" />
+              </div>
+              <div>
+                <label for="dba-privs" class="label">Privileges</label>
+                <select id="dba-privs" bind:value={assignDbUserData.privileges} class="input"><option value="ALL">ALL</option><option value="READ_WRITE">Read+Write</option><option value="READ_ONLY">Read Only</option></select>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+              <button onclick={assignDbUserSubmit} disabled={dbUserBusy !== null || !assignDbUserData.database_id || !assignDbUserData.username} class="btn btn-primary btn-sm">
+                {#if dbUserBusy !== null}<LoaderCircle size={14} class="animate-spin" />{:else}<UserPlus size={14} />{/if} Add
+              </button>
+              <button onclick={() => (showAssignDbUser = false)} class="link inline-flex items-center gap-1 text-[13px]"><ArrowLeft size={13} /> Create new user</button>
+            </div>
+          </div>
         {/if}
       </div>
-    </div>
-  {/if}
 
+      {#if dbUserNewPwd}
+        <div class="border-b border-line bg-warning/10 px-5 py-3">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex min-w-0 items-center gap-2">
+              <Key size={14} class="shrink-0 text-warning" />
+              <span class="shrink-0 text-[13px] font-medium text-fg">New password:</span>
+              <code class="code truncate">{dbUserNewPwd}</code>
+            </div>
+            <button onclick={() => copyText(dbUserNewPwd, 'dbpwd')} class="btn btn-ghost btn-icon btn-xs" aria-label="Copy password">
+              {#if copiedField === 'dbpwd'}<Check size={13} class="text-success" />{:else}<Copy size={13} />{/if}
+            </button>
+          </div>
+          <p class="mt-1 flex items-center gap-1 text-xs text-warning"><TriangleAlert size={12} /> Save this password — it won't be shown again.</p>
+        </div>
+      {/if}
+
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3">
+        <div class="flex min-w-0 items-center gap-2">
+          <Users size={16} class="shrink-0 text-subtle" />
+          <h3 class="card-title truncate">Current users</h3>
+          <span class="badge tabular-nums">{dbUsersAll.length}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <select bind:value={dbUserFilter} aria-label="Filter by database" class="input h-8 w-auto text-[13px]"><option value={0}>All DBs</option>{#each dbs as db (db.id)}<option value={db.id}>{db.name}</option>{/each}</select>
+          <div class="relative">
+            <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+            <input type="text" bind:value={dbUserSearch} aria-label="Filter users" placeholder="Filter…" class="input h-8 w-32 pl-8 sm:w-40" />
+          </div>
+        </div>
+      </div>
+      {#if dbUsersLoading}
+        <div class="space-y-3 p-4">{#each Array(3) as _, i (i)}<div class="skeleton h-10"></div>{/each}</div>
+      {:else if dbUsersFiltered.length === 0}
+        <EmptyState compact icon={Users} title={dbUsersAll.length === 0 ? 'No users yet' : 'No matching users'} description={dbUsersAll.length === 0 ? 'Add a user above.' : 'Try a different search.'} />
+      {:else}
+        <ul class="divide-y divide-line">
+          {#each dbUsersFiltered as u (u.id + '-' + u.database_id)}
+            {#if editingDbUserId === u.id}
+              <li class="bg-surface-2/50 px-5 py-3">
+                <div class="mb-2 flex items-center gap-2">
+                  <code class="font-mono text-[13px] text-fg">{u.username}@<span class="text-subtle">{u.host_pattern || '%'}</span></code>
+                  <span class="badge">{u.database_name}</span>
+                </div>
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <label for="dbu-edit-host-{u.id}" class="sr-only">Host pattern</label>
+                  <input id="dbu-edit-host-{u.id}" bind:value={editDbUserHost} placeholder="Host pattern" class="input h-8 flex-1 font-mono text-[13px]" />
+                  <select bind:value={editDbUserPrivs} aria-label="Privileges" class="input h-8 w-auto text-[13px]"><option value="ALL">ALL</option><option value="SELECT,INSERT,UPDATE,DELETE">Read+Write</option><option value="SELECT">Read Only</option></select>
+                  <div class="flex items-center gap-1">
+                    <button onclick={() => saveEditDbUser(u)} class="btn btn-primary btn-sm"><Check size={13} /> Save</button>
+                    <button onclick={cancelEditDbUser} class="btn btn-ghost btn-sm">Cancel</button>
+                  </div>
+                </div>
+              </li>
+            {:else}
+              <li class="flex items-center justify-between gap-3 px-5 py-2.5 transition-colors duration-100 hover:bg-surface-2/60">
+                <div class="min-w-0">
+                  <code class="block truncate font-mono text-[13px] text-fg">{u.username}@<span class="text-subtle">{u.host_pattern || '%'}</span></code>
+                  <div class="mt-1 flex items-center gap-1.5">
+                    <span class="badge">{u.database_name}</span>
+                    <span class="badge {privBadge(u.privileges)}">{privLabel(u.privileges)}</span>
+                  </div>
+                </div>
+                <div class="flex shrink-0 items-center gap-0.5">
+                  <button onclick={() => startEditDbUser(u)} class="btn btn-ghost btn-icon btn-xs" aria-label="Edit privileges of {u.username}" title="Edit privileges"><Pencil size={13} /></button>
+                  <button onclick={() => rotateDbUserPwdFromTab(u.database_id, u.id)} disabled={dbUserBusy === u.id} class="btn btn-ghost btn-icon btn-xs" aria-label="Reset password of {u.username}" title="Change password">
+                    {#if dbUserBusy === u.id}<LoaderCircle size={13} class="animate-spin" />{:else}<Key size={13} />{/if}
+                  </button>
+                  <button onclick={() => deleteDbUserFromTab(u.id, u.database_id)} disabled={dbUserBusy === u.id} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Delete user {u.username}" title="Delete user"><Trash2 size={13} /></button>
+                </div>
+              </li>
+            {/if}
+          {/each}
+        </ul>
+        {#if dbUsersFiltered.length !== dbUsersAll.length}<div class="border-t border-line px-5 py-2 text-xs text-subtle">Showing {dbUsersFiltered.length} of {dbUsersAll.length} users</div>{/if}
+      {/if}
+    </div>
+  </div>
+{/if}

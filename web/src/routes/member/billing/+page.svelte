@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { CreditCard, Check, ExternalLink, ArrowRight } from 'lucide-svelte';
+  import { CreditCard, Check, ArrowRight } from 'lucide-svelte';
+  import PageHeader from '$components/PageHeader.svelte';
 
   const plans = [
     {
@@ -30,53 +31,45 @@
   <title>Billing — SigardaPanel</title>
 </svelte:head>
 
-<div class="space-y-8">
-  <div>
-    <h1 class="text-2xl font-bold text-white mb-1">Billing</h1>
-    <p class="text-sm text-slate-500">Manage your subscription and plan.</p>
-  </div>
+<PageHeader title="Billing" description="Manage your subscription and plan." />
 
-  <!-- Current Plan -->
-  <div class="p-6 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04]">
-    <div class="flex items-center gap-2 mb-2">
-      <CreditCard size={16} class="text-emerald-400" />
-      <span class="text-sm font-semibold text-emerald-400">Current Plan: Community</span>
+<div class="space-y-6">
+  <section class="card card-body flex items-start gap-3">
+    <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-success/10 text-success"><CreditCard size={16} /></span>
+    <div>
+      <h2 class="text-sm font-semibold text-fg">Current plan: Community</h2>
+      <p class="mt-0.5 text-[13px] text-muted">You're on the free plan. No billing required.</p>
     </div>
-    <p class="text-xs text-slate-400">You're on the free plan. No billing required.</p>
-  </div>
+  </section>
 
-  <!-- Plans -->
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-    {#each plans as plan}
-      <div class="relative p-6 rounded-2xl border {plan.current ? 'border-emerald-400/30 bg-emerald-400/[0.04]' : 'border-white/[0.06] bg-white/[0.02]'} transition-all">
-        {#if plan.current}
-          <div class="absolute top-3 right-3 px-2 py-0.5 rounded-full bg-emerald-500/10 text-[0.6rem] font-bold text-emerald-400">Current</div>
-        {/if}
-        <div class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">{plan.name}</div>
-        <div class="text-2xl font-extrabold text-white mb-1">{plan.price}</div>
-        <p class="text-xs text-slate-500 mb-4">{plan.desc}</p>
-        {#if !plan.current}
-          <a href="mailto:wahyu@sigarda.com?subject={plan.name}%20Plan" class="block w-full text-center py-2.5 rounded-xl text-xs font-semibold border border-white/10 bg-white/[0.04] hover:bg-white/[0.08] text-white transition-all mb-4">
-            Upgrade
-          </a>
-        {/if}
-        <div class="space-y-2">
-          {#each plan.features as feat}
-            <div class="flex items-center gap-2 text-xs text-slate-400">
-              <Check size={12} class="{plan.current ? 'text-emerald-400' : 'text-slate-600'} shrink-0" />
-              {feat}
-            </div>
-          {/each}
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+    {#each plans as plan (plan.name)}
+      <div class="card flex flex-col p-5 {plan.current ? 'border-accent ring-3 ring-accent/20' : ''}">
+        <div class="flex items-center justify-between">
+          <div class="text-sm font-semibold text-fg">{plan.name}</div>
+          {#if plan.current}<span class="badge badge-accent">Current</span>{/if}
         </div>
+        <div class="mt-3 text-2xl font-semibold tracking-tight text-fg tabular-nums">{plan.price}</div>
+        <p class="mt-0.5 text-[13px] text-muted">{plan.desc}</p>
+        {#if !plan.current}
+          <a href="mailto:wahyu@sigarda.com?subject={plan.name}%20Plan" class="btn btn-secondary btn-sm mt-4 w-full">Upgrade</a>
+        {/if}
+        <ul class="mt-4 space-y-2 border-t border-line pt-4">
+          {#each plan.features as feat (feat)}
+            <li class="flex items-center gap-2 text-[13px] text-muted">
+              <Check size={14} class="shrink-0 {plan.current ? 'text-accent' : 'text-subtle'}" />
+              {feat}
+            </li>
+          {/each}
+        </ul>
       </div>
     {/each}
   </div>
 
-  <!-- Contact -->
-  <div class="p-6 rounded-2xl border border-white/[0.06] bg-white/[0.02] text-center">
-    <p class="text-sm text-slate-400 mb-4">Need a custom plan or have questions?</p>
-    <a href="mailto:wahyu@sigarda.com?subject=SigardaPanel%20Billing" class="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#040a14] hover:shadow-[0_4px_24px_rgba(56,189,248,0.3)] transition-all">
+  <section class="card card-body flex flex-col items-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left">
+    <p class="text-sm text-muted">Need a custom plan or have questions?</p>
+    <a href="mailto:wahyu@sigarda.com?subject=SigardaPanel%20Billing" class="btn btn-primary btn-sm">
       Contact Sales <ArrowRight size={14} />
     </a>
-  </div>
+  </section>
 </div>

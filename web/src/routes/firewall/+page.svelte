@@ -1,15 +1,24 @@
 <script lang="ts">
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
+  import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
-  import { Shield, ShieldCheck, ShieldOff, Plus, Trash2, RefreshCw, Zap, Globe, Server, Database, Ban } from 'lucide-svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import Modal from '$components/Modal.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
+  import { Shield, ShieldCheck, ShieldOff, Plus, Trash2, RefreshCw, Zap, Globe, Server, Database, Ban, LoaderCircle, RotateCcw, Search } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
   let servers = $state<any[]>([]);
+  let serversLoaded = $state(false);
   let selectedServer = $state<number>(0);
   let status = $state<any>(null);
+  let statusLoading = $state(false);
   let rules = $state<any[]>([]);
   let loading = $state(false);
+  let loadError = $state('');
+  let busy = $state('');
   let showAddRule = $state(false);
   let showQuickBlock = $state(false);
   let showPresets = $state(false);
@@ -18,10 +27,16 @@
   let newFrom = $state('');
   let newAction = $state('allow');
   let blockIP = $state('');
-  let canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  let filter = $state<'all' | 'ALLOW' | 'DENY'>('all');
+  let query = $state('');
+  const canManage = $derived(hasRole(auth.user?.role, 'admin'));
+
+  // Confirm dialog state shared by delete / reset / disable.
+  let confirmOpen = $state(false);
+  let confirmCfg = $state<{ title: string; message: string; label: string; run: () => void }>({ title: '', message: '', label: '', run: () => {} });
 
   const presets = [
-    { name: 'Web Server', icon: Globe, ports: ['80/tcp', '443/tcp'], desc: 'HTTP + HTTPS' },
+    { name: 'Web server', icon: Globe, ports: ['80/tcp', '443/tcp'], desc: 'HTTP + HTTPS' },
     { name: 'SSH', icon: Server, ports: ['22/tcp'], desc: 'Secure Shell' },
     { name: 'Database', icon: Database, ports: ['3306/tcp', '5432/tcp'], desc: 'MySQL + PostgreSQL' },
     { name: 'Redis', icon: Zap, ports: ['6379/tcp'], desc: 'Redis cache' },
@@ -30,37 +45,63 @@
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    const d: any = await apiFetch(auth.token, 'GET', 'servers');
-    servers = d?.servers ?? [];
+    try {
+      const d: any = await apiFetch(auth.token, 'GET', 'servers');
+      servers = d?.servers ?? [];
+    } catch (e: any) {
+      if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load servers');
+    }
+    serversLoaded = true;
     if (servers.length > 0) {
       selectedServer = servers[0].id;
-      loadStatus();
-      loadRules();
+      refresh();
     }
   });
 
+  function refresh() {
+    loadStatus();
+    loadRules();
+  }
+
+  function showError(e: any, fallback: string) {
+    if (e?.message !== 'session expired') toasts.error(e?.message || fallback);
+  }
+
   function loadStatus() {
     if (!selectedServer) return;
+    statusLoading = true;
     apiFetch(auth.token, 'GET', `servers/${selectedServer}/firewall/status`)
       .then((d: any) => { status = d; })
-      .catch(() => {});
+      .catch(() => { status = null; })
+      .finally(() => (statusLoading = false));
   }
 
   function loadRules() {
     if (!selectedServer) return;
     loading = true;
+    loadError = '';
     apiFetch(auth.token, 'GET', `servers/${selectedServer}/firewall/rules`)
       .then((d: any) => { rules = d?.rules ?? []; })
-      .catch(() => {})
-      .finally(() => loading = false);
+      .catch((e: any) => { if (e?.message !== 'session expired') loadError = e?.message || 'Failed to load rules'; })
+      .finally(() => (loading = false));
+  }
+
+  function ask(title: string, message: string, label: string, run: () => void) {
+    confirmCfg = { title, message, label, run };
+    confirmOpen = true;
   }
 
   async function toggleFirewall(enable: boolean) {
     const action = enable ? 'enable' : 'disable';
+    busy = action;
     try {
       await apiFetch(auth.token, 'POST', `servers/${selectedServer}/firewall/${action}`, {});
+      toasts.success(enable ? 'Firewall enabled' : 'Firewall disabled');
       loadStatus();
-    } catch (e) {}
+    } catch (e: any) {
+      showError(e, `Failed to ${action} firewall`);
+    }
+    busy = '';
   }
 
   async function addRule() {
@@ -68,237 +109,298 @@
     const endpoint = newAction === 'allow' ? 'allow' : 'deny';
     const body: any = { port: newPort, protocol: newProtocol };
     if (newFrom) body.from = newFrom;
+    busy = 'add';
     try {
       await apiFetch(auth.token, 'POST', `servers/${selectedServer}/firewall/${endpoint}`, body);
+      toasts.success(`Rule added: ${endpoint} ${newPort}/${newProtocol}`);
       showAddRule = false;
       newPort = '';
       newFrom = '';
       loadRules();
-    } catch (e) {}
+    } catch (e: any) {
+      showError(e, 'Failed to add rule');
+    }
+    busy = '';
   }
 
-  async function applyPreset(preset: any) {
-    for (const port of preset.ports) {
-      const [p, proto] = port.split('/');
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/firewall/allow`, {
-        port: p, protocol: proto || 'tcp', comment: preset.name
-      });
+  async function applyPreset(preset: (typeof presets)[number]) {
+    busy = `preset:${preset.name}`;
+    try {
+      for (const port of preset.ports) {
+        const [p, proto] = port.split('/');
+        await apiFetch(auth.token, 'POST', `servers/${selectedServer}/firewall/allow`, { port: p, protocol: proto || 'tcp', comment: preset.name });
+      }
+      toasts.success(`${preset.name} ports allowed`);
+      showPresets = false;
+    } catch (e: any) {
+      showError(e, 'Failed to apply preset');
     }
-    showPresets = false;
+    busy = '';
     loadRules();
   }
 
   async function blockIPAddr() {
     if (!blockIP) return;
+    busy = 'block';
     try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/firewall/deny`, {
-        port: 'any', from: blockIP, comment: 'Blocked via panel'
-      });
+      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/firewall/deny`, { port: 'any', from: blockIP, comment: 'Blocked via panel' });
+      toasts.success(`${blockIP} blocked`);
       showQuickBlock = false;
       blockIP = '';
       loadRules();
-    } catch (e) {}
+    } catch (e: any) {
+      showError(e, 'Failed to block IP');
+    }
+    busy = '';
   }
 
   async function deleteRule(num: number) {
-    if (!confirm(`Delete rule #${num}?`)) return;
+    busy = `del:${num}`;
     try {
       await apiFetch(auth.token, 'POST', `servers/${selectedServer}/firewall/delete`, { number: num });
+      toasts.success(`Rule #${num} deleted`);
       loadRules();
-    } catch (e) {}
+    } catch (e: any) {
+      showError(e, 'Failed to delete rule');
+    }
+    busy = '';
   }
 
   async function resetFirewall() {
-    if (!confirm('Reset firewall to defaults? This will remove ALL rules.')) return;
+    busy = 'reset';
     try {
       await apiFetch(auth.token, 'POST', `servers/${selectedServer}/firewall/reset`, {});
-      loadStatus();
-      loadRules();
-    } catch (e) {}
+      toasts.success('Firewall reset to defaults');
+      refresh();
+    } catch (e: any) {
+      showError(e, 'Failed to reset firewall');
+    }
+    busy = '';
   }
+
+  function actionBadge(a: string) {
+    if (a === 'ALLOW') return 'badge-success';
+    if (a === 'DENY' || a === 'REJECT') return 'badge-danger';
+    return 'badge-warning';
+  }
+
+  const visible = $derived(
+    rules
+      .filter((r) => filter === 'all' || r.action === filter)
+      .filter((r) => !query || `${r.port} ${r.from} ${r.to} ${r.comment}`.toLowerCase().includes(query.toLowerCase())),
+  );
 </script>
 
 <DashboardLayout active="Firewall">
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-    <div>
-      <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-orange-100 bg-clip-text text-transparent">Firewall (UFW)</h1>
-      <p class="text-sm text-slate-500 mt-1">{status?.active ? '🟢 Active' : '🔴 Inactive'} • {rules.length} rule(s)</p>
-    </div>
-    <div class="flex gap-2">
-      <select bind:value={selectedServer} onchange={() => { loadStatus(); loadRules(); }}
-        class="bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white">
-        {#each servers as s}
-          <option value={s.id}>{s.name}</option>
-        {/each}
-      </select>
-      <button onclick={() => { loadStatus(); loadRules(); }} class="p-2 bg-white/[0.05] border border-white/[0.1] rounded-lg hover:bg-white/[0.1] transition">
-        <RefreshCw size={16} />
+  <PageHeader title="Firewall" description={`UFW · ${rules.length} rule(s)`}>
+    {#snippet meta()}
+      {#if status}
+        <span class="badge {status.active ? 'badge-success' : 'badge-danger'}"><span class="dot"></span>{status.active ? 'Active' : 'Inactive'}</span>
+      {/if}
+    {/snippet}
+    {#snippet actions()}
+      {#if servers.length > 1}
+        <select bind:value={selectedServer} onchange={refresh} class="input h-8 w-auto min-w-40 text-[13px]" aria-label="Server">
+          {#each servers as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
+        </select>
+      {/if}
+      <button onclick={refresh} class="btn btn-secondary btn-sm" disabled={loading || !selectedServer}>
+        <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
-    </div>
-  </div>
+      {#if canManage && selectedServer}
+        <button onclick={() => (showQuickBlock = true)} class="btn btn-secondary btn-sm"><Ban size={14} /> Block IP</button>
+        <button onclick={() => (showPresets = true)} class="btn btn-secondary btn-sm"><Zap size={14} /> Presets</button>
+        <button onclick={() => (showAddRule = true)} class="btn btn-primary btn-sm"><Plus size={14} /> Add rule</button>
+      {/if}
+    {/snippet}
+  </PageHeader>
 
-  <!-- Status + Actions -->
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5">
-      <div class="text-xs text-slate-500 mb-2">Firewall Status</div>
-      <div class="flex items-center gap-3">
-        <div class="w-3 h-3 rounded-full {status?.active ? 'bg-emerald-400 shadow-[0_0_8px_rgba(74,222,128,0.5)]' : 'bg-red-400'}"></div>
-        <span class="text-lg font-semibold {status?.active ? 'text-emerald-400' : 'text-red-400'}">
-          {status?.active ? 'Active' : 'Inactive'}
-        </span>
-      </div>
-    </div>
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5 flex items-center justify-between">
-      <div>
-        <div class="text-xs text-slate-500 mb-2">Quick Actions</div>
-        <div class="flex gap-2">
-          {#if status?.active}
-            <button onclick={() => toggleFirewall(false)} class="px-3 py-1.5 bg-red-500/20 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/30 transition">Disable</button>
-          {:else}
-            <button onclick={() => toggleFirewall(true)} class="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/30 transition">Enable</button>
-          {/if}
-          <button onclick={() => resetFirewall()} class="px-3 py-1.5 bg-white/[0.05] text-slate-400 rounded-lg text-xs font-medium hover:bg-white/[0.1] transition">Reset</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Action Buttons -->
-  {#if canManage}
-    <div class="flex flex-wrap items-center gap-3 mb-6">
-      <button onclick={() => { showAddRule = !showAddRule; showPresets = false; showQuickBlock = false; }}
-        class="px-4 py-2 bg-indigo-500/20 text-indigo-400 rounded-lg text-sm font-medium hover:bg-indigo-500/30 transition flex items-center gap-2">
-        <Plus size={16} /> Add Rule
-      </button>
-      <button onclick={() => { showPresets = !showPresets; showAddRule = false; showQuickBlock = false; }}
-        class="px-4 py-2 bg-sky-500/20 text-sky-400 rounded-lg text-sm font-medium hover:bg-sky-500/30 transition flex items-center gap-2">
-        <Zap size={16} /> Presets
-      </button>
-      <button onclick={() => { showQuickBlock = !showQuickBlock; showAddRule = false; showPresets = false; }}
-        class="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/30 transition flex items-center gap-2">
-        <Ban size={16} /> Block IP
-      </button>
-    </div>
-
-    {#if showAddRule}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5 mb-6">
-        <h3 class="text-sm font-semibold text-white mb-3">Add Firewall Rule</h3>
-        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
-          <input bind:value={newPort} placeholder="Port (e.g. 443)" class="bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500" />
-          <select bind:value={newProtocol} class="bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white">
-            <option value="tcp">TCP</option>
-            <option value="udp">UDP</option>
-          </select>
-          <input bind:value={newFrom} placeholder="From IP (optional)" class="bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500" />
-          <div class="flex gap-2">
-            <select bind:value={newAction} class="bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white flex-1">
-              <option value="allow">Allow</option>
-              <option value="deny">Deny</option>
-            </select>
-            <button onclick={addRule} class="px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 transition">Save</button>
-          </div>
-        </div>
-      </div>
-    {/if}
-
-    {#if showPresets}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5 mb-6">
-        <h3 class="text-sm font-semibold text-white mb-3">Quick Presets</h3>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {#each presets as preset}
-            {@const Icon = preset.icon}
-            <button onclick={() => applyPreset(preset)}
-              class="flex items-center gap-3 p-3 bg-white/[0.03] border border-white/[0.06] rounded-lg hover:bg-white/[0.06] hover:border-white/[0.12] transition text-left">
-              <div class="w-10 h-10 rounded-lg bg-sky-500/10 flex items-center justify-center">
-                <Icon size={18} class="text-sky-400" />
-              </div>
-              <div>
-                <div class="text-sm font-medium text-white">{preset.name}</div>
-                <div class="text-[0.65rem] text-slate-500">{preset.ports.join(', ')}</div>
-              </div>
-            </button>
-          {/each}
-        </div>
-      </div>
-    {/if}
-
-    {#if showQuickBlock}
-      <div class="bg-red-500/5 border border-red-500/20 rounded-xl p-5 mb-6">
-        <h3 class="text-sm font-semibold text-red-300 mb-3">Block IP Address</h3>
-        <div class="flex gap-3">
-          <input bind:value={blockIP} placeholder="IP address (e.g. 1.2.3.4)" class="flex-1 bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500" />
-          <button onclick={blockIPAddr} class="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600 transition flex items-center gap-2">
-            <Ban size={14} /> Block
-          </button>
-        </div>
-      </div>
-    {/if}
-  {/if}
-
-  <!-- Rules Table -->
-  {#if loading}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-      <div class="animate-pulse text-[var(--text-muted)]">Loading rules...</div>
-    </div>
-  {:else if rules.length === 0}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-      <Shield size={48} class="mb-4 opacity-30" />
-      <h2 class="text-lg font-semibold mb-2">No Rules</h2>
-      <p class="text-sm text-slate-500">No firewall rules configured.</p>
+  {#if serversLoaded && servers.length === 0}
+    <div class="card">
+      <EmptyState icon={Server} title="No servers" description="Add a server first — the firewall is managed through its agent.">
+        <a href="/servers" class="btn btn-primary btn-sm">Go to servers</a>
+      </EmptyState>
     </div>
   {:else}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
-        <h3 class="text-sm font-semibold text-white">Firewall Rules ({rules.length})</h3>
+    <div class="card mb-6 flex flex-wrap items-center justify-between gap-4 p-5">
+      <div class="flex items-center gap-3">
+        <div class="flex size-10 items-center justify-center rounded-lg border border-line bg-surface-2 {status?.active ? 'text-success' : 'text-danger'}">
+          {#if status?.active}<ShieldCheck size={18} strokeWidth={1.75} />{:else}<ShieldOff size={18} strokeWidth={1.75} />{/if}
+        </div>
+        <div>
+          {#if statusLoading && !status}
+            <div class="skeleton mb-1.5 h-4 w-28"></div>
+            <div class="skeleton h-3 w-48"></div>
+          {:else}
+            <div class="text-sm font-semibold text-fg">{status ? (status.active ? 'Firewall is active' : 'Firewall is inactive') : 'Status unavailable'}</div>
+            <div class="text-[13px] text-muted">
+              {status ? (status.active ? 'Incoming traffic is filtered by the rules below.' : 'All ports are reachable. Enable UFW to enforce rules.') : 'The agent did not report the firewall status.'}
+            </div>
+          {/if}
+        </div>
       </div>
-      <div class="overflow-x-auto">
-        <table class="w-full border-separate border-spacing-0">
-          <thead><tr class="text-left">
-            <th class="px-4 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">#</th>
-            <th class="px-4 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Port</th>
-            <th class="px-4 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Proto</th>
-            <th class="px-4 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Action</th>
-            <th class="px-4 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Direction</th>
-            <th class="px-4 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">From</th>
-            <th class="px-4 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">To</th>
-            <th class="px-4 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Comment</th>
-            {#if canManage}
-              <th class="px-4 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] text-right">Actions</th>
-            {/if}
-          </tr></thead>
-          <tbody>
-            {#each rules as r}
-              <tr class="hover:bg-white/[0.02] transition group">
-                <td class="px-4 py-3 border-b border-white/[0.04] text-sm text-slate-400 font-mono">{r.number}</td>
-                <td class="px-4 py-3 border-b border-white/[0.04] text-sm text-white font-mono">{r.port || '—'}</td>
-                <td class="px-4 py-3 border-b border-white/[0.04]">
-                  <span class="px-1.5 py-0.5 rounded text-[0.65rem] font-medium bg-white/[0.05] text-slate-400">{r.protocol || 'any'}</span>
-                </td>
-                <td class="px-4 py-3 border-b border-white/[0.04]">
-                  <span class="px-2 py-0.5 rounded text-xs font-medium {r.action === 'ALLOW' ? 'bg-emerald-500/20 text-emerald-400' : r.action === 'DENY' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'}">
-                    {r.action}
-                  </span>
-                </td>
-                <td class="px-4 py-3 border-b border-white/[0.04]">
-                  <span class="text-xs {r.direction === 'IN' ? 'text-sky-400' : r.direction === 'OUT' ? 'text-violet-400' : 'text-slate-500'}">
-                    {r.direction || '—'}
-                  </span>
-                </td>
-                <td class="px-4 py-3 border-b border-white/[0.04] text-sm text-slate-300">{r.from || 'Anywhere'}</td>
-                <td class="px-4 py-3 border-b border-white/[0.04] text-sm text-slate-300">{r.to || 'Anywhere'}</td>
-                <td class="px-4 py-3 border-b border-white/[0.04] text-xs text-slate-500 max-w-[150px] truncate">{r.comment || '—'}</td>
-                {#if canManage}
-                  <td class="px-4 py-3 border-b border-white/[0.04] text-right">
-                    <button onclick={() => deleteRule(r.number)} class="p-1.5 rounded hover:bg-red-500/20 text-red-400 opacity-60 group-hover:opacity-100 transition" title="Delete">
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
-                {/if}
+      {#if canManage && status}
+        <div class="flex gap-2">
+          {#if status.active}
+            <button
+              onclick={() => ask('Disable firewall?', 'Every port on this server becomes reachable until the firewall is enabled again.', 'Disable', () => toggleFirewall(false))}
+              disabled={!!busy}
+              class="btn btn-danger-ghost btn-sm"
+            >
+              {#if busy === 'disable'}<LoaderCircle size={14} class="animate-spin" />{:else}<ShieldOff size={14} />{/if} Disable
+            </button>
+          {:else}
+            <button onclick={() => toggleFirewall(true)} disabled={!!busy} class="btn btn-primary btn-sm">
+              {#if busy === 'enable'}<LoaderCircle size={14} class="animate-spin" />{:else}<ShieldCheck size={14} />{/if} Enable
+            </button>
+          {/if}
+          <button
+            onclick={() => ask('Reset firewall?', 'All rules are removed and UFW returns to its defaults.', 'Reset', resetFirewall)}
+            disabled={!!busy}
+            class="btn btn-secondary btn-sm"
+          >
+            {#if busy === 'reset'}<LoaderCircle size={14} class="animate-spin" />{:else}<RotateCcw size={14} />{/if} Reset
+          </button>
+        </div>
+      {/if}
+    </div>
+
+    <div class="card">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <div class="segmented">
+          {#each [['all', 'All'], ['ALLOW', 'Allow'], ['DENY', 'Deny']] as [key, label] (key)}
+            <button class="segment {filter === key ? 'segment-active' : ''}" onclick={() => (filter = key as any)}>{label}</button>
+          {/each}
+        </div>
+        <div class="relative w-full sm:w-64">
+          <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+          <input bind:value={query} class="input h-8 pl-8" placeholder="Filter port, IP, comment…" aria-label="Filter rules" />
+        </div>
+      </div>
+
+      {#if loading && rules.length === 0}
+        <div class="space-y-3 p-4">{#each Array(5) as _, i (i)}<div class="skeleton h-9"></div>{/each}</div>
+      {:else if loadError && rules.length === 0}
+        <EmptyState compact icon={Shield} title="Couldn't load rules" description={loadError} actionLabel="Retry" onaction={loadRules} />
+      {:else if visible.length === 0}
+        <EmptyState compact icon={Shield} title={rules.length ? 'No rules match' : 'No rules'} description={rules.length ? 'Try another filter.' : 'No firewall rules are configured yet.'} />
+      {:else}
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th class="w-12">#</th>
+                <th>Port</th>
+                <th>Action</th>
+                <th class="max-md:hidden">Direction</th>
+                <th>From</th>
+                <th class="max-lg:hidden">To</th>
+                <th class="max-md:hidden">Comment</th>
+                {#if canManage}<th class="text-right">Actions</th>{/if}
               </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {#each visible as r (r.number)}
+                <tr>
+                  <td class="font-mono text-xs text-subtle tabular-nums">{r.number}</td>
+                  <td class="whitespace-nowrap">
+                    <span class="font-mono text-[13px] text-fg">{r.port || '—'}</span>
+                    <span class="ml-1 text-xs text-subtle">{r.protocol || 'any'}</span>
+                  </td>
+                  <td><span class="badge {actionBadge(r.action)}">{r.action}</span></td>
+                  <td class="text-xs text-muted max-md:hidden">{r.direction || '—'}</td>
+                  <td class="font-mono text-[13px] text-muted">{r.from || 'Anywhere'}</td>
+                  <td class="font-mono text-[13px] text-muted max-lg:hidden">{r.to || 'Anywhere'}</td>
+                  <td class="max-w-[180px] truncate text-xs text-subtle max-md:hidden" title={r.comment}>{r.comment || '—'}</td>
+                  {#if canManage}
+                    <td class="text-right">
+                      <button
+                        onclick={() => ask(`Delete rule #${r.number}?`, `${r.action} ${r.port || 'any'}${r.from ? ` from ${r.from}` : ''} will be removed.`, 'Delete', () => deleteRule(r.number))}
+                        disabled={busy === `del:${r.number}`}
+                        class="btn btn-danger-ghost btn-icon btn-xs"
+                        aria-label="Delete rule {r.number}"
+                        title="Delete"
+                      >
+                        {#if busy === `del:${r.number}`}<LoaderCircle size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
+                      </button>
+                    </td>
+                  {/if}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
     </div>
   {/if}
+
+  <Modal bind:open={showAddRule} title="Add firewall rule" maxWidth="md">
+    <form id="fw-add" class="grid grid-cols-2 gap-4" onsubmit={(e) => { e.preventDefault(); addRule(); }}>
+      <div>
+        <label class="label" for="fw-port">Port</label>
+        <input id="fw-port" bind:value={newPort} placeholder="443 or 8000:8100" class="input font-mono text-[13px]" />
+      </div>
+      <div>
+        <label class="label" for="fw-proto">Protocol</label>
+        <select id="fw-proto" bind:value={newProtocol} class="input">
+          <option value="tcp">TCP</option>
+          <option value="udp">UDP</option>
+        </select>
+      </div>
+      <div class="col-span-2">
+        <label class="label" for="fw-from">From IP</label>
+        <input id="fw-from" bind:value={newFrom} placeholder="Anywhere" class="input font-mono text-[13px]" />
+        <p class="hint">Optional — leave empty to apply to any source.</p>
+      </div>
+      <div class="col-span-2">
+        <span class="label">Action</span>
+        <div class="segmented">
+          <button type="button" class="segment {newAction === 'allow' ? 'segment-active' : ''}" onclick={() => (newAction = 'allow')}>Allow</button>
+          <button type="button" class="segment {newAction === 'deny' ? 'segment-active' : ''}" onclick={() => (newAction = 'deny')}>Deny</button>
+        </div>
+      </div>
+    </form>
+    {#snippet footer()}
+      <button class="btn btn-secondary btn-sm" onclick={() => (showAddRule = false)}>Cancel</button>
+      <button type="submit" form="fw-add" class="btn btn-primary btn-sm" disabled={!newPort || busy === 'add'}>
+        {#if busy === 'add'}<LoaderCircle size={14} class="animate-spin" />{/if} Save rule
+      </button>
+    {/snippet}
+  </Modal>
+
+  <Modal bind:open={showPresets} title="Allow common ports" maxWidth="lg">
+    <div class="grid gap-2 sm:grid-cols-2">
+      {#each presets as preset (preset.name)}
+        <button
+          onclick={() => applyPreset(preset)}
+          disabled={!!busy}
+          class="flex items-center gap-3 rounded-lg border border-line p-3 text-left transition-colors hover:border-line-strong hover:bg-surface-2 disabled:opacity-50"
+        >
+          <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-subtle">
+            {#if busy === `preset:${preset.name}`}<LoaderCircle size={16} class="animate-spin" />{:else}<preset.icon size={16} strokeWidth={1.75} />{/if}
+          </div>
+          <div class="min-w-0">
+            <div class="text-sm font-medium text-fg">{preset.name}</div>
+            <div class="truncate font-mono text-xs text-subtle">{preset.ports.join(', ')}</div>
+          </div>
+        </button>
+      {/each}
+    </div>
+  </Modal>
+
+  <Modal bind:open={showQuickBlock} title="Block IP address" maxWidth="md">
+    <form id="fw-block" onsubmit={(e) => { e.preventDefault(); blockIPAddr(); }}>
+      <label class="label" for="fw-ip">IP address</label>
+      <input id="fw-ip" bind:value={blockIP} placeholder="1.2.3.4" class="input font-mono text-[13px]" />
+      <p class="hint">Adds a deny rule for all ports from this address.</p>
+    </form>
+    {#snippet footer()}
+      <button class="btn btn-secondary btn-sm" onclick={() => (showQuickBlock = false)}>Cancel</button>
+      <button type="submit" form="fw-block" class="btn btn-danger btn-sm" disabled={!blockIP || busy === 'block'}>
+        {#if busy === 'block'}<LoaderCircle size={14} class="animate-spin" />{:else}<Ban size={14} />{/if} Block
+      </button>
+    {/snippet}
+  </Modal>
+
+  <ConfirmDialog bind:open={confirmOpen} title={confirmCfg.title} message={confirmCfg.message} confirmLabel={confirmCfg.label} destructive onconfirm={() => confirmCfg.run()} />
 </DashboardLayout>

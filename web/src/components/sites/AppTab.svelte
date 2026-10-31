@@ -2,12 +2,9 @@
   import { apiFetch } from '$lib/api';
   import { auth } from '$lib/auth.svelte';
   import { toasts } from '$lib/toast.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
   import { onMount } from 'svelte';
-  import {
-    Zap, Terminal, Activity, Box, FileCode, RefreshCw,
-    Play, Square, RotateCcw, Settings, Loader2, Save, X, Trash2,
-    Search, ChevronRight, Plus, FolderOpen
-  } from 'lucide-svelte';
+  import { Zap, Terminal, Activity, Box, RefreshCw, Play, Square, RotateCcw, Settings, LoaderCircle, Trash2, Globe } from 'lucide-svelte';
 
   let { siteId }: { siteId: number } = $props();
 
@@ -26,10 +23,6 @@
   let execOutput = $state('');
   let execRunning = $state(false);
 
-  // ─── File manager ───
-  let fmPath = $state('/');
-  let fmBreadcrumbs = $state<{ name: string; path: string }[]>([]);
-
   // ─── Config editor (docker) ───
   let configImage = $state('');
   let configEnv = $state('');
@@ -45,8 +38,6 @@
     isDocker ? dockerContainer?.state === 'running' : site?.app_status === 'running'
   );
 
-
-  // ─── onMount ───
   onMount(async () => {
     try {
       const data = await apiFetch(auth.token, 'GET', `sites/${siteId}`);
@@ -74,8 +65,6 @@
         list.find((c: any) => c.name?.includes(site.name) || c.name?.includes(domainBase));
       if (dockerContainer) {
         configImage = dockerContainer.image || '';
-        // Set file manager to site root path (mounted into container)
-        fmPath = site.root_path || '/';
       }
     } catch {
       /* silent */
@@ -131,22 +120,6 @@
     }
     execRunning = false;
   }
-
-  // ─── File manager: exec helper ───
-  async function execInContainer(command: string): Promise<string> {
-    const d: any = await apiFetch(auth.token, 'POST', `servers/${site.server_id}/docker/container/exec`, {
-      container_id: dockerContainer.id,
-      command,
-    });
-    return d?.output || '';
-  }
-
-
-
-  // Convert absolute path to relative (strip root_path prefix)
-
-
-
 
   // ─── Rebuild Container ───
   async function rebuildContainer() {
@@ -213,325 +186,190 @@
     appBusy = false;
   }
 
+  const dockerTabs = [
+    { key: 'manage', label: 'Manage', icon: Box },
+    { key: 'terminal', label: 'Terminal', icon: Terminal },
+    { key: 'config', label: 'Config', icon: Settings },
+  ] as const;
 </script>
 
-<!-- ═══════════════════════════════════════════════════════════════
-     TEMPLATE
-     ═══════════════════════════════════════════════════════════════ -->
+{#snippet field(label: string, value: string, mono = false)}
+  <div class="min-w-0 rounded-lg border border-line bg-surface-2/50 p-3">
+    <div class="stat-label">{label}</div>
+    <div class="mt-1 truncate text-[13px] text-fg {mono ? 'font-mono' : ''}" title={value}>{value}</div>
+  </div>
+{/snippet}
+
 {#if loading}
-  <div class="space-y-4">
-    {#each Array(3) as _}
-      <div class="h-20 bg-white/[0.03] rounded-xl animate-pulse"></div>
-    {/each}
+  <div class="space-y-3">
+    {#each Array(3) as _, i (i)}<div class="skeleton h-20 rounded-xl"></div>{/each}
   </div>
 {:else if !site}
-  <div class="text-center py-12 text-slate-500">Site not found</div>
+  <div class="card"><EmptyState icon={Globe} title="Site not found" /></div>
 {:else if !isAppRuntime}
-  <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl p-8 text-center">
-    <Settings size={32} class="text-slate-600 mx-auto mb-3" />
-    <p class="text-sm text-slate-500">
-      App process management is not available for
-      <span class="font-semibold text-slate-400">{site.runtime}</span> sites.
-    </p>
+  <div class="card">
+    <EmptyState icon={Settings} title="Not available" description="App process management is not available for {site.runtime} sites." />
   </div>
 {:else}
   <div class="space-y-4">
-    <!-- ═══ Docker Container Management ═══ -->
     {#if isDocker}
-      <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 sm:p-5">
-        <div class="flex items-center justify-between mb-4">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-400/20 to-indigo-500/20 flex items-center justify-center">
-              <Box size={18} class="text-sky-400" />
-            </div>
-            <div>
-              <h3 class="text-sm font-semibold text-slate-200">Docker Container</h3>
-              <p class="text-xs text-slate-500">{site.domain}</p>
+      <!-- Docker container -->
+      <div class="card">
+        <div class="card-header">
+          <div class="flex min-w-0 items-center gap-2">
+            <Box size={16} class="shrink-0 text-subtle" />
+            <div class="min-w-0">
+              <h3 class="card-title">Docker container</h3>
+              <p class="truncate text-xs text-subtle">{site.domain}</p>
             </div>
           </div>
           {#if dockerLoading}
-            <Loader2 size={16} class="animate-spin text-slate-500" />
+            <LoaderCircle size={16} class="animate-spin text-subtle" />
           {:else if dockerContainer}
-            <span
-              class="text-xs px-2 py-0.5 rounded-full font-medium {isRunning
-                ? 'bg-emerald-500/10 text-emerald-400'
-                : 'bg-slate-500/10 text-slate-400'}"
-            >
-              {dockerContainer.state}
-            </span>
+            <span class="badge {isRunning ? 'badge-success' : ''}"><span class="dot"></span>{dockerContainer.state}</span>
           {:else}
-            <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-red-500/10 text-red-400">
-              not found
-            </span>
+            <span class="badge badge-danger">not found</span>
           {/if}
         </div>
 
         {#if dockerContainer}
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 text-xs">
-            <div class="bg-white/[0.03] rounded-lg p-3">
-              <span class="text-slate-500 block mb-1">Container</span>
-              <span class="text-slate-200 font-mono">{dockerContainer.name}</span>
+          <div class="card-body space-y-4">
+            <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {@render field('Container', dockerContainer.name, true)}
+              {@render field('Image', dockerContainer.image, true)}
+              {@render field('ID', dockerContainer.id?.slice(0, 12) ?? '—', true)}
+              {@render field('Ports', dockerContainer.ports || '—', true)}
             </div>
-            <div class="bg-white/[0.03] rounded-lg p-3">
-              <span class="text-slate-500 block mb-1">Image</span>
-              <span class="text-slate-200 font-mono truncate block">{dockerContainer.image}</span>
-            </div>
-            <div class="bg-white/[0.03] rounded-lg p-3">
-              <span class="text-slate-500 block mb-1">ID</span>
-              <span class="text-slate-200 font-mono">{dockerContainer.id?.slice(0, 12)}</span>
-            </div>
-            <div class="bg-white/[0.03] rounded-lg p-3">
-              <span class="text-slate-500 block mb-1">Ports</span>
-              <span class="text-slate-200 font-mono truncate block">{dockerContainer.ports || '—'}</span>
-            </div>
-          </div>
-
-          <div class="flex flex-wrap gap-2">
-            {#if !isRunning}
-              <button
-                onclick={() => dockerAction('start')}
-                disabled={actionBusy}
-                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium bg-gradient-to-r from-green-500 to-emerald-500 text-white hover:-translate-y-0.5 transition-all cursor-pointer disabled:opacity-40 border-0"
-              >
-                {#if actionBusy}<Loader2 size={12} class="animate-spin" />{/if}
-                <Play size={12} /> Start
+            <div class="flex flex-wrap gap-2">
+              {#if !isRunning}
+                <button onclick={() => dockerAction('start')} disabled={actionBusy} class="btn btn-primary btn-sm">
+                  {#if actionBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Play size={14} />{/if} Start
+                </button>
+              {:else}
+                <button onclick={() => dockerAction('stop')} disabled={actionBusy} class="btn btn-secondary btn-sm">
+                  {#if actionBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Square size={14} />{/if} Stop
+                </button>
+                <button onclick={() => dockerAction('restart')} disabled={actionBusy} class="btn btn-secondary btn-sm">
+                  {#if actionBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<RotateCcw size={14} />{/if} Restart
+                </button>
+              {/if}
+              <button onclick={() => dockerAction('remove')} disabled={actionBusy} class="btn btn-danger-ghost btn-sm"><Trash2 size={14} /> Remove</button>
+              <button onclick={loadDockerContainer} disabled={dockerLoading} class="btn btn-ghost btn-sm">
+                <RefreshCw size={14} class={dockerLoading ? 'animate-spin' : ''} /> Refresh
               </button>
-            {/if}
-            {#if isRunning}
-              <button
-                onclick={() => dockerAction('stop')}
-                disabled={actionBusy}
-                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium bg-gradient-to-r from-red-500 to-rose-500 text-white hover:-translate-y-0.5 transition-all cursor-pointer disabled:opacity-40 border-0"
-              >
-                {#if actionBusy}<Loader2 size={12} class="animate-spin" />{/if}
-                <Square size={12} /> Stop
-              </button>
-              <button
-                onclick={() => dockerAction('restart')}
-                disabled={actionBusy}
-                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:-translate-y-0.5 transition-all cursor-pointer disabled:opacity-40 border-0"
-              >
-                {#if actionBusy}<Loader2 size={12} class="animate-spin" />{/if}
-                <RotateCcw size={12} /> Restart
-              </button>
-            {/if}
-            <button
-              onclick={() => dockerAction('remove')}
-              disabled={actionBusy}
-              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 transition cursor-pointer disabled:opacity-40 border border-red-500/20"
-            >
-              <Trash2 size={12} /> Remove
-            </button>
-            <button
-              onclick={loadDockerContainer}
-              disabled={dockerLoading}
-              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium text-slate-300 hover:text-slate-100 bg-white/[0.04] hover:bg-white/[0.08] transition border border-white/[0.06] cursor-pointer"
-            >
-              <RefreshCw size={12} class={dockerLoading ? 'animate-spin' : ''} /> Refresh
-            </button>
+            </div>
           </div>
         {:else if !dockerLoading}
-          <div class="text-center py-6">
-            <Box size={24} class="text-slate-600 mx-auto mb-2" />
-            <p class="text-xs text-slate-500">Container not found.</p>
-          </div>
+          <EmptyState compact icon={Box} title="Container not found" />
         {/if}
       </div>
 
-      <!-- ═══ Docker Sub-tabs ═══ -->
       {#if dockerContainer}
-        <div class="flex gap-1 bg-white/[0.03] border border-white/[0.06] rounded-xl p-1">
-          {#each [
-            { key: 'manage', label: 'Manage', icon: Box },
-            { key: 'terminal', label: 'Terminal', icon: Terminal },
-            { key: 'config', label: 'Config', icon: Settings },
-          ] as tab}
-            {@const Icon = tab.icon}
-            <button
-              onclick={() => (dockerTab = tab.key as typeof dockerTab)}
-              class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer {dockerTab === tab.key
-                ? 'bg-white/[0.08] text-sky-300'
-                : 'text-slate-500 hover:text-slate-300'}"
-            >
-              <Icon size={13} /> {tab.label}
+        <div class="segmented">
+          {#each dockerTabs as tab (tab.key)}
+            <button onclick={() => (dockerTab = tab.key)} class="segment {dockerTab === tab.key ? 'segment-active' : ''}">
+              <tab.icon size={12} /> {tab.label}
             </button>
           {/each}
         </div>
 
-        <!-- ─── Manage Tab (default: show container card details again) ─── -->
         {#if dockerTab === 'manage'}
-          <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 sm:p-5">
-            <div class="flex items-center gap-2 mb-3">
-              <Activity size={13} class="text-sky-400" />
-              <span class="text-xs font-semibold text-slate-200">Container Overview</span>
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Container overview</h3>
+              <Activity size={16} class="text-subtle" />
             </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div class="bg-white/[0.03] rounded-lg p-3">
-                <span class="text-slate-500 block mb-1">Runtime</span>
-                <span class="text-slate-200">{site.runtime}</span>
-              </div>
-              <div class="bg-white/[0.03] rounded-lg p-3">
-                <span class="text-slate-500 block mb-1">Domain</span>
-                <span class="text-slate-200 font-mono">{site.domain}</span>
-              </div>
-              <div class="bg-white/[0.03] rounded-lg p-3">
-                <span class="text-slate-500 block mb-1">Status</span>
-                <span class="text-slate-200">{isRunning ? 'Running' : 'Stopped'}</span>
-              </div>
-              <div class="bg-white/[0.03] rounded-lg p-3">
-                <span class="text-slate-500 block mb-1">Created</span>
-                <span class="text-slate-200">{dockerContainer.created ? new Date(dockerContainer.created * 1000).toLocaleDateString() : '—'}</span>
-              </div>
+            <div class="card-body grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {@render field('Runtime', site.runtime)}
+              {@render field('Domain', site.domain, true)}
+              {@render field('Status', isRunning ? 'Running' : 'Stopped')}
+              {@render field('Created', dockerContainer.created ? new Date(dockerContainer.created * 1000).toLocaleDateString() : '—')}
             </div>
           </div>
-        {/if}
-
-        <!-- ─── Terminal Tab ─── -->
-        {#if dockerTab === 'terminal'}
-          <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
-            <div class="px-4 py-2.5 border-b border-white/[0.05] flex items-center gap-2">
-              <Terminal size={13} class="text-sky-400" />
-              <span class="text-xs font-semibold text-slate-200">Container Exec</span>
-              <span class="text-[0.6rem] text-slate-600 ml-auto">{dockerContainer.name}</span>
+        {:else if dockerTab === 'terminal'}
+          <div class="card overflow-hidden">
+            <div class="card-header">
+              <div class="flex items-center gap-2">
+                <Terminal size={16} class="text-subtle" />
+                <h3 class="card-title">Container exec</h3>
+              </div>
+              <span class="truncate font-mono text-xs text-subtle">{dockerContainer.name}</span>
             </div>
-            <div class="p-1">
-              <pre
-                class="bg-[#0d1117] text-emerald-300 font-mono text-[11px] leading-relaxed p-4 rounded-lg max-h-[40vh] overflow-y-auto whitespace-pre-wrap">{execOutput || '$ '}</pre>
-            </div>
-            <div class="px-4 py-3 border-t border-white/[0.05] flex gap-2">
+            <pre class="max-h-[40vh] overflow-y-auto bg-surface-2/50 p-4 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-fg">{execOutput || '$ '}</pre>
+            <div class="flex gap-2 border-t border-line px-4 py-3">
+              <label for="exec-cmd" class="sr-only">Command</label>
               <input
+                id="exec-cmd"
                 bind:value={execCmd}
-                onkeydown={(e) => {
-                  if (e.key === 'Enter') execCommand();
-                }}
-                placeholder="Enter command..."
-                class="flex-1 bg-[#0d1117] border border-white/[0.08] rounded-lg px-3 py-2 text-xs text-emerald-300 font-mono placeholder-slate-600 outline-none focus:border-sky-400/50"
+                onkeydown={(e) => { if (e.key === 'Enter') execCommand(); }}
+                placeholder="Enter command…"
+                class="input font-mono text-[13px]"
+                autocomplete="off"
+                spellcheck="false"
               />
-              <button
-                onclick={execCommand}
-                disabled={execRunning || !execCmd.trim()}
-                class="px-4 py-2 bg-sky-500/20 text-sky-300 rounded-lg text-xs font-medium hover:bg-sky-500/30 transition disabled:opacity-40 flex items-center gap-1.5 cursor-pointer"
-              >
-                {#if execRunning}<Loader2 size={12} class="animate-spin" />{/if} Run
+              <button onclick={execCommand} disabled={execRunning || !execCmd.trim()} class="btn btn-primary">
+                {#if execRunning}<LoaderCircle size={14} class="animate-spin" />{:else}<Play size={14} />{/if} Run
               </button>
             </div>
           </div>
-        {/if}
-
-        <!-- ─── Config Tab ─── -->
-        {#if dockerTab === 'config'}
-          <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
-            <div class="px-4 py-2.5 border-b border-white/[0.05] flex items-center gap-2">
-              <Settings size={13} class="text-sky-400" />
-              <span class="text-xs font-semibold text-slate-200">Container Configuration</span>
+        {:else if dockerTab === 'config'}
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Container configuration</h3>
+              <Settings size={16} class="text-subtle" />
             </div>
-            <div class="p-4 space-y-4">
+            <div class="card-body space-y-4">
               <div>
-                <label class="block text-xs text-slate-500 mb-1.5">Docker Image</label>
-                <input
-                  bind:value={configImage}
-                  class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-3 py-2 text-xs text-slate-200 font-mono outline-none focus:border-sky-400/50"
-                />
+                <label for="cfg-image" class="label">Docker image</label>
+                <input id="cfg-image" bind:value={configImage} class="input font-mono text-[13px]" />
               </div>
               <div>
-                <label class="block text-xs text-slate-500 mb-1.5">
-                  Environment Variables <span class="text-slate-600">(one per line: KEY=value)</span>
-                </label>
-                <textarea
-                  bind:value={configEnv}
-                  rows={4}
-                  class="w-full bg-white/[0.04] border border-white/[0.07] rounded-lg px-3 py-2 text-xs text-slate-200 font-mono resize-none outline-none focus:border-sky-400/50"
-                  placeholder="APP_ENV=production&#10;PORT=3000"
-                ></textarea>
+                <label for="cfg-env" class="label">Environment variables <span class="text-subtle">(one per line: KEY=value)</span></label>
+                <textarea id="cfg-env" bind:value={configEnv} rows={4} class="input resize-none font-mono text-[13px]" placeholder="APP_ENV=production&#10;PORT=3000"></textarea>
               </div>
-              <div class="flex gap-2">
-                <button
-                  onclick={rebuildContainer}
-                  disabled={configBusy || !configImage}
-                  class="px-4 py-2 bg-sky-500/20 text-sky-300 rounded-lg text-xs font-medium hover:bg-sky-500/30 transition flex items-center gap-1.5 disabled:opacity-40 cursor-pointer border-0"
-                >
-                  {#if configBusy}<Loader2 size={12} class="animate-spin" />{/if} Rebuild Container
+              <div class="flex flex-wrap items-center gap-3">
+                <button onclick={rebuildContainer} disabled={configBusy || !configImage} class="btn btn-primary btn-sm">
+                  {#if configBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<RefreshCw size={14} />{/if} Rebuild container
                 </button>
+                <span class="text-xs text-subtle">Pull image → Stop → Remove → Create → Start</span>
               </div>
-              <p class="text-[0.65rem] text-slate-600">
-                Rebuild will: Pull image → Stop → Remove → Create → Start
-              </p>
             </div>
           </div>
         {/if}
       {/if}
-    {/if}
-
-    <!-- ═══ Non-Docker App Process (Node/Go/Python) ═══ -->
-    {#if !isDocker}
-      <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 sm:p-5">
-        <div class="flex items-center justify-between mb-4">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400/20 to-teal-500/20 flex items-center justify-center">
-              <Zap size={18} class="text-emerald-400" />
-            </div>
-            <div>
-              <h3 class="text-sm font-semibold text-slate-200">{site.runtime} Application</h3>
-              <p class="text-xs text-slate-500">{site.domain}</p>
+    {:else}
+      <!-- Node / Go / Python app process -->
+      <div class="card">
+        <div class="card-header">
+          <div class="flex min-w-0 items-center gap-2">
+            <Zap size={16} class="shrink-0 text-subtle" />
+            <div class="min-w-0">
+              <h3 class="card-title"><span class="capitalize">{site.runtime}</span> application</h3>
+              <p class="truncate text-xs text-subtle">{site.domain}</p>
             </div>
           </div>
-          <span
-            class="text-xs px-2 py-0.5 rounded-full font-medium {isRunning
-              ? 'bg-emerald-500/10 text-emerald-400'
-              : 'bg-slate-500/10 text-slate-400'}"
-          >
-            {site.app_status || 'stopped'}
-          </span>
+          <span class="badge {isRunning ? 'badge-success' : ''}"><span class="dot"></span>{site.app_status || 'stopped'}</span>
         </div>
-
-        <div class="flex flex-wrap gap-2">
-          {#if !isRunning}
-            <button
-              onclick={() => appAction('start')}
-              disabled={appBusy}
-              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium bg-gradient-to-r from-green-500 to-emerald-500 text-white hover:-translate-y-0.5 transition-all cursor-pointer disabled:opacity-40 border-0"
-            >
-              {#if appBusy}<Loader2 size={12} class="animate-spin" />{/if}
-              <Play size={12} /> Start
-            </button>
-          {/if}
-          {#if isRunning}
-            <button
-              onclick={() => appAction('stop')}
-              disabled={appBusy}
-              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium bg-gradient-to-r from-red-500 to-rose-500 text-white hover:-translate-y-0.5 transition-all cursor-pointer disabled:opacity-40 border-0"
-            >
-              {#if appBusy}<Loader2 size={12} class="animate-spin" />{/if}
-              <Square size={12} /> Stop
-            </button>
-            <button
-              onclick={() => appAction('restart')}
-              disabled={appBusy}
-              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:-translate-y-0.5 transition-all cursor-pointer disabled:opacity-40 border-0"
-            >
-              {#if appBusy}<Loader2 size={12} class="animate-spin" />{/if}
-              <RotateCcw size={12} /> Restart
-            </button>
-          {/if}
-        </div>
-
-        <!-- App info -->
-        <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-          <div class="bg-white/[0.03] rounded-lg p-3">
-            <span class="text-slate-500 block mb-1">Runtime</span>
-            <span class="text-slate-200">{site.runtime}</span>
+        <div class="card-body space-y-4">
+          <div class="flex flex-wrap gap-2">
+            {#if !isRunning}
+              <button onclick={() => appAction('start')} disabled={appBusy} class="btn btn-primary btn-sm">
+                {#if appBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Play size={14} />{/if} Start
+              </button>
+            {:else}
+              <button onclick={() => appAction('stop')} disabled={appBusy} class="btn btn-secondary btn-sm">
+                {#if appBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Square size={14} />{/if} Stop
+              </button>
+              <button onclick={() => appAction('restart')} disabled={appBusy} class="btn btn-secondary btn-sm">
+                {#if appBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<RotateCcw size={14} />{/if} Restart
+              </button>
+            {/if}
           </div>
-          <div class="bg-white/[0.03] rounded-lg p-3">
-            <span class="text-slate-500 block mb-1">Domain</span>
-            <span class="text-slate-200 font-mono truncate block">{site.domain}</span>
-          </div>
-          <div class="bg-white/[0.03] rounded-lg p-3">
-            <span class="text-slate-500 block mb-1">Port</span>
-            <span class="text-slate-200 font-mono">{site.port || '—'}</span>
-          </div>
-          <div class="bg-white/[0.03] rounded-lg p-3">
-            <span class="text-slate-500 block mb-1">Status</span>
-            <span class="text-slate-200">{isRunning ? 'Running' : 'Stopped'}</span>
+          <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {@render field('Runtime', site.runtime)}
+            {@render field('Domain', site.domain, true)}
+            {@render field('Port', String(site.port || '—'), true)}
+            {@render field('Status', isRunning ? 'Running' : 'Stopped')}
           </div>
         </div>
       </div>

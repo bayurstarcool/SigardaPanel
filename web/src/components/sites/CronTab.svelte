@@ -1,7 +1,8 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { Clock, Plus, Trash2, Loader2 } from 'lucide-svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import { Clock, Plus, Trash2 } from 'lucide-svelte';
   import { toasts } from '$lib/toast.svelte';
 
   let { siteId }: { siteId: number } = $props();
@@ -32,26 +33,46 @@
   }
 </script>
 
-<div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300">
-  <div class="flex items-center justify-between px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-white/[0.05]">
-    <div class="flex items-center gap-2.5"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-sky-400/10 flex items-center justify-center"><Clock size={13} class="text-sky-400" /></div><span class="text-sm font-semibold text-slate-200">Cron Jobs</span><span class="text-[0.65rem] text-slate-500 bg-white/[0.04] px-2 py-0.5 rounded-full border border-white/[0.06]">{cronJobs.length}</span></div>
-    <button onclick={() => showCreateCron = !showCreateCron} class="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium bg-sky-400/[0.08] text-sky-400 border border-sky-400/15 hover:bg-sky-400/[0.12] hover:border-sky-400/25 transition-all duration-200">+ Add Cron</button>
+<div class="card">
+  <div class="card-header">
+    <div class="flex items-center gap-2">
+      <Clock size={16} class="text-subtle" />
+      <h3 class="card-title">Cron jobs</h3>
+      <span class="badge tabular-nums">{cronJobs.length}</span>
+    </div>
+    <button onclick={() => (showCreateCron = !showCreateCron)} class="btn btn-secondary btn-sm"><Plus size={14} /> Add cron</button>
   </div>
   {#if showCreateCron}
-    <div class="px-5 py-4 border-b border-white/[0.05] bg-white/[0.01]">
-      <div class="flex gap-3 items-end">
-        <div class="w-40"><label class="block text-xs text-slate-500 mb-1">Schedule</label><input bind:value={newCron.schedule} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/50 focus:ring-2 focus:ring-sky-400/10 transition-all duration-200 font-mono placeholder:text-slate-600" placeholder="0 0 * * *" /></div>
-        <div class="flex-1"><label class="block text-xs text-slate-500 mb-1">Command</label><input bind:value={newCron.command} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/50 focus:ring-2 focus:ring-sky-400/10 transition-all duration-200 font-mono placeholder:text-slate-600" placeholder="/usr/bin/php artisan schedule:run" /></div>
-        <button onclick={createCron} disabled={cronBusy || !newCron.command} class="px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 transition-all disabled:opacity-40 cursor-pointer border-0">{cronBusy ? '...' : 'Create'}</button>
-        <button onclick={() => showCreateCron = false} class="px-3 py-2.5 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Cancel</button>
+    <div class="flex flex-col gap-3 border-b border-line bg-surface-2/50 px-5 py-4 sm:flex-row sm:items-end">
+      <div class="sm:w-40">
+        <label for="cron-schedule" class="label">Schedule</label>
+        <input id="cron-schedule" bind:value={newCron.schedule} class="input font-mono text-[13px]" placeholder="0 0 * * *" />
+      </div>
+      <div class="flex-1">
+        <label for="cron-command" class="label">Command</label>
+        <input id="cron-command" bind:value={newCron.command} class="input font-mono text-[13px]" placeholder="/usr/bin/php artisan schedule:run" />
+      </div>
+      <div class="flex gap-2">
+        <button onclick={createCron} disabled={cronBusy || !newCron.command} class="btn btn-primary">{cronBusy ? 'Creating…' : 'Create'}</button>
+        <button onclick={() => (showCreateCron = false)} class="btn btn-ghost">Cancel</button>
       </div>
     </div>
   {/if}
   {#if cronLoading}
-    <div class="divide-y divide-white/5">{#each Array(3) as _}<div class="px-5 py-4 flex items-center gap-4"><div class="h-6 w-24 bg-white/[0.04] rounded-lg animate-pulse"></div><div class="h-4 flex-1 bg-white/[0.03] rounded animate-pulse"></div></div>{/each}</div>
+    <div class="space-y-3 p-4">{#each Array(3) as _, i (i)}<div class="skeleton h-9"></div>{/each}</div>
   {:else if cronJobs.length === 0}
-    <div class="flex flex-col items-center justify-center py-14"><Clock size={22} class="text-white/[0.08] mb-3" /><p class="text-sm font-medium text-slate-400 mb-0.5">No cron jobs</p><p class="text-xs text-slate-600">Add a cron job for this site</p></div>
+    <EmptyState compact icon={Clock} title="No cron jobs" description="Add a cron job for this site." />
   {:else}
-    <div class="divide-y divide-white/[0.04]">{#each cronJobs as job}<div class="flex items-center justify-between px-5 py-3.5 hover:bg-white/[0.02] transition"><div class="flex items-center gap-4"><span class="text-xs font-mono text-sky-300 bg-sky-400/10 px-2 py-1 rounded-lg">{job.schedule}</span><span class="text-sm text-slate-200 font-mono text-xs">{job.command}</span></div><button onclick={() => deleteCron(job)} class="text-xs text-red-400/60 hover:text-red-400 transition p-1 rounded-lg hover:bg-red-400/10"><Trash2 size={14} /></button></div>{/each}</div>
+    <ul class="divide-y divide-line">
+      {#each cronJobs as job (job.id)}
+        <li class="flex items-center justify-between gap-3 px-5 py-3 transition-colors duration-100 hover:bg-surface-2/60">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <span class="code shrink-0">{job.schedule}</span>
+            <span class="font-mono text-[13px] break-all text-fg">{job.command}</span>
+          </div>
+          <button onclick={() => deleteCron(job)} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Delete cron job"><Trash2 size={14} /></button>
+        </li>
+      {/each}
+    </ul>
   {/if}
 </div>

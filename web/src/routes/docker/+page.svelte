@@ -1,896 +1,495 @@
 <script lang="ts">
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
+  import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
-  import { Box, Play, Square, RotateCcw, Trash2, Terminal, RefreshCw, Download, Upload, HardDrive, Globe, Layers, Info, Plus } from 'lucide-svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import Modal from '$components/Modal.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
+  import CreateContainerModal from './CreateContainerModal.svelte';
+  import ImagePuller from './ImagePuller.svelte';
+  import { Box, Play, Square, RotateCcw, Trash2, ScrollText, RefreshCw, HardDrive, Network, Layers, Info, Plus, Search, LoaderCircle, Server } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
+  type Tab = 'containers' | 'images' | 'volumes' | 'networks' | 'system';
+  type Pending = { kind: 'container' | 'image' | 'volume' | 'network'; id: string; label: string };
+
   let servers = $state<any[]>([]);
+  let serversLoaded = $state(false);
   let selectedServer = $state<number>(0);
-  let activeTab = $state('containers');
+  let activeTab = $state<Tab>('containers');
   let containers = $state<any[]>([]);
   let images = $state<any[]>([]);
   let volumes = $state<any[]>([]);
   let networks = $state<any[]>([]);
   let dockerInfo = $state<any>(null);
   let diskUsage = $state<any[]>([]);
-  let loading = $state(false);
-  let logs = $state('');
-  let showLogs = $state(false);
-  let logsContainer = $state('');
+  let loading = $state<Record<string, boolean>>({});
+  let errors = $state<Record<string, string>>({});
   let actionPending = $state('');
-  let pullImage = $state('');
-  let pullProgress = $state<{active: boolean; image: string; layers: {id: string; status: string}[]; done: boolean; error: string}>({active: false, image: '', layers: [], done: false, error: ''});
-  let searchResults = $state<any[]>([]);
-  let searchOpen = $state(false);
-  let searchLoading = $state(false);
-  let searchTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+  let query = $state('');
+  let stateFilter = $state<'all' | 'running' | 'stopped'>('all');
+
+  let showLogs = $state(false);
+  let logs = $state('');
+  let logsLoading = $state(false);
+  let logsContainer = $state<{ id: string; name: string } | null>(null);
+
+  let showCreate = $state(false);
   let createVolume = $state('');
   let createNetwork = $state('');
-  let canManage = $derived(hasRole(auth.user?.role, 'admin'));
-  let showCreateContainer = $state(false);
-  let createContainerForm = $state({image: '', name: '', ports: '', volumes: '', env: '', restart: 'no', network: 'bridge', auto_start: true, command: ''});
-  let createPending = $state(false);
-  let createImageSearch = $state('');
-  let createImageResults = $state<any[]>([]);
-  let createImageOpen = $state(false);
-  let createImageTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+
+  let confirmOpen = $state(false);
+  let confirmTarget = $state<Pending | null>(null);
+
+  const canManage = $derived(hasRole(auth.user?.role, 'admin'));
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    const d: any = await apiFetch(auth.token, 'GET', 'servers');
-    servers = d?.servers ?? [];
+    try {
+      const d: any = await apiFetch(auth.token, 'GET', 'servers');
+      servers = d?.servers ?? [];
+    } catch (e: any) {
+      if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load servers');
+    }
+    serversLoaded = true;
     if (servers.length > 0) {
       selectedServer = servers[0].id;
       loadAll();
     }
   });
 
+  // Generic loader: tracks loading + error per resource so each tab can render its own state.
+  async function load(key: string, path: string, apply: (d: any) => void) {
+    if (!selectedServer) return;
+    const sid = selectedServer;
+    loading[key] = true;
+    errors[key] = '';
+    try {
+      const d = await apiFetch(auth.token, 'GET', `servers/${sid}/docker/${path}`);
+      if (sid === selectedServer) apply(d);
+    } catch (e: any) {
+      if (e?.message !== 'session expired' && sid === selectedServer) errors[key] = e?.message || 'Request failed';
+    } finally {
+      loading[key] = false;
+    }
+  }
+
+  const loadContainers = () => load('containers', 'containers', (d) => (containers = d?.containers ?? []));
+  const loadImages = () => load('images', 'images', (d) => (images = d?.images ?? []));
+  const loadVolumes = () => load('volumes', 'volumes', (d) => (volumes = d?.volumes ?? []));
+  const loadNetworks = () => load('networks', 'networks', (d) => (networks = d?.networks ?? []));
+  const loadInfo = () => load('info', 'info', (d) => (dockerInfo = d?.info ?? null));
+  const loadDiskUsage = () => load('disk', 'disk-usage', (d) => (diskUsage = d?.usage ?? []));
+
   function loadAll() {
     loadContainers();
-    loadImages();
-    loadVolumes();
-    loadNetworks();
-    loadInfo();
-    loadDiskUsage();
+    // Images, volumes, networks, info and disk usage are admin-only endpoints.
+    if (canManage) {
+      loadImages();
+      loadVolumes();
+      loadNetworks();
+      loadInfo();
+      loadDiskUsage();
+    }
   }
 
-  function loadContainers() {
-    if (!selectedServer) return;
-    loading = true;
-    apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/containers`)
-      .then((d: any) => { containers = d?.containers ?? []; })
-      .catch(() => {})
-      .finally(() => loading = false);
+  function changeServer() {
+    containers = []; images = []; volumes = []; networks = []; dockerInfo = null; diskUsage = [];
+    loadAll();
   }
 
-  function loadImages() {
-    if (!selectedServer) return;
-    apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/images`)
-      .then((d: any) => { images = d?.images ?? []; })
-      .catch(() => {});
-  }
-
-  function loadVolumes() {
-    if (!selectedServer) return;
-    apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/volumes`)
-      .then((d: any) => { volumes = d?.volumes ?? []; })
-      .catch(() => {});
-  }
-
-  function loadNetworks() {
-    if (!selectedServer) return;
-    apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/networks`)
-      .then((d: any) => { networks = d?.networks ?? []; })
-      .catch(() => {});
-  }
-
-  function loadInfo() {
-    if (!selectedServer) return;
-    apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/info`)
-      .then((d: any) => { dockerInfo = d?.info ?? null; })
-      .catch(() => {});
-  }
-
-  function loadDiskUsage() {
-    if (!selectedServer) return;
-    apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/disk-usage`)
-      .then((d: any) => { diskUsage = d?.usage ?? []; })
-      .catch(() => {});
-  }
-
-  async function containerAction(id: string, action: string) {
-    actionPending = `${id}:${action}`;
+  async function run(key: string, path: string, body: any, success: string, after: () => void) {
+    actionPending = key;
     try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/container/${action}`, { container_id: id });
-      loadContainers();
-    } catch (e) {}
-    actionPending = '';
+      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/${path}`, body);
+      toasts.success(success);
+      after();
+    } catch (e: any) {
+      if (e?.message !== 'session expired') toasts.error(e?.message || 'Action failed');
+    } finally {
+      actionPending = '';
+    }
   }
 
-  async function removeContainer(id: string) {
-    if (!confirm(`Remove container ${id}?`)) return;
-    actionPending = `${id}:remove`;
-    try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/container/remove`, { container_id: id, force: true });
-      loadContainers();
-    } catch (e) {}
-    actionPending = '';
+  function containerAction(c: any, action: 'start' | 'stop' | 'restart') {
+    const verb = { start: 'Started', stop: 'Stopped', restart: 'Restarted' }[action];
+    run(`${c.id}:${action}`, `container/${action}`, { container_id: c.id }, `${verb} ${c.name || c.id.slice(0, 12)}`, loadContainers);
   }
 
-  async function createContainerAction() {
-    if (!createContainerForm.image) return;
-    createPending = true;
-    try {
-      const ports = createContainerForm.ports.split(',').map((s: string) => s.trim()).filter(Boolean);
-      const volumes = createContainerForm.volumes.split(',').map((s: string) => s.trim()).filter(Boolean);
-      const envPairs = createContainerForm.env.split('\n').filter(Boolean);
-      const env: Record<string, string> = {};
-      for (const pair of envPairs) {
-        const [k, ...rest] = pair.split('=');
-        if (k) env[k.trim()] = rest.join('=').trim();
-      }
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/container/create`, {
-        image: createContainerForm.image,
-        name: createContainerForm.name || undefined,
-        command: createContainerForm.command || undefined,
-        ports: ports.length ? ports : undefined,
-        volumes: volumes.length ? volumes : undefined,
-        env: Object.keys(env).length ? env : undefined,
-        restart: createContainerForm.restart,
-        network: createContainerForm.network,
-        auto_start: createContainerForm.auto_start,
-      });
-      showCreateContainer = false;
-      createContainerForm = {image: '', name: '', ports: '', volumes: '', env: '', restart: 'no', network: 'bridge', auto_start: true, command: ''};
-      createImageSearch = '';
-      loadContainers();
-    } catch (e) {}
-    createPending = false;
+  function askRemove(p: Pending) {
+    confirmTarget = p;
+    confirmOpen = true;
   }
 
-  function onCreateImageInput(value: string) {
-    createImageSearch = value;
-    createContainerForm.image = value;
-    if (createImageTimer) clearTimeout(createImageTimer);
-    if (!value) { createImageOpen = false; createImageResults = []; return; }
-    // Show matching local images immediately
-    const localMatches = images.filter((img: any) => {
-      const full = img.tag === 'latest' || !img.tag ? img.repository : `${img.repository}:${img.tag}`;
-      return full.toLowerCase().includes(value.toLowerCase());
-    }).map((img: any) => ({
-      name: img.tag === 'latest' || !img.tag ? img.repository : `${img.repository}:${img.tag}`,
-      source: 'local' as const,
-      size: img.size,
-    }));
-    createImageResults = localMatches;
-    createImageOpen = true;
-    // Also search Docker Hub after debounce
-    createImageTimer = setTimeout(async () => {
-      try {
-        const d: any = await apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/images/search?q=${encodeURIComponent(value)}&page_size=5`);
-        const hubResults = (d?.results ?? []).map((r: any) => ({
-          name: r.name,
-          source: 'hub' as const,
-          description: r.description,
-          stars: r.stars,
-          pulls: r.pulls,
-          official: r.official,
-        }));
-        // Merge: local first, then hub (dedupe by name)
-        const seen = new Set(localMatches.map((m: any) => m.name));
-        const merged = [...localMatches, ...hubResults.filter((h: any) => !seen.has(h.name))];
-        createImageResults = merged;
-      } catch {}
-    }, 300);
+  function doRemove() {
+    const t = confirmTarget;
+    if (!t) return;
+    if (t.kind === 'container') run(`${t.id}:remove`, 'container/remove', { container_id: t.id, force: true }, `Removed ${t.label}`, loadContainers);
+    else if (t.kind === 'image') run(`image:${t.id}`, 'image/remove', { image: t.id, force: true }, `Removed ${t.label}`, loadImages);
+    else if (t.kind === 'volume') run(`vol:${t.id}`, 'volume/remove', { name: t.id }, `Removed volume ${t.label}`, loadVolumes);
+    else run(`net:${t.id}`, 'network/remove', { name: t.id }, `Removed network ${t.label}`, loadNetworks);
   }
 
-  function selectCreateImage(name: string) {
-    createContainerForm.image = name;
-    createImageSearch = name;
-    createImageOpen = false;
-    createImageResults = [];
+  function createVolumeAction() {
+    if (!createVolume) return;
+    const name = createVolume;
+    run(`vol:${name}`, 'volume/create', { name }, `Volume ${name} created`, () => { createVolume = ''; loadVolumes(); });
   }
 
-  async function viewLogs(id: string) {
-    logsContainer = id;
+  function createNetworkAction() {
+    if (!createNetwork) return;
+    const name = createNetwork;
+    run(`net:${name}`, 'network/create', { name }, `Network ${name} created`, () => { createNetwork = ''; loadNetworks(); });
+  }
+
+  async function viewLogs(c: any) {
+    logsContainer = { id: c.id, name: c.name || c.id.slice(0, 12) };
+    logs = '';
+    logsLoading = true;
     showLogs = true;
     try {
-      const d: any = await apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/container/logs?container_id=${id}&lines=200`);
+      const d: any = await apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/container/logs?container_id=${encodeURIComponent(c.id)}&lines=200`);
       logs = d?.logs ?? '';
-    } catch (e) { logs = 'Failed to load logs'; }
-  }
-
-  async function pullImageAction() {
-    if (!pullImage) return;
-    actionPending = 'pull';
-    searchOpen = false;
-    pullProgress = { active: true, image: pullImage, layers: [], done: false, error: '' };
-    try {
-      const d: any = await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/image/pull`, { image: pullImage });
-      const output = d?.output || d?.message || '';
-      const lines = output.split('\n').filter((l: string) => l.trim());
-      const layers: {id: string; status: string}[] = [];
-      for (const line of lines) {
-        const m = line.match(/^([a-f0-9]{12}): (.+)$/);
-        if (m) {
-          const existing = layers.find(l => l.id === m[1]);
-          if (existing) existing.status = m[2];
-          else layers.push({ id: m[1], status: m[2] });
-        }
-      }
-      if (layers.length === 0 && lines.length > 0) {
-        layers.push({ id: 'output', status: lines[lines.length - 1] });
-      }
-      pullProgress = { active: true, image: pullImage, layers, done: true, error: d?.ok === false ? (d?.message || 'pull failed') : '' };
-      pullImage = '';
-      loadImages();
-    } catch (e: any) {
-      pullProgress = { active: true, image: pullImage, layers: [], done: true, error: e.message || 'pull failed' };
+    } catch {
+      logs = 'Failed to load logs';
     }
-    actionPending = '';
+    logsLoading = false;
   }
 
-  function onImageInput(value: string) {
-    pullImage = value;
-    if (searchTimer) clearTimeout(searchTimer);
-    if (!value || value.length < 2) { searchOpen = false; searchResults = []; return; }
-    searchLoading = true;
-    searchTimer = setTimeout(async () => {
-      try {
-        const d: any = await apiFetch(auth.token, 'GET', `servers/${selectedServer}/docker/images/search?q=${encodeURIComponent(value)}&page_size=8`);
-        searchResults = d?.results ?? [];
-        searchOpen = searchResults.length > 0;
-      } catch { searchResults = []; searchOpen = false; }
-      searchLoading = false;
-    }, 300);
+  function stateBadge(state: string): string {
+    if (state === 'running') return 'badge-success';
+    if (state === 'paused' || state === 'restarting') return 'badge-warning';
+    if (state === 'exited' || state === 'dead') return 'badge-danger';
+    return '';
   }
 
-  function selectImage(name: string) {
-    pullImage = name;
-    searchOpen = false;
-    searchResults = [];
-  }
+  const tabs = $derived(
+    [
+      { id: 'containers' as Tab, label: 'Containers', icon: Box, count: containers.length, admin: false },
+      { id: 'images' as Tab, label: 'Images', icon: Layers, count: images.length, admin: true },
+      { id: 'volumes' as Tab, label: 'Volumes', icon: HardDrive, count: volumes.length, admin: true },
+      { id: 'networks' as Tab, label: 'Networks', icon: Network, count: networks.length, admin: true },
+      { id: 'system' as Tab, label: 'System', icon: Info, count: null, admin: true },
+    ].filter((t) => !t.admin || canManage),
+  );
 
-  function fmtPulls(n: number): string {
-    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
-    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-    return String(n);
-  }
-
-  async function removeImage(image: string) {
-    if (!confirm(`Remove image ${image}?`)) return;
-    actionPending = `image:${image}`;
-    try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/image/remove`, { image, force: true });
-      loadImages();
-    } catch (e) {}
-    actionPending = '';
-  }
-
-  async function createVolumeAction() {
-    if (!createVolume) return;
-    actionPending = `vol:${createVolume}`;
-    try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/volume/create`, { name: createVolume });
-      createVolume = '';
-      loadVolumes();
-    } catch (e) {}
-    actionPending = '';
-  }
-
-  async function removeVolume(name: string) {
-    if (!confirm(`Remove volume ${name}?`)) return;
-    actionPending = `vol:${name}`;
-    try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/volume/remove`, { name });
-      loadVolumes();
-    } catch (e) {}
-    actionPending = '';
-  }
-
-  async function createNetworkAction() {
-    if (!createNetwork) return;
-    actionPending = `net:${createNetwork}`;
-    try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/network/create`, { name: createNetwork });
-      createNetwork = '';
-      loadNetworks();
-    } catch (e) {}
-    actionPending = '';
-  }
-
-  async function removeNetwork(name: string) {
-    if (!confirm(`Remove network ${name}?`)) return;
-    actionPending = `net:${name}`;
-    try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/docker/network/remove`, { name });
-      loadNetworks();
-    } catch (e) {}
-    actionPending = '';
-  }
-
-  function stateIcon(state: string) {
-    if (state === 'running') return '🟢';
-    if (state === 'exited') return '🔴';
-    if (state === 'paused') return '🟡';
-    return '⚪';
-  }
-
-  const tabs = [
-    { id: 'containers', label: 'Containers', icon: Box },
-    { id: 'images', label: 'Images', icon: Layers },
-    { id: 'volumes', label: 'Volumes', icon: HardDrive },
-    { id: 'networks', label: 'Networks', icon: Globe },
-    { id: 'system', label: 'System', icon: Info },
-  ];
+  const runningCount = $derived(containers.filter((c) => c.state === 'running').length);
+  const visibleContainers = $derived(
+    containers
+      .filter((c) => stateFilter === 'all' || (stateFilter === 'running' ? c.state === 'running' : c.state !== 'running'))
+      .filter((c) => !query || `${c.name} ${c.image} ${c.id}`.toLowerCase().includes(query.toLowerCase())),
+  );
+  const description = $derived(
+    dockerInfo ? `Docker ${dockerInfo.version} · ${dockerInfo.running} running` : loading.containers ? 'Loading…' : `${containers.length} containers · ${runningCount} running`,
+  );
+  const confirmMessage = $derived(
+    confirmTarget
+      ? confirmTarget.kind === 'container'
+        ? `Container ${confirmTarget.label} will be force-removed. Data not stored in a volume is lost.`
+        : confirmTarget.kind === 'image'
+          ? `Image ${confirmTarget.label} will be force-removed from this server.`
+          : `The ${confirmTarget.kind} ${confirmTarget.label} will be removed.`
+      : '',
+  );
 </script>
 
 <DashboardLayout active="Docker">
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-    <div>
-      <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent">Docker Management</h1>
-      <p class="text-sm text-slate-500 mt-1">{dockerInfo ? `v${dockerInfo.version} • ${dockerInfo.running} running` : 'Loading...'}</p>
-    </div>
-    <div class="flex gap-2">
-      <select bind:value={selectedServer} onchange={() => loadAll()}
-        class="bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white">
-        {#each servers as s}
-          <option value={s.id}>{s.name}</option>
-        {/each}
-      </select>
-      <button onclick={() => loadAll()} class="p-2 bg-white/[0.05] border border-white/[0.1] rounded-lg hover:bg-white/[0.1] transition">
-        <RefreshCw size={16} />
-      </button>
-    </div>
-  </div>
-
-  <!-- Tabs -->
-  <div class="flex gap-1 mb-6 bg-white/[0.03] border border-white/[0.07] rounded-xl p-1 overflow-x-auto">
-    {#each tabs as tab}
-      {@const Icon = tab.icon}
-      <button onclick={() => activeTab = tab.id}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap {activeTab === tab.id ? 'bg-white/[0.08] text-white' : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'}">
-        <Icon size={16} />
-        {tab.label}
-      </button>
-    {/each}
-  </div>
-
-  <!-- Containers Tab -->
-  {#if activeTab === 'containers'}
-    {#if canManage}
-      <div class="flex gap-3 mb-6">
-        <button onclick={() => showCreateContainer = true}
-          class="px-4 py-2 bg-sky-500 text-white rounded-lg text-sm font-medium hover:bg-sky-600 transition flex items-center gap-2">
-          <Plus size={16} /> Create Container
+  <PageHeader title="Docker" description={servers.length ? description : ''}>
+    {#snippet actions()}
+      {#if servers.length > 1}
+        <select bind:value={selectedServer} onchange={changeServer} class="input h-8 w-auto min-w-40 text-[13px]" aria-label="Server">
+          {#each servers as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
+        </select>
+      {/if}
+      {#if servers.length > 0}
+        <button onclick={loadAll} class="btn btn-secondary btn-sm" disabled={loading.containers}>
+          <RefreshCw size={14} class={loading.containers ? 'animate-spin' : ''} /> Refresh
         </button>
-        <button onclick={() => loadContainers()} class="p-2 bg-white/[0.05] border border-white/[0.1] rounded-lg hover:bg-white/[0.1] transition">
-          <RefreshCw size={16} />
-        </button>
-      </div>
-    {/if}
-    {#if loading}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-        <div class="animate-pulse text-[var(--text-muted)]">Loading containers...</div>
-      </div>
-    {:else if containers.length === 0}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-        <Box size={48} class="mb-4 opacity-30" />
-        <h2 class="text-lg font-semibold mb-2">No Containers</h2>
-        <p class="text-sm text-slate-500">No Docker containers found on this server.</p>
-      </div>
-    {:else}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full border-separate border-spacing-0">
-            <thead><tr class="text-left">
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">ID</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Name</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Image</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">State</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Ports</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] text-right">Actions</th>
-            </tr></thead>
-            <tbody>
-              {#each containers as c}
-                <tr class="hover:bg-white/[0.02] transition group">
-                  <td class="px-5 py-3 border-b border-white/[0.04] font-mono text-xs text-slate-400">{c.id?.slice(0,12)}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-sm font-medium text-white">{c.name}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-xs text-slate-400">{c.image}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04]">
-                    <span class="inline-flex items-center gap-1.5 text-xs">
-                      {stateIcon(c.state)} {c.state}
-                    </span>
-                  </td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-xs text-slate-500 max-w-[200px] truncate">{c.ports || '—'}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-right">
-                    <div class="flex items-center justify-end gap-1 opacity-60 group-hover:opacity-100 transition">
-                      {#if c.state !== 'running'}
-                        <button onclick={() => containerAction(c.id, 'start')} class="p-1.5 rounded hover:bg-emerald-500/20 text-emerald-400" title="Start"><Play size={14} /></button>
-                      {/if}
-                      {#if c.state === 'running'}
-                        <button onclick={() => containerAction(c.id, 'stop')} class="p-1.5 rounded hover:bg-amber-500/20 text-amber-400" title="Stop"><Square size={14} /></button>
-                        <button onclick={() => containerAction(c.id, 'restart')} class="p-1.5 rounded hover:bg-blue-500/20 text-blue-400" title="Restart"><RotateCcw size={14} /></button>
-                      {/if}
-                      <button onclick={() => viewLogs(c.id)} class="p-1.5 rounded hover:bg-white/10 text-slate-400" title="Logs"><Terminal size={14} /></button>
-                      {#if canManage}
-                        <button onclick={() => removeContainer(c.id)} class="p-1.5 rounded hover:bg-red-500/20 text-red-400" title="Remove"><Trash2 size={14} /></button>
-                      {/if}
-                    </div>
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {/if}
-  {/if}
+      {/if}
+      {#if canManage && servers.length > 0}
+        <button onclick={() => (showCreate = true)} class="btn btn-primary btn-sm"><Plus size={14} /> Create container</button>
+      {/if}
+    {/snippet}
+  </PageHeader>
 
-  <!-- Images Tab -->
-  {#if activeTab === 'images'}
-    {#if canManage}
-      <div class="flex gap-3 mb-6">
-        <div class="flex gap-2 flex-1 relative">
-          <div class="flex-1 relative">
-            <input
-              value={pullImage}
-              oninput={(e) => onImageInput(e.currentTarget.value)}
-              onfocus={() => { if (searchResults.length > 0) searchOpen = true; }}
-              onblur={() => setTimeout(() => { searchOpen = false; }, 200)}
-              placeholder="Search Docker Hub images..."
-              class="w-full bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50"
-            />
-            {#if searchLoading}
-              <div class="absolute right-3 top-1/2 -translate-y-1/2">
-                <div class="w-4 h-4 border-2 border-sky-400/30 border-t-sky-400 rounded-full animate-spin"></div>
-              </div>
-            {/if}
-            {#if searchOpen && searchResults.length > 0}
-              <div class="absolute z-50 top-full mt-1 w-full bg-[#0c0d0f] border border-white/[0.1] rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
-                {#each searchResults as img}
-                  <button
-                    onmousedown={() => selectImage(img.name)}
-                    class="w-full flex items-start gap-3 px-4 py-3 hover:bg-white/[0.05] transition text-left border-b border-white/[0.04] last:border-0"
-                  >
-                    <Layers size={14} class="text-sky-400 mt-0.5 shrink-0" />
-                    <div class="flex-1 min-w-0">
-                      <div class="flex items-center gap-2">
-                        <span class="text-sm font-medium text-white truncate">{img.name}</span>
-                        {#if img.official}
-                          <span class="px-1.5 py-0.5 rounded text-[0.6rem] font-bold bg-sky-500/20 text-sky-300">OFFICIAL</span>
-                        {/if}
-                        {#if img.automated}
-                          <span class="px-1.5 py-0.5 rounded text-[0.6rem] font-bold bg-emerald-500/20 text-emerald-300">AUTO</span>
-                        {/if}
-                      </div>
-                      {#if img.description}
-                        <p class="text-[0.7rem] text-slate-500 truncate mt-0.5">{img.description}</p>
-                      {/if}
-                      <div class="flex gap-3 mt-1 text-[0.65rem] text-slate-600">
-                        <span>⭐ {fmtPulls(img.stars)}</span>
-                        <span>⬇ {fmtPulls(img.pulls)}</span>
-                      </div>
-                    </div>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-          <button onclick={pullImageAction} disabled={actionPending === 'pull'}
-            class="px-4 py-2 bg-sky-500 text-white rounded-lg text-sm font-medium hover:bg-sky-600 transition flex items-center gap-2 disabled:opacity-50 shrink-0">
-            <Download size={16} /> Pull
-          </button>
-        </div>
-      </div>
-    {/if}
-    {#if images.length === 0}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-        <Layers size={48} class="mb-4 opacity-30" />
-        <h2 class="text-lg font-semibold mb-2">No Images</h2>
-      </div>
-    {:else}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full border-separate border-spacing-0">
-            <thead><tr class="text-left">
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Repository</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Tag</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Size</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Created</th>
-              {#if canManage}
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] text-right">Actions</th>
-              {/if}
-            </tr></thead>
-            <tbody>
-              {#each images as img}
-                <tr class="hover:bg-white/[0.02] transition group">
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-sm font-medium text-white">{img.repository}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04]"><span class="px-2 py-0.5 rounded text-xs bg-white/[0.05] text-slate-400">{img.tag}</span></td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-sm text-slate-400">{img.size}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-xs text-slate-500">{img.created?.slice(0,10)}</td>
-                  {#if canManage}
-                    <td class="px-5 py-3 border-b border-white/[0.04] text-right">
-                      <button onclick={() => removeImage(`${img.repository}:${img.tag}`)} class="p-1.5 rounded hover:bg-red-500/20 text-red-400 opacity-60 group-hover:opacity-100 transition" title="Remove"><Trash2 size={14} /></button>
-                    </td>
-                  {/if}
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {/if}
-  {/if}
-
-  <!-- Volumes Tab -->
-  {#if activeTab === 'volumes'}
-    {#if canManage}
-      <div class="flex gap-3 mb-6">
-        <div class="flex gap-2 flex-1">
-          <input bind:value={createVolume} placeholder="Volume name" class="flex-1 bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500" />
-          <button onclick={createVolumeAction} class="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium hover:bg-emerald-600 transition flex items-center gap-2">
-            <Plus size={16} /> Create
-          </button>
-        </div>
-      </div>
-    {/if}
-    {#if volumes.length === 0}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-        <HardDrive size={48} class="mb-4 opacity-30" />
-        <h2 class="text-lg font-semibold mb-2">No Volumes</h2>
-      </div>
-    {:else}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full border-separate border-spacing-0">
-            <thead><tr class="text-left">
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Name</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Driver</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Created</th>
-              {#if canManage}
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] text-right">Actions</th>
-              {/if}
-            </tr></thead>
-            <tbody>
-              {#each volumes as v}
-                <tr class="hover:bg-white/[0.02] transition group">
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-sm font-medium text-white font-mono">{v.name}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-xs text-slate-400">{v.driver}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-xs text-slate-500">{v.created?.slice(0,10)}</td>
-                  {#if canManage}
-                    <td class="px-5 py-3 border-b border-white/[0.04] text-right">
-                      <button onclick={() => removeVolume(v.name)} class="p-1.5 rounded hover:bg-red-500/20 text-red-400 opacity-60 group-hover:opacity-100 transition" title="Remove"><Trash2 size={14} /></button>
-                    </td>
-                  {/if}
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {/if}
-  {/if}
-
-  <!-- Networks Tab -->
-  {#if activeTab === 'networks'}
-    {#if canManage}
-      <div class="flex gap-3 mb-6">
-        <div class="flex gap-2 flex-1">
-          <input bind:value={createNetwork} placeholder="Network name" class="flex-1 bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500" />
-          <button onclick={createNetworkAction} class="px-4 py-2 bg-violet-500 text-white rounded-lg text-sm font-medium hover:bg-violet-600 transition flex items-center gap-2">
-            <Plus size={16} /> Create
-          </button>
-        </div>
-      </div>
-    {/if}
-    {#if networks.length === 0}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-        <Globe size={48} class="mb-4 opacity-30" />
-        <h2 class="text-lg font-semibold mb-2">No Networks</h2>
-      </div>
-    {:else}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full border-separate border-spacing-0">
-            <thead><tr class="text-left">
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Name</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Driver</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Scope</th>
-              {#if canManage}
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] text-right">Actions</th>
-              {/if}
-            </tr></thead>
-            <tbody>
-              {#each networks as n}
-                <tr class="hover:bg-white/[0.02] transition group">
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-sm font-medium text-white font-mono">{n.name}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-xs text-slate-400">{n.driver}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-xs text-slate-500">{n.scope}</td>
-                  {#if canManage}
-                    <td class="px-5 py-3 border-b border-white/[0.04] text-right">
-                      <button onclick={() => removeNetwork(n.name)} class="p-1.5 rounded hover:bg-red-500/20 text-red-400 opacity-60 group-hover:opacity-100 transition" title="Remove"><Trash2 size={14} /></button>
-                    </td>
-                  {/if}
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {/if}
-  {/if}
-
-  <!-- System Tab -->
-  {#if activeTab === 'system'}
-    {#if dockerInfo}
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5">
-          <div class="text-xs text-slate-500 mb-1">Version</div>
-          <div class="text-lg font-bold text-white">{dockerInfo.version}</div>
-        </div>
-        <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5">
-          <div class="text-xs text-slate-500 mb-1">Driver</div>
-          <div class="text-lg font-bold text-white">{dockerInfo.driver}</div>
-        </div>
-        <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5">
-          <div class="text-xs text-slate-500 mb-1">CPUs</div>
-          <div class="text-lg font-bold text-white">{dockerInfo.cpus}</div>
-        </div>
-        <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5">
-          <div class="text-xs text-slate-500 mb-1">Memory</div>
-          <div class="text-lg font-bold text-white">{(parseInt(dockerInfo.memory || '0') / 1073741824).toFixed(1)} GB</div>
-        </div>
-        <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5">
-          <div class="text-xs text-slate-500 mb-1">Containers</div>
-          <div class="text-lg font-bold text-white">{dockerInfo.running} running / {dockerInfo.stopped} stopped</div>
-        </div>
-        <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5">
-          <div class="text-xs text-slate-500 mb-1">Images</div>
-          <div class="text-lg font-bold text-white">{dockerInfo.images}</div>
-        </div>
-      </div>
-    {/if}
-
-    {#if diskUsage.length > 0}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-        <div class="px-5 py-4 border-b border-white/[0.06]">
-          <h3 class="text-sm font-semibold text-white">Disk Usage</h3>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full border-separate border-spacing-0">
-            <thead><tr class="text-left">
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Type</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Count</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Size</th>
-              <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Reclaimable</th>
-            </tr></thead>
-            <tbody>
-              {#each diskUsage as u}
-                <tr class="hover:bg-white/[0.02] transition">
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-sm font-medium text-white">{u.type}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-sm text-slate-400">{u.count}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-sm text-slate-400">{u.size}</td>
-                  <td class="px-5 py-3 border-b border-white/[0.04] text-sm text-emerald-400">{u.reclaimable}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {/if}
-  {/if}
-
-  <!-- Pull Progress Modal -->
-  {#if pullProgress.active}
-    <div class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onclick={() => { if (pullProgress.done) pullProgress = {...pullProgress, active: false}; }}>
-      <div class="bg-[#0c0d0f] border border-white/[0.08] rounded-xl w-full max-w-lg" onclick={(e) => e.stopPropagation()}>
-        <div class="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
-          <div class="flex items-center gap-3">
-            {#if !pullProgress.done}
-              <div class="w-5 h-5 border-2 border-sky-400/30 border-t-sky-400 rounded-full animate-spin"></div>
-            {:else if pullProgress.error}
-              <div class="w-5 h-5 rounded-full bg-red-500/20 flex items-center justify-center"><span class="text-red-400 text-xs">✕</span></div>
-            {:else}
-              <div class="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center"><span class="text-emerald-400 text-xs">✓</span></div>
-            {/if}
-            <h3 class="text-sm font-semibold text-white">
-              {#if !pullProgress.done}
-                Pulling <span class="text-sky-400">{pullProgress.image}</span>...
-              {:else if pullProgress.error}
-                Pull failed
-              {:else}
-                <span class="text-emerald-400">{pullProgress.image}</span> pulled
-              {/if}
-            </h3>
-          </div>
-          {#if pullProgress.done}
-            <button onclick={() => pullProgress = {...pullProgress, active: false}} class="text-slate-500 hover:text-white text-lg">×</button>
-          {/if}
-        </div>
-        <div class="px-5 py-4 max-h-[50vh] overflow-auto">
-          {#if pullProgress.error}
-            <p class="text-sm text-red-400">{pullProgress.error}</p>
-          {:else if pullProgress.layers.length === 0 && !pullProgress.done}
-            <div class="flex items-center gap-3 py-4">
-              <div class="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
-                <div class="h-full bg-gradient-to-r from-sky-400 to-indigo-400 rounded-full animate-pulse" style="width: 60%"></div>
-              </div>
-              <span class="text-xs text-slate-500 shrink-0">Connecting...</span>
-            </div>
-          {:else}
-            <div class="space-y-2">
-              {#each pullProgress.layers as layer}
-                {@const isComplete = layer.status.includes('complete') || layer.status.includes('already') || layer.status === 'Pull complete' || layer.status.startsWith('Status:')}
-                {@const isDownloading = layer.status.includes('Downloading') || layer.status.includes('Pulling')}
-                <div class="flex items-start gap-3 text-xs">
-                  {#if isComplete}
-                    <span class="text-emerald-400 mt-0.5 shrink-0">✓</span>
-                  {:else if isDownloading}
-                    <div class="w-3.5 h-3.5 mt-0.5 shrink-0 border-2 border-sky-400/30 border-t-sky-400 rounded-full animate-spin"></div>
-                  {:else}
-                    <span class="text-slate-600 mt-0.5 shrink-0">○</span>
-                  {/if}
-                  <div class="flex-1 min-w-0">
-                    <span class="font-mono text-slate-500">{layer.id === 'output' ? '' : layer.id.slice(0,12)}</span>
-                    <span class="text-slate-400 ml-1">{layer.status}</span>
-                  </div>
-                </div>
-              {/each}
-              {#if pullProgress.done && !pullProgress.error}
-                <div class="flex items-center gap-2 pt-2 mt-2 border-t border-white/[0.04]">
-                  <span class="text-emerald-400 text-xs">✓ Image ready</span>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      </div>
+  {#if serversLoaded && servers.length === 0}
+    <div class="card">
+      <EmptyState icon={Server} title="No servers" description="Add a server first — Docker is managed through its agent.">
+        <a href="/servers" class="btn btn-primary btn-sm">Go to servers</a>
+      </EmptyState>
     </div>
-  {/if}
+  {:else}
+    <div class="tabs mb-6">
+      {#each tabs as tab (tab.id)}
+        <button class="tab {activeTab === tab.id ? 'tab-active' : ''}" onclick={() => (activeTab = tab.id)}>
+          <tab.icon size={15} />
+          {tab.label}
+          {#if tab.count !== null && tab.count > 0}<span class="text-xs text-subtle tabular-nums">{tab.count}</span>{/if}
+        </button>
+      {/each}
+    </div>
 
-  <!-- Create Container Modal -->
-  {#if showCreateContainer}
-    <div class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onclick={() => showCreateContainer = false}>
-      <div class="bg-[#0c0d0f] border border-white/[0.08] rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col" onclick={(e) => e.stopPropagation()}>
-        <div class="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
-          <h3 class="text-sm font-semibold text-white">Create Container</h3>
-          <button onclick={() => showCreateContainer = false} class="text-slate-500 hover:text-white text-lg">×</button>
+    {#if activeTab === 'containers'}
+      <div class="card">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <div class="segmented">
+            {#each [['all', 'All'], ['running', 'Running'], ['stopped', 'Stopped']] as [key, label] (key)}
+              <button class="segment {stateFilter === key ? 'segment-active' : ''}" onclick={() => (stateFilter = key as any)}>{label}</button>
+            {/each}
+          </div>
+          <div class="relative w-full sm:w-64">
+            <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+            <input bind:value={query} class="input h-8 pl-8" placeholder="Filter containers…" aria-label="Filter containers" />
+          </div>
         </div>
-        <div class="px-5 py-4 overflow-auto flex-1 space-y-4">
-          <!-- Image (required) -->
-          <div class="relative">
-            <label class="block text-xs font-medium text-slate-400 mb-1">Image <span class="text-red-400">*</span></label>
-            <input
-              value={createContainerForm.image}
-              oninput={(e) => onCreateImageInput(e.currentTarget.value)}
-              onfocus={() => { if (createImageResults.length > 0) createImageOpen = true; }}
-              onblur={() => setTimeout(() => { createImageOpen = false; }, 200)}
-              placeholder="Search local images or Docker Hub..."
-              class="w-full bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50"
-            />
-            {#if createImageOpen && createImageResults.length > 0}
-              <div class="absolute z-50 top-full mt-1 w-full bg-[#0c0d0f] border border-white/[0.1] rounded-xl shadow-2xl shadow-black/50 overflow-hidden max-h-60 overflow-y-auto">
-                {#each createImageResults as img}
-                  <button
-                    onmousedown={() => selectCreateImage(img.name)}
-                    class="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.05] transition text-left border-b border-white/[0.04] last:border-0"
-                  >
-                    {#if img.source === 'local'}
-                      <div class="w-5 h-5 rounded bg-emerald-500/20 flex items-center justify-center shrink-0">
-                        <span class="text-emerald-400 text-[0.6rem] font-bold">L</span>
-                      </div>
-                      <div class="flex-1 min-w-0">
-                        <span class="text-sm font-medium text-white">{img.name}</span>
-                        <span class="text-[0.65rem] text-emerald-400 ml-2">local</span>
-                        {#if img.size}
-                          <span class="text-[0.65rem] text-slate-600 ml-2">{img.size}</span>
-                        {/if}
-                      </div>
-                    {:else}
-                      <div class="w-5 h-5 rounded bg-sky-500/20 flex items-center justify-center shrink-0">
-                        <span class="text-sky-400 text-[0.6rem] font-bold">H</span>
-                      </div>
-                      <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-1.5">
-                          <span class="text-sm font-medium text-white">{img.name}</span>
-                          {#if img.official}
-                            <span class="px-1 py-0.5 rounded text-[0.55rem] font-bold bg-sky-500/20 text-sky-300">OFFICIAL</span>
+
+        {#if loading.containers && containers.length === 0}
+          <div class="space-y-3 p-4">{#each Array(5) as _, i (i)}<div class="skeleton h-9"></div>{/each}</div>
+        {:else if errors.containers && containers.length === 0}
+          <EmptyState compact icon={Box} title="Couldn't load containers" description={errors.containers} actionLabel="Retry" onaction={loadContainers} />
+        {:else if visibleContainers.length === 0}
+          <EmptyState compact icon={Box} title={containers.length ? 'No containers match' : 'No containers'} description={containers.length ? 'Try another filter.' : 'No Docker containers found on this server.'} />
+        {:else}
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th class="max-md:hidden">Image</th>
+                  <th>State</th>
+                  <th class="max-lg:hidden">Ports</th>
+                  <th class="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each visibleContainers as c (c.id)}
+                  <tr>
+                    <td>
+                      <div class="font-medium text-fg">{c.name}</div>
+                      <div class="font-mono text-xs text-subtle">{c.id?.slice(0, 12)}</div>
+                    </td>
+                    <td class="max-w-[240px] truncate font-mono text-[13px] text-muted max-md:hidden">{c.image}</td>
+                    <td><span class="badge {stateBadge(c.state)}"><span class="dot"></span>{c.state}</span></td>
+                    <td class="max-w-[220px] truncate font-mono text-xs text-subtle max-lg:hidden" title={c.ports}>{c.ports || '—'}</td>
+                    <td>
+                      <div class="flex items-center justify-end gap-0.5">
+                        {#if canManage}
+                          {#if c.state !== 'running'}
+                            <button onclick={() => containerAction(c, 'start')} disabled={!!actionPending} class="btn btn-ghost btn-icon btn-xs text-success" aria-label="Start" title="Start">
+                              {#if actionPending === `${c.id}:start`}<LoaderCircle size={14} class="animate-spin" />{:else}<Play size={14} />{/if}
+                            </button>
+                          {:else}
+                            <button onclick={() => containerAction(c, 'stop')} disabled={!!actionPending} class="btn btn-ghost btn-icon btn-xs" aria-label="Stop" title="Stop">
+                              {#if actionPending === `${c.id}:stop`}<LoaderCircle size={14} class="animate-spin" />{:else}<Square size={14} />{/if}
+                            </button>
+                            <button onclick={() => containerAction(c, 'restart')} disabled={!!actionPending} class="btn btn-ghost btn-icon btn-xs" aria-label="Restart" title="Restart">
+                              {#if actionPending === `${c.id}:restart`}<LoaderCircle size={14} class="animate-spin" />{:else}<RotateCcw size={14} />{/if}
+                            </button>
                           {/if}
-                        </div>
-                        {#if img.description}
-                          <p class="text-[0.65rem] text-slate-500 truncate">{img.description}</p>
                         {/if}
-                        <div class="flex gap-2 mt-0.5 text-[0.6rem] text-slate-600">
-                          {#if img.stars}<span>⭐ {img.stars}</span>{/if}
-                          {#if img.pulls}<span>⬇ {img.pulls >= 1e6 ? (img.pulls/1e6).toFixed(1)+'M' : img.pulls}</span>{/if}
-                        </div>
+                        <button onclick={() => viewLogs(c)} class="btn btn-ghost btn-icon btn-xs" aria-label="Logs" title="Logs"><ScrollText size={14} /></button>
+                        {#if canManage}
+                          <button onclick={() => askRemove({ kind: 'container', id: c.id, label: c.name || c.id.slice(0, 12) })} disabled={!!actionPending} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Remove" title="Remove">
+                            {#if actionPending === `${c.id}:remove`}<LoaderCircle size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
+                          </button>
+                        {/if}
                       </div>
-                    {/if}
-                  </button>
+                    </td>
+                  </tr>
                 {/each}
-              </div>
-            {/if}
+              </tbody>
+            </table>
           </div>
-          <!-- Name -->
-          <div>
-            <label class="block text-xs font-medium text-slate-400 mb-1">Container Name</label>
-            <input bind:value={createContainerForm.name} placeholder="my-nginx (auto-generated if empty)" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50" />
-          </div>
-          <!-- Command -->
-          <div>
-            <label class="block text-xs font-medium text-slate-400 mb-1">Command (optional)</label>
-            <input bind:value={createContainerForm.command} placeholder="sh -c 'echo hello'" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50" />
-          </div>
-          <!-- Ports -->
-          <div>
-            <label class="block text-xs font-medium text-slate-400 mb-1">Ports <span class="text-slate-600">(comma separated: host:container)</span></label>
-            <input bind:value={createContainerForm.ports} placeholder="8080:80, 443:443" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50" />
-          </div>
-          <!-- Volumes -->
-          <div>
-            <label class="block text-xs font-medium text-slate-400 mb-1">Volumes <span class="text-slate-600">(comma separated: host:container)</span></label>
-            <input bind:value={createContainerForm.volumes} placeholder="/data:/var/www/html" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50" />
-          </div>
-          <!-- Environment -->
-          <div>
-            <label class="block text-xs font-medium text-slate-400 mb-1">Environment <span class="text-slate-600">(one KEY=value per line)</span></label>
-            <textarea bind:value={createContainerForm.env} rows={3} placeholder="NODE_ENV=production&#10;PORT=3000" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50 font-mono resize-none"></textarea>
-          </div>
-          <!-- Row: Restart + Network -->
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-xs font-medium text-slate-400 mb-1">Restart Policy</label>
-              <select bind:value={createContainerForm.restart} class="w-full bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white">
-                <option value="no">No</option>
-                <option value="always">Always</option>
-                <option value="unless-stopped">Unless Stopped</option>
-                <option value="on-failure">On Failure</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-xs font-medium text-slate-400 mb-1">Network</label>
-              <select bind:value={createContainerForm.network} class="w-full bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white">
-                <option value="bridge">Bridge</option>
-                <option value="host">Host</option>
-                <option value="none">None</option>
-              </select>
-            </div>
-          </div>
-          <!-- Auto start -->
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" bind:checked={createContainerForm.auto_start} class="rounded border-white/20 bg-white/5 text-sky-500 focus:ring-sky-500/50" />
-            <span class="text-sm text-slate-400">Start immediately after creation</span>
-          </label>
-        </div>
-        <div class="px-5 py-4 border-t border-white/[0.06] flex justify-end gap-3">
-          <button onclick={() => showCreateContainer = false} class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">Cancel</button>
-          <button onclick={createContainerAction} disabled={createPending || !createContainerForm.image}
-            class="px-4 py-2 bg-sky-500 text-white rounded-lg text-sm font-medium hover:bg-sky-600 transition flex items-center gap-2 disabled:opacity-50">
-            {#if createPending}
-              <div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-              Creating...
-            {:else}
-              <Plus size={16} /> Create
-            {/if}
-          </button>
-        </div>
+        {/if}
       </div>
-    </div>
+    {/if}
+
+    {#if activeTab === 'images' && canManage}
+      <div class="card">
+        <div class="border-b border-line px-4 py-3">
+          <ImagePuller serverId={selectedServer} onpulled={loadImages} />
+        </div>
+        {#if loading.images && images.length === 0}
+          <div class="space-y-3 p-4">{#each Array(4) as _, i (i)}<div class="skeleton h-9"></div>{/each}</div>
+        {:else if errors.images && images.length === 0}
+          <EmptyState compact icon={Layers} title="Couldn't load images" description={errors.images} actionLabel="Retry" onaction={loadImages} />
+        {:else if images.length === 0}
+          <EmptyState compact icon={Layers} title="No images" description="Pull an image from Docker Hub to get started." />
+        {:else}
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Repository</th><th>Tag</th><th>Size</th><th class="max-sm:hidden">Created</th><th class="text-right">Actions</th></tr></thead>
+              <tbody>
+                {#each images as img, i (img.id ?? `${img.repository}:${img.tag}:${i}`)}
+                  {@const ref = `${img.repository}:${img.tag}`}
+                  <tr>
+                    <td class="font-mono text-[13px] text-fg">{img.repository}</td>
+                    <td><span class="code">{img.tag}</span></td>
+                    <td class="text-muted tabular-nums">{img.size}</td>
+                    <td class="text-xs text-subtle tabular-nums max-sm:hidden">{img.created?.slice(0, 10)}</td>
+                    <td class="text-right">
+                      <button onclick={() => askRemove({ kind: 'image', id: ref, label: ref })} disabled={actionPending === `image:${ref}`} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Remove image" title="Remove">
+                        {#if actionPending === `image:${ref}`}<LoaderCircle size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
+                      </button>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if activeTab === 'volumes' && canManage}
+      <div class="card">
+        <form class="flex gap-2 border-b border-line px-4 py-3" onsubmit={(e) => { e.preventDefault(); createVolumeAction(); }}>
+          <input bind:value={createVolume} placeholder="New volume name" aria-label="Volume name" class="input h-8 flex-1 font-mono text-[13px]" />
+          <button type="submit" disabled={!createVolume || actionPending === `vol:${createVolume}`} class="btn btn-secondary btn-sm"><Plus size={14} /> Create</button>
+        </form>
+        {#if loading.volumes && volumes.length === 0}
+          <div class="space-y-3 p-4">{#each Array(3) as _, i (i)}<div class="skeleton h-9"></div>{/each}</div>
+        {:else if errors.volumes && volumes.length === 0}
+          <EmptyState compact icon={HardDrive} title="Couldn't load volumes" description={errors.volumes} actionLabel="Retry" onaction={loadVolumes} />
+        {:else if volumes.length === 0}
+          <EmptyState compact icon={HardDrive} title="No volumes" description="Volumes persist container data across restarts." />
+        {:else}
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Name</th><th>Driver</th><th class="max-sm:hidden">Created</th><th class="text-right">Actions</th></tr></thead>
+              <tbody>
+                {#each volumes as v (v.name)}
+                  <tr>
+                    <td class="max-w-[320px] truncate font-mono text-[13px] text-fg">{v.name}</td>
+                    <td class="text-muted">{v.driver}</td>
+                    <td class="text-xs text-subtle tabular-nums max-sm:hidden">{v.created?.slice(0, 10)}</td>
+                    <td class="text-right">
+                      <button onclick={() => askRemove({ kind: 'volume', id: v.name, label: v.name })} disabled={actionPending === `vol:${v.name}`} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Remove volume" title="Remove">
+                        {#if actionPending === `vol:${v.name}`}<LoaderCircle size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
+                      </button>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if activeTab === 'networks' && canManage}
+      <div class="card">
+        <form class="flex gap-2 border-b border-line px-4 py-3" onsubmit={(e) => { e.preventDefault(); createNetworkAction(); }}>
+          <input bind:value={createNetwork} placeholder="New network name" aria-label="Network name" class="input h-8 flex-1 font-mono text-[13px]" />
+          <button type="submit" disabled={!createNetwork || actionPending === `net:${createNetwork}`} class="btn btn-secondary btn-sm"><Plus size={14} /> Create</button>
+        </form>
+        {#if loading.networks && networks.length === 0}
+          <div class="space-y-3 p-4">{#each Array(3) as _, i (i)}<div class="skeleton h-9"></div>{/each}</div>
+        {:else if errors.networks && networks.length === 0}
+          <EmptyState compact icon={Network} title="Couldn't load networks" description={errors.networks} actionLabel="Retry" onaction={loadNetworks} />
+        {:else if networks.length === 0}
+          <EmptyState compact icon={Network} title="No networks" />
+        {:else}
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Name</th><th>Driver</th><th>Scope</th><th class="text-right">Actions</th></tr></thead>
+              <tbody>
+                {#each networks as n (n.id ?? n.name)}
+                  <tr>
+                    <td class="font-mono text-[13px] text-fg">{n.name}</td>
+                    <td class="text-muted">{n.driver}</td>
+                    <td class="text-muted">{n.scope}</td>
+                    <td class="text-right">
+                      <button onclick={() => askRemove({ kind: 'network', id: n.name, label: n.name })} disabled={actionPending === `net:${n.name}`} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Remove network" title="Remove">
+                        {#if actionPending === `net:${n.name}`}<LoaderCircle size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
+                      </button>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if activeTab === 'system' && canManage}
+      {#if loading.info && !dockerInfo}
+        <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3">{#each Array(6) as _, i (i)}<div class="skeleton h-20"></div>{/each}</div>
+      {:else if dockerInfo}
+        <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3">
+          {#each [
+            ['Version', dockerInfo.version],
+            ['Storage driver', dockerInfo.driver],
+            ['CPUs', dockerInfo.cpus],
+            ['Memory', `${(parseInt(dockerInfo.memory || '0') / 1073741824).toFixed(1)} GB`],
+            ['Containers', `${dockerInfo.running} running · ${dockerInfo.stopped} stopped`],
+            ['Images', dockerInfo.images],
+          ] as [label, value] (label)}
+            <div class="card p-4">
+              <div class="stat-label">{label}</div>
+              <div class="mt-1 truncate text-base font-semibold text-fg tabular-nums">{value ?? '—'}</div>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="card mb-6">
+          <EmptyState compact icon={Info} title="Docker info unavailable" description={errors.info || 'The agent did not return Docker system information.'} actionLabel="Retry" onaction={loadInfo} />
+        </div>
+      {/if}
+
+      {#if diskUsage.length > 0}
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">Disk usage</h3></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Type</th><th>Count</th><th>Size</th><th>Reclaimable</th></tr></thead>
+              <tbody>
+                {#each diskUsage as u (u.type)}
+                  <tr>
+                    <td class="font-medium text-fg">{u.type}</td>
+                    <td class="text-muted tabular-nums">{u.count}</td>
+                    <td class="text-muted tabular-nums">{u.size}</td>
+                    <td class="text-success tabular-nums">{u.reclaimable}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {/if}
+    {/if}
   {/if}
 
-  <!-- Logs Modal -->
-  {#if showLogs}
-    <div class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onclick={() => showLogs = false}>
-      <div class="bg-[#0c0d0f] border border-white/[0.08] rounded-xl w-full max-w-4xl max-h-[80vh] flex flex-col" onclick={(e) => e.stopPropagation()}>
-        <div class="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
-          <h3 class="text-sm font-semibold text-white">Container Logs: {logsContainer?.slice(0,12)}</h3>
-          <button onclick={() => showLogs = false} class="text-slate-500 hover:text-white text-lg">×</button>
-        </div>
-        <pre class="flex-1 overflow-auto p-5 text-xs text-slate-300 font-mono whitespace-pre-wrap">{logs}</pre>
-      </div>
-    </div>
+  {#if canManage && selectedServer}
+    <CreateContainerModal bind:open={showCreate} serverId={selectedServer} {images} oncreated={loadContainers} />
   {/if}
+
+  <Modal bind:open={showLogs} title={logsContainer ? `Logs · ${logsContainer.name}` : 'Logs'} maxWidth="4xl">
+    {#if logsLoading}
+      <div class="space-y-2">{#each Array(8) as _, i (i)}<div class="skeleton h-3.5" style="width: {[92, 78, 86, 64, 90, 72, 84, 58][i]}%"></div>{/each}</div>
+    {:else}
+      <pre class="max-h-[60vh] overflow-auto rounded-lg border border-line bg-bg p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted">{logs || 'No log output.'}</pre>
+    {/if}
+    {#snippet footer()}
+      <span class="mr-auto text-xs text-subtle">Last 200 lines</span>
+      {#if logsContainer}
+        <button class="btn btn-secondary btn-sm" onclick={() => logsContainer && viewLogs(logsContainer)} disabled={logsLoading}>
+          <RefreshCw size={14} class={logsLoading ? 'animate-spin' : ''} /> Reload
+        </button>
+      {/if}
+      <button class="btn btn-secondary btn-sm" onclick={() => (showLogs = false)}>Close</button>
+    {/snippet}
+  </Modal>
+
+  <ConfirmDialog
+    bind:open={confirmOpen}
+    title={confirmTarget ? `Remove ${confirmTarget.kind}?` : 'Remove?'}
+    message={confirmMessage}
+    confirmLabel="Remove"
+    destructive
+    onconfirm={doRemove}
+  />
 </DashboardLayout>

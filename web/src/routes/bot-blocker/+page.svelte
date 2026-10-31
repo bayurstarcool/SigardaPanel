@@ -1,17 +1,21 @@
 <script lang="ts">
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import DashboardLayout from '$components/DashboardLayout.svelte';
   import { toasts } from '$lib/toast.svelte';
-  import { Bot, Shield, ShieldCheck, Plus, Trash2, Loader2, Ban, X, RefreshCw, Globe } from 'lucide-svelte';
+  import DashboardLayout from '$components/DashboardLayout.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import Modal from '$components/Modal.svelte';
+  import { Bot, Shield, ShieldCheck, ShieldOff, Trash2, LoaderCircle, Ban, RefreshCw, FileCode, Server, ChevronRight } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
   let servers = $state<any[]>([]);
   let selectedServer = $state<number>(0);
   let enabled = $state(false);
   let loading = $state(true);
+  let loadError = $state('');
   let busy = $state('');
-  let canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  const canManage = $derived(hasRole(auth.user?.role, 'admin'));
 
   let blockedAgents = $state<string[]>([]);
   let blockedIPs = $state<string[]>([]);
@@ -24,8 +28,12 @@
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    const d: any = await apiFetch(auth.token, 'GET', 'servers');
-    servers = d?.servers ?? [];
+    try {
+      const d: any = await apiFetch(auth.token, 'GET', 'servers');
+      servers = d?.servers ?? [];
+    } catch (e: any) {
+      if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load servers');
+    }
     if (servers.length > 0) {
       selectedServer = servers[0].id;
       loadRules();
@@ -37,14 +45,15 @@
   function loadRules() {
     if (!selectedServer) return;
     loading = true;
+    loadError = '';
     apiFetch(auth.token, 'POST', `servers/${selectedServer}/bot-blocker/manage`, { action: 'list' })
       .then((d: any) => {
         enabled = d?.enabled ?? false;
         rawConfig = d?.config ?? '';
         parseConfig(rawConfig);
       })
-      .catch((e: any) => toasts.error('Failed to load: ' + e.message))
-      .finally(() => loading = false);
+      .catch((e: any) => { if (e?.message !== 'session expired') loadError = e?.message || 'Failed to load rules'; })
+      .finally(() => (loading = false));
   }
 
   function parseConfig(config: string) {
@@ -60,249 +69,180 @@
     blockedIPs = i;
   }
 
-  async function toggle(enable: boolean) {
-    busy = 'toggle';
+  async function manage(key: string, body: any, success: string, after?: () => void) {
+    busy = key;
     try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/bot-blocker/manage`, { action: enable ? 'enable' : 'disable' });
-      toasts.success(enable ? 'Bot blocker enabled' : 'Bot blocker disabled');
+      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/bot-blocker/manage`, body);
+      toasts.success(success);
+      after?.();
       loadRules();
-    } catch (e: any) { toasts.error(e.message); }
-    finally { busy = ''; }
+    } catch (e: any) {
+      if (e?.message !== 'session expired') toasts.error(e?.message || 'Action failed');
+    } finally {
+      busy = '';
+    }
   }
 
-  async function addAgent() {
+  const toggle = (enable: boolean) =>
+    manage('toggle', { action: enable ? 'enable' : 'disable' }, enable ? 'Bot blocker enabled' : 'Bot blocker disabled');
+
+  function addAgent() {
     if (!newAgent.trim()) return;
-    busy = 'add-agent';
-    try {
-      const list = newAgent.split(',').map(s => s.trim()).filter(Boolean);
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/bot-blocker/manage`, { action: 'add-agent', agents: list });
-      toasts.success(`Added ${list.length} pattern(s)`);
-      newAgent = ''; showAddAgent = false;
-      loadRules();
-    } catch (e: any) { toasts.error(e.message); }
-    finally { busy = ''; }
+    const list = newAgent.split(',').map((s) => s.trim()).filter(Boolean);
+    manage('add-agent', { action: 'add-agent', agents: list }, `Added ${list.length} pattern(s)`, () => { newAgent = ''; showAddAgent = false; });
   }
 
-  async function removeAgent(agent: string) {
-    busy = `ra-${agent}`;
-    try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/bot-blocker/manage`, { action: 'remove-agent', agents: [agent] });
-      toasts.success('Removed');
-      loadRules();
-    } catch (e: any) { toasts.error(e.message); }
-    finally { busy = ''; }
-  }
+  const removeAgent = (agent: string) => manage(`ra-${agent}`, { action: 'remove-agent', agents: [agent] }, 'Removed');
 
-  async function addIP() {
+  function addIP() {
     if (!newIP.trim()) return;
-    busy = 'add-ip';
-    try {
-      const list = newIP.split(',').map(s => s.trim()).filter(Boolean);
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/bot-blocker/manage`, { action: 'add-ip', ips: list });
-      toasts.success(`Added ${list.length} IP(s)`);
-      newIP = ''; showAddIP = false;
-      loadRules();
-    } catch (e: any) { toasts.error(e.message); }
-    finally { busy = ''; }
+    const list = newIP.split(',').map((s) => s.trim()).filter(Boolean);
+    manage('add-ip', { action: 'add-ip', ips: list }, `Added ${list.length} IP(s)`, () => { newIP = ''; showAddIP = false; });
   }
 
-  async function removeIP(ip: string) {
-    busy = `ri-${ip}`;
-    try {
-      await apiFetch(auth.token, 'POST', `servers/${selectedServer}/bot-blocker/manage`, { action: 'remove-ip', ips: [ip] });
-      toasts.success('Removed');
-      loadRules();
-    } catch (e: any) { toasts.error(e.message); }
-    finally { busy = ''; }
-  }
+  const removeIP = (ip: string) => manage(`ri-${ip}`, { action: 'remove-ip', ips: [ip] }, 'Removed');
 </script>
 
 <DashboardLayout active="Bot Blocker">
-  <!-- Header -->
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-    <div>
-      <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-orange-100 bg-clip-text text-transparent">Bot Blocker</h1>
-      <p class="text-sm text-slate-500 mt-1">Block malicious bots, scrapers, and unwanted traffic via nginx</p>
-    </div>
-    <div class="flex gap-2">
-      <select bind:value={selectedServer} onchange={() => loadRules()}
-        class="bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white">
-        {#each servers as s}
-          <option value={s.id}>{s.name}</option>
-        {/each}
-      </select>
-      <button onclick={() => loadRules()} class="p-2 bg-white/[0.05] border border-white/[0.1] rounded-lg hover:bg-white/[0.1] transition">
-        <RefreshCw size={16} />
+  <PageHeader title="Bot blocker" description="Block malicious bots, scrapers and unwanted traffic in nginx">
+    {#snippet meta()}
+      {#if !loading && !loadError && servers.length > 0}
+        <span class="badge {enabled ? 'badge-success' : ''}"><span class="dot"></span>{enabled ? 'Active' : 'Inactive'}</span>
+      {/if}
+    {/snippet}
+    {#snippet actions()}
+      {#if servers.length > 1}
+        <select bind:value={selectedServer} onchange={loadRules} class="input h-8 w-auto min-w-40 text-[13px]" aria-label="Server">
+          {#each servers as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
+        </select>
+      {/if}
+      <button onclick={loadRules} class="btn btn-secondary btn-sm" disabled={loading || !selectedServer}>
+        <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
+      {#if canManage && selectedServer}
+        <button onclick={() => (showAddIP = true)} class="btn btn-secondary btn-sm"><Ban size={14} /> Block IP</button>
+        <button onclick={() => (showAddAgent = true)} class="btn btn-primary btn-sm"><Bot size={14} /> Block user-agent</button>
+      {/if}
+    {/snippet}
+  </PageHeader>
+
+  {#if !loading && servers.length === 0}
+    <div class="card">
+      <EmptyState icon={Server} title="No servers" description="Add a server first — the bot blocker runs in its nginx.">
+        <a href="/servers" class="btn btn-primary btn-sm">Go to servers</a>
+      </EmptyState>
     </div>
-  </div>
-
-  <!-- Status + Toggle -->
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5">
-      <div class="text-xs text-slate-500 mb-2">Bot Blocker Status</div>
-      <div class="flex items-center gap-3">
-        <div class="w-3 h-3 rounded-full {enabled ? 'bg-emerald-400 shadow-[0_0_8px_rgba(74,222,128,0.5)]' : 'bg-red-400'}"></div>
-        <span class="text-lg font-semibold {enabled ? 'text-emerald-400' : 'text-red-400'}">
-          {enabled ? 'Active' : 'Inactive'}
-        </span>
-      </div>
+  {:else if loading}
+    <div class="skeleton mb-6 h-[84px]"></div>
+    <div class="grid gap-6 lg:grid-cols-2">
+      {#each Array(2) as _, i (i)}<div class="card space-y-3 p-4">{#each Array(4) as _, j (j)}<div class="skeleton h-8"></div>{/each}</div>{/each}
     </div>
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5 flex items-center justify-between">
-      <div>
-        <div class="text-xs text-slate-500 mb-2">Quick Actions</div>
-        {#if enabled}
-          <button onclick={() => toggle(false)} disabled={busy === 'toggle'}
-            class="px-3 py-1.5 bg-red-500/20 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/30 transition disabled:opacity-50 flex items-center gap-1.5">
-            {#if busy === 'toggle'}<Loader2 size={12} class="animate-spin" />{/if} Disable
-          </button>
-        {:else}
-          <button onclick={() => toggle(true)} disabled={busy === 'toggle'}
-            class="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/30 transition disabled:opacity-50 flex items-center gap-1.5">
-            {#if busy === 'toggle'}<Loader2 size={12} class="animate-spin" />{/if} Enable
-          </button>
-        {/if}
-      </div>
-      <div class="text-right">
-        <div class="text-xs text-slate-500">Rules</div>
-        <div class="text-2xl font-bold text-white">{blockedAgents.length + blockedIPs.length}</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Action Buttons -->
-  {#if canManage}
-    <div class="flex flex-wrap items-center gap-3 mb-6">
-      <button onclick={() => { showAddAgent = !showAddAgent; showAddIP = false; }}
-        class="px-4 py-2 bg-indigo-500/20 text-indigo-400 rounded-lg text-sm font-medium hover:bg-indigo-500/30 transition flex items-center gap-2">
-        <Bot size={16} /> Block User-Agent
-      </button>
-      <button onclick={() => { showAddIP = !showAddIP; showAddAgent = false; }}
-        class="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/30 transition flex items-center gap-2">
-        <Ban size={16} /> Block IP
-      </button>
-    </div>
-
-    {#if showAddAgent}
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-5 mb-6">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-semibold text-white">Block User-Agent Pattern</h3>
-          <button onclick={() => showAddAgent = false} class="text-slate-500 hover:text-white transition"><X size={16} /></button>
-        </div>
-        <p class="text-xs text-slate-500 mb-3">Regex patterns to match User-Agent strings. Comma-separated for multiple.</p>
-        <div class="flex gap-3">
-          <input bind:value={newAgent} placeholder="e.g. semrushbot, ahrefsbot, dotbot"
-            class="flex-1 bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
-            onkeydown={(e) => e.key === 'Enter' && addAgent()} />
-          <button onclick={addAgent} disabled={busy === 'add-agent' || !newAgent.trim()}
-            class="px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 transition disabled:opacity-50 flex items-center gap-2">
-            {#if busy === 'add-agent'}<Loader2 size={14} class="animate-spin" />{/if} Add
-          </button>
-        </div>
-      </div>
-    {/if}
-
-    {#if showAddIP}
-      <div class="bg-red-500/5 border border-red-500/20 rounded-xl p-5 mb-6">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-semibold text-red-300">Block IP Address</h3>
-          <button onclick={() => showAddIP = false} class="text-slate-500 hover:text-white transition"><X size={16} /></button>
-        </div>
-        <p class="text-xs text-slate-500 mb-3">IP addresses to deny. Comma-separated for multiple.</p>
-        <div class="flex gap-3">
-          <input bind:value={newIP} placeholder="e.g. 1.2.3.4, 5.6.7.8"
-            class="flex-1 bg-white/[0.05] border border-white/[0.1] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
-            onkeydown={(e) => e.key === 'Enter' && addIP()} />
-          <button onclick={addIP} disabled={busy === 'add-ip' || !newIP.trim()}
-            class="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600 transition disabled:opacity-50 flex items-center gap-2">
-            {#if busy === 'add-ip'}<Loader2 size={14} class="animate-spin" />{/if} Block
-          </button>
-        </div>
-      </div>
-    {/if}
-  {/if}
-
-  <!-- Content -->
-  {#if loading}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-      <div class="animate-pulse text-slate-500">Loading bot blocker rules...</div>
+  {:else if loadError}
+    <div class="card">
+      <EmptyState icon={Shield} title="Couldn't load bot blocker" description={loadError} actionLabel="Retry" onaction={loadRules} />
     </div>
   {:else if !enabled && blockedAgents.length === 0 && blockedIPs.length === 0}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-      <Shield size={48} class="mx-auto mb-4 opacity-30 text-slate-600" />
-      <h2 class="text-lg font-semibold text-white mb-2">Bot Blocker Not Configured</h2>
-      <p class="text-sm text-slate-500 mb-4">Enable bot blocker to start blocking malicious traffic.</p>
-      {#if canManage}
-        <button onclick={() => toggle(true)} disabled={busy === 'toggle'}
-          class="px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg text-sm font-medium hover:bg-emerald-500/30 transition disabled:opacity-50 inline-flex items-center gap-2">
-          {#if busy === 'toggle'}<Loader2 size={14} class="animate-spin" />{/if}
-          <ShieldCheck size={14} /> Enable Bot Blocker
-        </button>
-      {/if}
+    <div class="card">
+      <EmptyState icon={Shield} title="Bot blocker not configured" description="Enable the bot blocker to start filtering malicious traffic in nginx.">
+        {#if canManage}
+          <button onclick={() => toggle(true)} disabled={busy === 'toggle'} class="btn btn-primary btn-sm">
+            {#if busy === 'toggle'}<LoaderCircle size={14} class="animate-spin" />{:else}<ShieldCheck size={14} />{/if} Enable bot blocker
+          </button>
+        {/if}
+      </EmptyState>
     </div>
   {:else}
-    <!-- Blocked User-Agents -->
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden mb-6">
-      <div class="px-5 py-4 border-b border-white/[0.06] flex items-center gap-2">
-        <Bot size={16} class="text-sky-400" />
-        <h3 class="text-sm font-semibold text-white">Blocked User-Agent Patterns</h3>
-        <span class="px-1.5 py-0.5 rounded text-[0.65rem] font-medium bg-sky-500/20 text-sky-400">{blockedAgents.length}</span>
-      </div>
-      {#if blockedAgents.length === 0}
-        <div class="px-5 py-8 text-center text-sm text-slate-500">No User-Agent patterns configured.</div>
-      {:else}
-        <div class="divide-y divide-white/[0.04]">
-          {#each blockedAgents as agent}
-            <div class="px-5 py-3 flex items-center justify-between hover:bg-white/[0.02] transition group">
-              <code class="text-sm text-slate-300 font-mono bg-white/[0.04] px-2 py-0.5 rounded">{agent}</code>
-              {#if canManage}
-                <button onclick={() => removeAgent(agent)} disabled={busy === `ra-${agent}`}
-                  class="p-1.5 rounded hover:bg-red-500/20 text-red-400 opacity-0 group-hover:opacity-100 transition disabled:opacity-50" title="Remove">
-                  {#if busy === `ra-${agent}`}<Loader2 size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
-                </button>
-              {/if}
-            </div>
-          {/each}
+    <div class="card mb-6 flex flex-wrap items-center justify-between gap-4 p-5">
+      <div class="flex items-center gap-3">
+        <div class="flex size-10 items-center justify-center rounded-lg border border-line bg-surface-2 {enabled ? 'text-success' : 'text-subtle'}">
+          {#if enabled}<ShieldCheck size={18} strokeWidth={1.75} />{:else}<ShieldOff size={18} strokeWidth={1.75} />{/if}
         </div>
+        <div>
+          <div class="text-sm font-semibold text-fg">{enabled ? 'Blocking is active' : 'Blocking is paused'}</div>
+          <div class="text-[13px] text-muted tabular-nums">{blockedAgents.length} user-agent pattern(s) · {blockedIPs.length} IP(s)</div>
+        </div>
+      </div>
+      {#if canManage}
+        {#if enabled}
+          <button onclick={() => toggle(false)} disabled={busy === 'toggle'} class="btn btn-danger-ghost btn-sm">
+            {#if busy === 'toggle'}<LoaderCircle size={14} class="animate-spin" />{:else}<ShieldOff size={14} />{/if} Disable
+          </button>
+        {:else}
+          <button onclick={() => toggle(true)} disabled={busy === 'toggle'} class="btn btn-primary btn-sm">
+            {#if busy === 'toggle'}<LoaderCircle size={14} class="animate-spin" />{:else}<ShieldCheck size={14} />{/if} Enable
+          </button>
+        {/if}
       {/if}
     </div>
 
-    <!-- Blocked IPs -->
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden mb-6">
-      <div class="px-5 py-4 border-b border-white/[0.06] flex items-center gap-2">
-        <Ban size={16} class="text-red-400" />
-        <h3 class="text-sm font-semibold text-white">Blocked IP Addresses</h3>
-        <span class="px-1.5 py-0.5 rounded text-[0.65rem] font-medium bg-red-500/20 text-red-400">{blockedIPs.length}</span>
-      </div>
-      {#if blockedIPs.length === 0}
-        <div class="px-5 py-8 text-center text-sm text-slate-500">No IPs blocked.</div>
-      {:else}
-        <div class="divide-y divide-white/[0.04]">
-          {#each blockedIPs as ip}
-            <div class="px-5 py-3 flex items-center justify-between hover:bg-white/[0.02] transition group">
-              <code class="text-sm text-slate-300 font-mono bg-white/[0.04] px-2 py-0.5 rounded">{ip}</code>
-              {#if canManage}
-                <button onclick={() => removeIP(ip)} disabled={busy === `ri-${ip}`}
-                  class="p-1.5 rounded hover:bg-red-500/20 text-red-400 opacity-0 group-hover:opacity-100 transition disabled:opacity-50" title="Remove">
-                  {#if busy === `ri-${ip}`}<Loader2 size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
-                </button>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {/if}
+    <div class="mb-6 grid gap-6 lg:grid-cols-2">
+      {#each [
+        { key: 'agent', title: 'Blocked user-agents', icon: Bot, items: blockedAgents, empty: 'No user-agent patterns configured.', busyPrefix: 'ra-', remove: removeAgent },
+        { key: 'ip', title: 'Blocked IP addresses', icon: Ban, items: blockedIPs, empty: 'No IPs blocked.', busyPrefix: 'ri-', remove: removeIP },
+      ] as section (section.key)}
+        <section class="card min-w-0">
+          <div class="card-header">
+            <h2 class="card-title flex items-center gap-2"><section.icon size={16} class="text-subtle" /> {section.title}</h2>
+            <span class="badge tabular-nums">{section.items.length}</span>
+          </div>
+          {#if section.items.length === 0}
+            <p class="px-5 py-8 text-center text-[13px] text-muted">{section.empty}</p>
+          {:else}
+            <ul class="max-h-[420px] divide-y divide-line overflow-y-auto">
+              {#each section.items as item (item)}
+                <li class="flex items-center justify-between gap-3 px-5 py-2.5 transition-colors hover:bg-surface-2/60">
+                  <code class="code truncate">{item}</code>
+                  {#if canManage}
+                    <button onclick={() => section.remove(item)} disabled={busy === `${section.busyPrefix}${item}`} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Remove {item}" title="Remove">
+                      {#if busy === `${section.busyPrefix}${item}`}<LoaderCircle size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
+                    </button>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </section>
+      {/each}
     </div>
 
-    <!-- Raw Config -->
     {#if rawConfig}
-      <details class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-        <summary class="px-5 py-4 cursor-pointer text-sm text-slate-400 hover:text-white transition flex items-center gap-2">
-          <Globe size={14} /> Raw nginx config
+      <details class="card group">
+        <summary class="flex cursor-pointer list-none items-center gap-2 px-5 py-3.5 text-sm font-medium text-muted transition-colors hover:text-fg">
+          <ChevronRight size={14} class="transition-transform group-open:rotate-90" />
+          <FileCode size={14} /> Raw nginx config
         </summary>
         <div class="px-5 pb-5">
-          <pre class="bg-black/30 border border-white/[0.06] rounded-lg p-4 text-xs text-slate-400 font-mono overflow-x-auto whitespace-pre-wrap">{rawConfig}</pre>
+          <pre class="max-h-[50vh] overflow-auto rounded-lg border border-line bg-bg p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted">{rawConfig}</pre>
         </div>
       </details>
     {/if}
   {/if}
+
+  <Modal bind:open={showAddAgent} title="Block user-agent pattern" maxWidth="md">
+    <form id="bb-agent" onsubmit={(e) => { e.preventDefault(); addAgent(); }}>
+      <label class="label" for="bb-agent-input">Patterns</label>
+      <input id="bb-agent-input" bind:value={newAgent} placeholder="semrushbot, ahrefsbot, dotbot" class="input font-mono text-[13px]" />
+      <p class="hint">Case-insensitive regex matched against the User-Agent header. Comma-separate multiple patterns.</p>
+    </form>
+    {#snippet footer()}
+      <button class="btn btn-secondary btn-sm" onclick={() => (showAddAgent = false)}>Cancel</button>
+      <button type="submit" form="bb-agent" class="btn btn-primary btn-sm" disabled={busy === 'add-agent' || !newAgent.trim()}>
+        {#if busy === 'add-agent'}<LoaderCircle size={14} class="animate-spin" />{/if} Add
+      </button>
+    {/snippet}
+  </Modal>
+
+  <Modal bind:open={showAddIP} title="Block IP address" maxWidth="md">
+    <form id="bb-ip" onsubmit={(e) => { e.preventDefault(); addIP(); }}>
+      <label class="label" for="bb-ip-input">IP addresses</label>
+      <input id="bb-ip-input" bind:value={newIP} placeholder="1.2.3.4, 5.6.7.8" class="input font-mono text-[13px]" />
+      <p class="hint">Requests from these addresses get a 403 from nginx. Comma-separate multiple IPs.</p>
+    </form>
+    {#snippet footer()}
+      <button class="btn btn-secondary btn-sm" onclick={() => (showAddIP = false)}>Cancel</button>
+      <button type="submit" form="bb-ip" class="btn btn-danger btn-sm" disabled={busy === 'add-ip' || !newIP.trim()}>
+        {#if busy === 'add-ip'}<LoaderCircle size={14} class="animate-spin" />{:else}<Ban size={14} />{/if} Block
+      </button>
+    {/snippet}
+  </Modal>
 </DashboardLayout>

@@ -1,25 +1,27 @@
 <script lang="ts">
   import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtDate } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import StatCard from '$components/StatCard.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
   import StatusPill from '$components/StatusPill.svelte';
   import {
-    ArrowLeft, Globe, ShieldCheck, Database, Folder, Zap, Settings, Users, Package,
-    RefreshCw, Lock, Loader2, ExternalLink, Trash2, Copy, Check, Pencil, Save,
-    UserPlus, Mail, Code, Shield, Clock, ScrollText, Upload, Key,
+    Globe, ShieldCheck, Database, Folder, Zap, Settings, Users, Package,
+    Lock, LoaderCircle, ExternalLink, Trash2, Copy, Check, Pencil, Save,
+    UserPlus, Mail, Code, Shield, Clock, ScrollText, Upload, Key, GitBranch, TriangleAlert, Server,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
-  // Tab components
-  import VhostTab from '$components/sites/VhostTab.svelte';
+  // Light tabs load with the page. Heavy ones (Files/Vhost pull CodeMirror,
+  // SSH pulls xterm) are imported the first time their tab is opened.
   import SecurityTab from '$components/sites/SecurityTab.svelte';
   import LogsTab from '$components/sites/LogsTab.svelte';
   import CronTab from '$components/sites/CronTab.svelte';
-  import SshFtpTab from '$components/sites/SshFtpTab.svelte';
-  import FileManagerTab from '$components/sites/FileManagerTab.svelte';
   import UsersTab from '$components/sites/UsersTab.svelte';
   import AppTab from '$components/sites/AppTab.svelte';
   import BackupTab from '$components/sites/BackupTab.svelte';
@@ -49,6 +51,9 @@
   // Databases count (for stats)
   let dbsCount = $state(0);
   let dockerContainer = $state<any>(null);
+
+  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
+  const hasSSL = $derived(!!site?.ssl_status && site.ssl_status !== 'none');
 
   // Copy helper
   let copiedField = $state('');
@@ -103,7 +108,7 @@
 
   async function deleteSite() {
     if (!confirm(`DELETE site "${site?.domain}" permanently? This cannot be undone.`)) return;
-    try { await apiFetch(auth.token, 'DELETE', `sites/${siteId}`); window.location.href = '/sites'; }
+    try { await apiFetch(auth.token, 'DELETE', `sites/${siteId}`); goto('/sites'); }
     catch (e: any) { toasts.error(e.message); }
   }
 
@@ -130,142 +135,158 @@
     : appRuntimes.includes(site.runtime) ? allTabs
     : allTabs.filter((t) => t.key !== 'app')
   );
+
+  const pendingReason = $derived(
+    !site ? '' : !site.conf_file ? 'Nginx belum terdaftar' : !hasSSL ? 'SSL belum aktif' : 'Provisioning incomplete',
+  );
 </script>
+
+{#snippet row(label: string, value: string, opts: { mono?: boolean; copy?: string } = {})}
+  <div class="flex items-center justify-between gap-4 py-2.5">
+    <dt class="shrink-0 text-[13px] text-muted">{label}</dt>
+    <dd class="flex min-w-0 items-center gap-1 text-right {opts.mono ? 'font-mono text-[13px]' : 'text-sm'} text-fg">
+      <span class="truncate" title={value}>{value}</span>
+      {#if opts.copy}
+        <button onclick={() => copyText(value, opts.copy!)} class="btn btn-ghost btn-icon btn-xs" aria-label="Copy {label.toLowerCase()}">
+          {#if copiedField === opts.copy}<Check size={12} class="text-success" />{:else}<Copy size={12} />{/if}
+        </button>
+      {/if}
+    </dd>
+  </div>
+{/snippet}
+
+{#snippet tabLoading()}
+  <div class="card space-y-3 p-5">
+    <div class="skeleton h-5 w-40"></div>
+    {#each Array(6) as _, i (i)}<div class="skeleton h-8"></div>{/each}
+  </div>
+{/snippet}
+
+{#snippet tabError()}
+  <EmptyState compact icon={TriangleAlert} title="This tab failed to load" description="Check your connection and reload the page." />
+{/snippet}
 
 <DashboardLayout active="Sites">
   {#if loading}
-    <div class="space-y-6">
-      <div class="relative overflow-hidden bg-gradient-to-br from-sky-400/[0.07] via-indigo-500/[0.04] to-violet-500/[0.06] border border-white/[0.07] rounded-2xl shadow-xl p-5 lg:p-6">
-        <div class="absolute top-0 right-0 w-48 h-48 bg-sky-400/[0.04] rounded-full blur-3xl"></div>
-        <div class="relative flex items-center gap-4"><div class="w-12 h-12 rounded-2xl bg-white/[0.05] animate-pulse"></div><div class="space-y-2"><div class="h-6 w-48 bg-white/[0.05] rounded-lg animate-pulse"></div><div class="h-4 w-24 bg-white/[0.04] rounded-lg animate-pulse"></div></div></div>
-      </div>
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">{#each Array(4) as _}<div class="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5"><div class="flex items-center gap-2 mb-1.5"><div class="w-6 h-6 rounded-lg bg-white/[0.04] animate-pulse"></div></div><div class="h-4 w-20 bg-white/[0.05] rounded animate-pulse"></div></div>{/each}</div>
-      <div class="flex gap-1">{#each Array(6) as _}<div class="h-9 w-20 bg-white/[0.04] rounded-xl animate-pulse"></div>{/each}</div>
+    <div class="mb-6 space-y-2">
+      <div class="skeleton h-4 w-16"></div>
+      <div class="skeleton h-8 w-64"></div>
+      <div class="skeleton h-4 w-40"></div>
     </div>
+    <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {#each Array(4) as _, i (i)}<div class="skeleton h-[88px] rounded-xl"></div>{/each}
+    </div>
+    <div class="mb-6 flex gap-2">{#each Array(6) as _, i (i)}<div class="skeleton h-8 w-20"></div>{/each}</div>
+    <div class="skeleton h-64 rounded-xl"></div>
   {:else if !site}
-    <div class="flex flex-col items-center justify-center py-32">
-      <div class="w-20 h-20 rounded-3xl bg-white/[0.03] border border-white/[0.07] flex items-center justify-center mb-6"><Globe size={36} class="text-white/[0.08]" /></div>
-      <h2 class="text-lg font-semibold text-slate-300 mb-1">Site not found</h2>
-      <p class="text-sm text-slate-500">This site may have been deleted or you lack access.</p>
+    <PageHeader title="Site" back="/sites" backLabel="Sites" />
+    <div class="card">
+      <EmptyState icon={Globe} title="Site not found" description="This site may have been deleted or you lack access." />
     </div>
   {:else}
-    <!-- Header -->
-    <div class="relative overflow-hidden bg-gradient-to-br from-sky-400/[0.07] via-indigo-500/[0.04] to-violet-500/[0.06] border border-white/[0.07] rounded-2xl shadow-xl p-3 sm:p-5 lg:p-6 mb-4 sm:mb-6">
-      <div class="absolute top-0 right-0 w-48 h-48 bg-sky-400/[0.04] rounded-full blur-3xl"></div>
-      <div class="absolute bottom-0 left-0 w-32 h-32 bg-indigo-400/[0.04] rounded-full blur-3xl"></div>
-      <div class="relative flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-        <div class="flex items-center gap-3 sm:gap-4 min-w-0">
-          <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-gradient-to-br from-sky-400/20 to-indigo-500/20 flex items-center justify-center shadow-lg ring-1 ring-white/[0.08] shrink-0"><Globe size={20} class="text-sky-400" /></div>
-          <div class="min-w-0">
-            <h1 class="text-lg sm:text-xl lg:text-2xl font-bold bg-gradient-to-r from-white via-sky-100 to-indigo-200 bg-clip-text text-transparent truncate">{site.domain}</h1>
-            <div class="flex items-center gap-1.5 sm:gap-2 mt-1 sm:mt-1.5 flex-wrap">
-              <StatusPill status={site.status} />
-              <span class="text-[0.6rem] sm:text-[0.65rem] font-medium {site.runtime === 'docker' ? 'text-sky-400 bg-sky-400/10 border-sky-400/20' : 'text-slate-500 bg-white/[0.05] border-white/[0.06]'} px-1.5 sm:px-2 py-0.5 rounded-full border">{site.runtime}</span>
-              {#if site.ssl_status && site.ssl_status !== 'none'}<span class="inline-flex items-center gap-1 text-[0.65rem] font-medium text-emerald-400/80 bg-emerald-400/[0.08] px-2 py-0.5 rounded-full border border-emerald-400/10"><Lock size={9} /> SSL {site.ssl_status}</span>{/if}
-              {#if site.app_status}<span class="inline-flex items-center gap-1 text-[0.65rem] font-medium {site.app_status === 'running' ? 'text-emerald-400/80 bg-emerald-400/[0.08] border-emerald-400/10' : 'text-slate-500 bg-white/[0.05] border-white/[0.06]'} px-2 py-0.5 rounded-full border"><Zap size={9} /> App {site.app_status}</span>{/if}
-              {#if site.status === 'pending'}
-                <span class="inline-flex items-center gap-1 text-[0.65rem] font-medium text-amber-400/80 bg-amber-400/[0.08] px-2 py-0.5 rounded-full border border-amber-400/10">
-                  ⚠ {!site.conf_file ? 'Nginx belum terdaftar' : !site.ssl_status || site.ssl_status === 'none' ? 'SSL belum aktif' : 'Provisioning incomplete'}
-                </span>
-              {/if}
-            </div>
-          </div>
-        </div>
-        <div class="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-          <a href="http://{site.domain}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl text-[0.7rem] sm:text-xs font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.25)] hover:shadow-[0_6px_20px_rgba(56,189,248,0.35)] hover:-translate-y-0.5 transition-all duration-200"><ExternalLink size={12} /> Visit</a>
-          {#if hasRole(auth.user?.role, 'admin') && site.git_repo}
-            <button onclick={triggerDeploy} disabled={deployBusy} class="inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl text-[0.7rem] sm:text-xs font-semibold bg-emerald-400/[0.1] text-emerald-400 border border-emerald-400/20 hover:bg-emerald-400/[0.15] hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-40">{#if deployBusy}<Loader2 size={12} class="animate-spin" />{:else}<Upload size={12} />{/if} Git Pull</button>
-          {/if}
-          <button onclick={deleteSite} class="inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl text-[0.7rem] sm:text-xs font-medium text-red-400/50 hover:text-red-400 hover:bg-red-400/10 hover:border-red-400/20 border border-transparent transition-all duration-200"><Trash2 size={12} /> Delete</button>
-        </div>
-      </div>
-    </div>
+    <PageHeader title={site.domain} back="/sites" backLabel="Sites">
+      {#snippet meta()}
+        <StatusPill status={site.status} />
+        <span class="badge {site.runtime === 'docker' ? 'badge-info' : ''}">{site.runtime}</span>
+        {#if hasSSL}<span class="badge badge-success"><Lock size={11} /> SSL {site.ssl_status}</span>{/if}
+        {#if site.app_status}<span class="badge {site.app_status === 'running' ? 'badge-success' : ''}"><Zap size={11} /> App {site.app_status}</span>{/if}
+        {#if site.status === 'pending'}
+          <span class="badge badge-warning"><TriangleAlert size={11} /> {pendingReason}</span>
+        {/if}
+      {/snippet}
+      {#snippet actions()}
+        <a href="http://{site.domain}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm"><ExternalLink size={14} /> Visit</a>
+        {#if isAdmin && site.git_repo}
+          <button onclick={triggerDeploy} disabled={deployBusy} class="btn btn-primary btn-sm">
+            {#if deployBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Upload size={14} />{/if} Git pull
+          </button>
+        {/if}
+        <button onclick={deleteSite} class="btn btn-danger-ghost btn-sm"><Trash2 size={14} /> Delete</button>
+      {/snippet}
+    </PageHeader>
 
-    <!-- Quick Stats -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4 sm:mb-6">
-      <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl p-2.5 sm:p-3.5 hover:border-white/[0.1] transition-all">
-        <div class="flex items-center gap-1.5 sm:gap-2 mb-1 sm:mb-1.5"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg {site.ssl_status && site.ssl_status !== 'none' ? 'bg-emerald-400/10 text-emerald-400' : 'bg-slate-400/10 text-slate-500'} flex items-center justify-center"><ShieldCheck size={12} /></div><span class="text-[0.65rem] text-slate-500 font-medium uppercase tracking-wider">SSL</span></div>
-        <p class="text-sm font-semibold {site.ssl_status && site.ssl_status !== 'none' ? 'text-emerald-400' : 'text-slate-500'}">{site.ssl_status || 'none'}</p>
-      </div>
-      <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl p-2.5 sm:p-3.5 hover:border-white/[0.1] transition-all">
-        <div class="flex items-center gap-1.5 sm:gap-2 mb-1 sm:mb-1.5"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-sky-400/10 text-sky-400 flex items-center justify-center"><Zap size={12} /></div><span class="text-[0.65rem] text-slate-500 font-medium uppercase tracking-wider">Runtime</span></div>
-        <p class="text-sm font-semibold text-slate-200">{site.runtime}</p>
-      </div>
-      <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl p-2.5 sm:p-3.5 hover:border-white/[0.1] transition-all">
-        <div class="flex items-center gap-1.5 sm:gap-2 mb-1 sm:mb-1.5"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg {site.conf_file ? 'bg-emerald-400/10 text-emerald-400' : 'bg-amber-400/10 text-amber-400'} flex items-center justify-center"><Folder size={12} /></div><span class="text-[0.65rem] text-slate-500 font-medium uppercase tracking-wider">Nginx</span></div>
-        <p class="text-sm font-semibold {site.conf_file ? 'text-emerald-400' : 'text-amber-400'}">{site.conf_file ? 'configured' : 'not configured'}</p>
-        {#if site.conf_file}<p class="text-[0.6rem] text-slate-500 truncate mt-0.5" title={site.conf_file}>{site.conf_file.split('/').pop()}</p>{/if}
-      </div>
-      <div class="bg-white/[0.03] border border-white/[0.06] rounded-xl p-2.5 sm:p-3.5 hover:border-white/[0.1] transition-all">
-        <div class="flex items-center gap-1.5 sm:gap-2 mb-1 sm:mb-1.5"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-violet-400/10 text-violet-400 flex items-center justify-center"><Database size={12} /></div><span class="text-[0.65rem] text-slate-500 font-medium uppercase tracking-wider">Databases</span></div>
-        <p class="text-sm font-semibold text-slate-200">{dbsCount || '—'}</p>
-      </div>
+    <!-- Quick stats -->
+    <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatCard label="SSL" value={site.ssl_status || 'none'} icon={ShieldCheck} tone={hasSSL ? 'success' : ''} />
+      <StatCard label="Runtime" value={site.runtime} icon={Zap} tone="accent" />
+      <StatCard label="Nginx" value={site.conf_file ? 'Configured' : 'Not configured'} icon={Server} tone={site.conf_file ? 'success' : 'warning'} hint={site.conf_file ? site.conf_file.split('/').pop() : ''} />
+      <StatCard label="Databases" value={dbsCount || '—'} icon={Database} />
     </div>
 
     <!-- Tabs -->
-    <div class="flex gap-1 mb-4 sm:mb-6 overflow-x-auto pb-1 scrollbar-hide -mx-1 px-1">
-      {#each tabs as t}
-        {@const Icon = t.icon}
-        <button onclick={() => activeTab = t.key}
-          class="inline-flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[0.65rem] sm:text-[0.7rem] font-medium rounded-xl transition-all duration-200 whitespace-nowrap {activeTab === t.key ? 'bg-gradient-to-r from-sky-400/12 to-indigo-400/12 text-sky-300 border border-sky-400/25 shadow-[0_0_20px_rgba(56,189,248,0.06)]' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'}">
-          <Icon size={12} /> {t.label}
+    <div class="tabs mb-6" role="tablist">
+      {#each tabs as t (t.key)}
+        <button role="tab" aria-selected={activeTab === t.key} onclick={() => (activeTab = t.key)} class="tab {activeTab === t.key ? 'tab-active' : ''}">
+          <t.icon size={14} /> {t.label}
         </button>
       {/each}
     </div>
 
-    <!-- ═══════ Tab: Info ═══════ -->
     {#if activeTab === 'info'}
-      <div class="grid grid-cols-1 lg:grid-cols-5 gap-3 sm:gap-4 lg:gap-5 mb-4 sm:mb-5">
-        <div class="lg:col-span-3 bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300">
-          <div class="flex items-center gap-2.5 px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-white/[0.05]"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-sky-400/10 flex items-center justify-center"><Globe size={12} class="text-sky-400" /></div><span class="text-sm font-semibold text-slate-200">Site Details</span></div>
-          <div class="p-3.5 sm:p-5">
-            <div class="space-y-0">
-              <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04] gap-2"><span class="text-xs sm:text-sm text-slate-500 shrink-0">Domain</span><span class="text-xs sm:text-sm text-slate-200 font-mono flex items-center gap-1 min-w-0"><span class="truncate">{site.domain}</span><button onclick={() => copyText(site.domain, 'domain')} class="text-slate-500 hover:text-slate-300 transition shrink-0">{#if copiedField === 'domain'}<Check size={11} class="text-emerald-400" />{:else}<Copy size={11} />{/if}</button></span></div>
-              <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04]"><span class="text-xs sm:text-sm text-slate-500">Runtime</span><span class="text-xs sm:text-sm text-slate-200">{site.runtime}</span></div>
-              <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04] gap-2"><span class="text-xs sm:text-sm text-slate-500 shrink-0">Root Path</span><span class="text-[0.7rem] sm:text-xs text-slate-200 font-mono flex items-center gap-1 min-w-0"><span class="truncate max-w-[140px] sm:max-w-[200px]" title={site.root_path}>{site.root_path}</span><button onclick={() => copyText(site.root_path, 'root')} class="text-slate-500 hover:text-slate-300 transition shrink-0">{#if copiedField === 'root'}<Check size={11} class="text-emerald-400" />{:else}<Copy size={11} />{/if}</button></span></div>
-              {#if site.system_user}<div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04]"><span class="text-xs sm:text-sm text-slate-500">System User</span><span class="text-xs sm:text-sm text-slate-200 font-mono">{site.system_user}</span></div>{/if}
-              {#if site.conf_file}<div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04] gap-2"><span class="text-xs sm:text-sm text-slate-500 shrink-0">Nginx Config</span><span class="text-[0.7rem] sm:text-xs text-slate-200 font-mono truncate max-w-[140px] sm:max-w-[200px]" title={site.conf_file}>{site.conf_file}</span></div>{/if}
-              {#if site.proxy_pass_url}<div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04] gap-2"><span class="text-xs sm:text-sm text-slate-500 shrink-0">Proxy Pass</span><span class="text-[0.7rem] sm:text-xs text-slate-200 font-mono truncate max-w-[140px] sm:max-w-[200px]">{site.proxy_pass_url}</span></div>{/if}
-              {#if site.runtime === 'docker' && dockerContainer}
-                <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04] gap-2"><span class="text-xs sm:text-sm text-slate-500 shrink-0">Container</span><span class="text-[0.7rem] sm:text-xs text-slate-200 font-mono truncate max-w-[140px] sm:max-w-[200px]">{dockerContainer.name} ({dockerContainer.id?.slice(0,12)})</span></div>
-                <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04] gap-2"><span class="text-xs sm:text-sm text-slate-500 shrink-0">Image</span><span class="text-[0.7rem] sm:text-xs text-slate-200 font-mono truncate max-w-[140px] sm:max-w-[200px]">{dockerContainer.image}</span></div>
-                <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04] gap-2"><span class="text-xs sm:text-sm text-slate-500 shrink-0">State</span>
-                  <span class="text-[0.65rem] font-medium {dockerContainer.state === 'running' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' : 'text-slate-500 bg-white/5 border-white/10'} px-2 py-0.5 rounded-full border">{dockerContainer.state}</span>
-                </div>
-                <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04] gap-2"><span class="text-xs sm:text-sm text-slate-500 shrink-0">Ports</span><span class="text-[0.7rem] sm:text-xs text-slate-200 font-mono truncate max-w-[140px] sm:max-w-[200px]">{dockerContainer.ports || '—'}</span></div>
-              {/if}
-              <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04]"><span class="text-xs sm:text-sm text-slate-500">Managed By</span><span class="text-xs sm:text-sm text-slate-200">{site.managed_by || 'sigardapanel'}</span></div>
-              <div class="flex justify-between py-2 sm:py-2.5"><span class="text-xs sm:text-sm text-slate-500">Created</span><span class="text-sm text-slate-200">{fmtDate(site.created_at)}</span></div>
-            </div>
-          </div>
+      <div class="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-5">
+        <div class="card lg:col-span-3">
+          <div class="card-header"><h2 class="card-title">Site details</h2></div>
+          <dl class="divide-y divide-line px-5">
+            {@render row('Domain', site.domain, { mono: true, copy: 'domain' })}
+            {@render row('Runtime', site.runtime)}
+            {@render row('Root path', site.root_path, { mono: true, copy: 'root' })}
+            {#if site.system_user}{@render row('System user', site.system_user, { mono: true })}{/if}
+            {#if site.conf_file}{@render row('Nginx config', site.conf_file, { mono: true })}{/if}
+            {#if site.proxy_pass_url}{@render row('Proxy pass', site.proxy_pass_url, { mono: true })}{/if}
+            {#if site.runtime === 'docker' && dockerContainer}
+              {@render row('Container', `${dockerContainer.name} (${dockerContainer.id?.slice(0, 12)})`, { mono: true })}
+              {@render row('Image', dockerContainer.image, { mono: true })}
+              <div class="flex items-center justify-between gap-4 py-2.5">
+                <dt class="text-[13px] text-muted">State</dt>
+                <dd><span class="badge {dockerContainer.state === 'running' ? 'badge-success' : ''}"><span class="dot"></span>{dockerContainer.state}</span></dd>
+              </div>
+              {@render row('Ports', dockerContainer.ports || '—', { mono: true })}
+            {/if}
+            {@render row('Managed by', site.managed_by || 'sigardapanel')}
+            {@render row('Created', fmtDate(site.created_at))}
+          </dl>
         </div>
-        <div class="lg:col-span-2 flex flex-col gap-3 sm:gap-4 lg:gap-5">
-          <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300">
-            <div class="flex items-center gap-2.5 px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-white/[0.05]"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg {site.ssl_status && site.ssl_status !== 'none' ? 'bg-emerald-400/10 text-emerald-400' : 'bg-slate-400/10 text-slate-500'} flex items-center justify-center"><ShieldCheck size={12} /></div><span class="text-sm font-semibold text-slate-200">SSL Status</span></div>
-            <div class="p-3.5 sm:p-5">
-              {#if site.ssl_status && site.ssl_status !== 'none'}
-                <div class="space-y-0">
-                  <div class="flex justify-between py-2.5 border-b border-white/[0.04]"><span class="text-xs sm:text-sm text-slate-500">Status</span><StatusPill status={site.ssl_status} /></div>
-                  <div class="flex justify-between py-2.5 border-b border-white/[0.04]"><span class="text-xs sm:text-sm text-slate-500">Issuer</span><span class="text-xs sm:text-sm text-slate-200 truncate max-w-[120px]">{site.ssl_issuer || '—'}</span></div>
-                  <div class="flex justify-between py-2.5"><span class="text-xs sm:text-sm text-slate-500">Expires</span><span class="text-xs sm:text-sm text-slate-200">{site.ssl_expires_at ? fmtDate(site.ssl_expires_at) : '—'}</span></div>
-                </div>
-              {:else}
-                <div class="flex flex-col items-center justify-center py-8"><div class="w-14 h-14 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mb-3"><ShieldCheck size={22} class="text-white/[0.08]" /></div><p class="text-sm font-medium text-slate-400 mb-0.5">No SSL configured</p><p class="text-xs text-slate-600">Issue a certificate from the SSL tab</p></div>
-              {/if}
+
+        <div class="flex flex-col gap-4 lg:col-span-2">
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">SSL status</h2>
+              <ShieldCheck size={16} class={hasSSL ? 'text-success' : 'text-subtle'} />
             </div>
+            {#if hasSSL}
+              <dl class="divide-y divide-line px-5">
+                <div class="flex items-center justify-between gap-4 py-2.5">
+                  <dt class="text-[13px] text-muted">Status</dt>
+                  <dd><StatusPill status={site.ssl_status} /></dd>
+                </div>
+                {@render row('Issuer', site.ssl_issuer || '—')}
+                {@render row('Expires', site.ssl_expires_at ? fmtDate(site.ssl_expires_at) : '—')}
+              </dl>
+            {:else}
+              <EmptyState compact icon={ShieldCheck} title="No SSL configured" description="Issue a certificate from the SSL tab." actionLabel="Open SSL tab" onaction={() => (activeTab = 'ssl')} />
+            {/if}
           </div>
-          {#if hasRole(auth.user?.role, 'admin')}
-            <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300">
-              <div class="flex items-center gap-2.5 px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-white/[0.05]"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-violet-400/10 flex items-center justify-center"><Users size={12} class="text-violet-400" /></div><span class="text-sm font-semibold text-slate-200">Transfer Ownership</span></div>
-              <div class="p-3.5 sm:p-5">
-                <p class="text-[0.7rem] sm:text-xs text-slate-500 mb-2.5 sm:mb-3">Transfer this site to another user.</p>
-                {#if !showTransfer}<button onclick={() => showTransfer = true} class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[0.7rem] sm:text-xs font-medium bg-sky-400/[0.08] text-sky-400 border border-sky-400/15 hover:bg-sky-400/[0.12] hover:border-sky-400/25 transition-all duration-200"><UserPlus size={12} /> Transfer</button>{/if}
-                {#if showTransfer}
+
+          {#if isAdmin}
+            <div class="card">
+              <div class="card-header">
+                <h2 class="card-title">Transfer ownership</h2>
+                <Users size={16} class="text-subtle" />
+              </div>
+              <div class="card-body">
+                <p class="mb-3 text-[13px] text-muted">Transfer this site to another user.</p>
+                {#if !showTransfer}
+                  <button onclick={() => (showTransfer = true)} class="btn btn-secondary btn-sm"><UserPlus size={14} /> Transfer</button>
+                {:else}
                   <div class="space-y-3">
-                    <div class="relative"><Mail size={13} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input bind:value={transferEmail} type="email" placeholder="newowner@email.com" class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl pl-9 pr-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/50 focus:ring-2 focus:ring-sky-400/10 transition-all duration-200 font-mono placeholder:text-slate-600" /></div>
+                    <div class="relative">
+                      <label for="transfer-email" class="sr-only">New owner email</label>
+                      <Mail size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+                      <input id="transfer-email" bind:value={transferEmail} type="email" placeholder="newowner@email.com" class="input pl-9" />
+                    </div>
                     <div class="flex gap-2">
-                      <button onclick={doTransfer} disabled={transferBusy || !transferEmail} class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 transition-all disabled:opacity-40 cursor-pointer border-0">{transferBusy ? 'Transferring...' : 'Transfer'}</button>
-                      <button onclick={() => { showTransfer = false; transferEmail = ''; }} class="px-3 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Cancel</button>
+                      <button onclick={doTransfer} disabled={transferBusy || !transferEmail} class="btn btn-primary btn-sm">{transferBusy ? 'Transferring…' : 'Transfer'}</button>
+                      <button onclick={() => { showTransfer = false; transferEmail = ''; }} class="btn btn-ghost btn-sm">Cancel</button>
                     </div>
                   </div>
                 {/if}
@@ -274,49 +295,78 @@
           {/if}
         </div>
       </div>
-      <!-- Git Deploy -->
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300">
-        <div class="flex items-center justify-between px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-white/[0.05]">
-          <div class="flex items-center gap-2.5"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-sky-400/10 flex items-center justify-center"><Folder size={12} class="text-sky-400" /></div><span class="text-sm font-semibold text-slate-200">Git Deploy</span></div>
-          {#if !gitEditing}<button onclick={startEditGit} class="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium text-sky-400 hover:bg-sky-400/10 transition cursor-pointer"><Pencil size={12} /> {site.git_repo ? 'Edit' : 'Configure'}</button>{/if}
-        </div>
-        <div class="p-3.5 sm:p-5">
-          {#if gitEditing}
-            <div class="space-y-3 sm:space-y-4">
-              <div><label class="block text-[0.7rem] sm:text-xs text-slate-500 font-medium mb-1 sm:mb-1.5">Repository URL</label><input bind:value={gitRepo} type="url" class="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-3.5 sm:px-4 py-2 sm:py-2.5 text-[0.8rem] sm:text-sm text-slate-200 font-mono outline-none focus:border-sky-400/50 focus:ring-2 focus:ring-sky-400/10 transition-all placeholder:text-slate-600" placeholder="https://github.com/user/repo.git" /></div>
-              <div><label class="block text-[0.7rem] sm:text-xs text-slate-500 font-medium mb-1 sm:mb-1.5">Branch</label><input bind:value={gitBranch} type="text" class="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-3.5 sm:px-4 py-2 sm:py-2.5 text-[0.8rem] sm:text-sm text-slate-200 outline-none focus:border-sky-400/50 focus:ring-2 focus:ring-sky-400/10 transition-all placeholder:text-slate-600" placeholder="main" /></div>
-              <div class="flex items-center gap-2">
-                <button onclick={saveGitConfig} disabled={gitBusy || !gitRepo} class="inline-flex items-center gap-1.5 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl text-[0.8rem] sm:text-sm font-medium bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 transition-all disabled:opacity-40 cursor-pointer border-0">{#if gitBusy}<Loader2 size={12} class="animate-spin" />{:else}<Save size={12} />{/if} Save</button>
-                <button onclick={() => { gitEditing = false; }} class="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-[0.8rem] sm:text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Cancel</button>
-              </div>
-            </div>
-          {:else}
-            {#if site.git_repo}
-              <div class="space-y-0">
-                <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04] gap-2"><span class="text-xs sm:text-sm text-slate-500 shrink-0">Repository</span><span class="text-[0.7rem] sm:text-xs text-slate-200 font-mono truncate max-w-[60%] text-right">{site.git_repo}</span></div>
-                <div class="flex justify-between py-2 sm:py-2.5 border-b border-white/[0.04]"><span class="text-xs sm:text-sm text-slate-500">Branch</span><span class="text-xs sm:text-sm text-slate-200">{site.git_branch || 'main'}</span></div>
-                <div class="flex justify-between py-2 sm:py-2.5"><span class="text-xs sm:text-sm text-slate-500">Last Commit</span><span class="text-[0.7rem] sm:text-xs text-slate-200 font-mono">{site.git_commit?.slice(0, 8) || '—'}</span></div>
-              </div>
-            {:else}
-              <p class="text-[0.8rem] sm:text-sm text-slate-500">No git repository configured. Click Configure to set up git deploy.</p>
-            {/if}
+
+      <!-- Git deploy -->
+      <div class="card">
+        <div class="card-header">
+          <div class="flex items-center gap-2">
+            <GitBranch size={16} class="text-subtle" />
+            <h2 class="card-title">Git deploy</h2>
+          </div>
+          {#if !gitEditing}
+            <button onclick={startEditGit} class="btn btn-ghost btn-sm"><Pencil size={14} /> {site.git_repo ? 'Edit' : 'Configure'}</button>
           {/if}
         </div>
+        {#if gitEditing}
+          <div class="card-body space-y-4">
+            <div>
+              <label for="git-repo" class="label">Repository URL</label>
+              <input id="git-repo" bind:value={gitRepo} type="url" class="input font-mono text-[13px]" placeholder="https://github.com/user/repo.git" />
+            </div>
+            <div>
+              <label for="git-branch" class="label">Branch</label>
+              <input id="git-branch" bind:value={gitBranch} type="text" class="input font-mono text-[13px]" placeholder="main" />
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick={saveGitConfig} disabled={gitBusy || !gitRepo} class="btn btn-primary btn-sm">
+                {#if gitBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Save size={14} />{/if} Save
+              </button>
+              <button onclick={() => { gitEditing = false; }} class="btn btn-ghost btn-sm">Cancel</button>
+            </div>
+          </div>
+        {:else if site.git_repo}
+          <dl class="divide-y divide-line px-5">
+            {@render row('Repository', site.git_repo, { mono: true })}
+            {@render row('Branch', site.git_branch || 'main', { mono: true })}
+            {@render row('Last commit', site.git_commit?.slice(0, 8) || '—', { mono: true })}
+          </dl>
+        {:else}
+          <p class="card-body text-[13px] text-muted">No git repository configured. Click Configure to set up git deploy.</p>
+        {/if}
       </div>
+    {:else if activeTab === 'vhost'}
+      {#await import('$components/sites/VhostTab.svelte')}
+        {@render tabLoading()}
+      {:then m}
+        <m.default {siteId} {site} onTriggerDeploy={triggerDeploy} />
+      {:catch}
+        {@render tabError()}
+      {/await}
+    {:else if activeTab === 'ssh'}
+      {#await import('$components/sites/SshFtpTab.svelte')}
+        {@render tabLoading()}
+      {:then m}
+        <m.default {siteId} {site} />
+      {:catch}
+        {@render tabError()}
+      {/await}
+    {:else if activeTab === 'files'}
+      {#await import('$components/sites/FileManagerTab.svelte')}
+        {@render tabLoading()}
+      {:then m}
+        <m.default {siteId} />
+      {:catch}
+        {@render tabError()}
+      {/await}
+    {:else if activeTab === 'security'}<SecurityTab {siteId} />
+    {:else if activeTab === 'logs'}<LogsTab {siteId} />
+    {:else if activeTab === 'cron'}<CronTab {siteId} />
+    {:else if activeTab === 'users'}<UsersTab {siteId} />
+    {:else if activeTab === 'app'}<AppTab {siteId} />
+    {:else if activeTab === 'backups'}<BackupTab {siteId} />
+    {:else if activeTab === 'ssl'}<SslTab {siteId} />
+    {:else if activeTab === 'databases'}<DatabaseTab {siteId} />
+    {:else if activeTab === 'settings'}<SettingsTab {siteId} />
     {/if}
-
-    <!-- ═══════ Inline Tabs ═══════ -->
-    {#if activeTab === 'vhost'}<VhostTab {siteId} {site} onTriggerDeploy={triggerDeploy} />{/if}
-    {#if activeTab === 'security'}<SecurityTab {siteId} />{/if}
-    {#if activeTab === 'logs'}<LogsTab {siteId} />{/if}
-    {#if activeTab === 'cron'}<CronTab {siteId} />{/if}
-    {#if activeTab === 'ssh'}<SshFtpTab {siteId} {site} />{/if}
-    {#if activeTab === 'files'}<FileManagerTab {siteId} />{/if}
-    {#if activeTab === 'users'}<UsersTab {siteId} />{/if}
-    {#if activeTab === 'app'}<AppTab {siteId} />{/if}
-    {#if activeTab === 'backups'}<BackupTab {siteId} />{/if}
-    {#if activeTab === 'ssl'}<SslTab {siteId} />{/if}
-    {#if activeTab === 'databases'}<DatabaseTab {siteId} />{/if}
-    {#if activeTab === 'settings'}<SettingsTab {siteId} />{/if}
   {/if}
 </DashboardLayout>

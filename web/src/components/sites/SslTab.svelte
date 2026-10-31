@@ -1,11 +1,10 @@
 <script lang="ts">
-    import { auth } from '$lib/auth.svelte';
+  import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtDate } from '$lib/format';
-    import StatusPill from '$components/StatusPill.svelte';
-  import {
-    ShieldCheck, Lock, RefreshCw, Loader2, ArrowLeft, Globe,
-  } from 'lucide-svelte';
+  import StatusPill from '$components/StatusPill.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import { ShieldCheck, Lock, RefreshCw, LoaderCircle, Globe } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
@@ -93,71 +92,45 @@
     await loadSite();
     await loadSSL();
   });
+
+  const active = $derived(!!sslStatus?.ssl_status && sslStatus.ssl_status !== 'none');
 </script>
 
-
-  {#if loading}
-    <div class="space-y-4">
-      <div class="h-8 w-32 bg-white/[0.04] rounded-lg animate-pulse"></div>
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-6 space-y-3">
-        {#each Array(4) as _}
-          <div class="flex justify-between"><div class="h-3 w-24 bg-white/[0.04] rounded animate-pulse"></div><div class="h-3 w-32 bg-white/[0.03] rounded animate-pulse"></div></div>
-        {/each}
+{#if loading}
+  <div class="card space-y-3 p-5">
+    <div class="skeleton h-5 w-40"></div>
+    {#each Array(4) as _, i (i)}<div class="skeleton h-8"></div>{/each}
+  </div>
+{:else if !site}
+  <div class="card"><EmptyState icon={Globe} title="Site not found" /></div>
+{:else}
+  <div class="card">
+    <div class="card-header">
+      <div class="min-w-0">
+        <h3 class="card-title">SSL certificate</h3>
+        <p class="truncate text-xs text-subtle">{site.domain}</p>
+      </div>
+      <ShieldCheck size={16} class={active ? 'text-success' : 'text-subtle'} />
+    </div>
+    {#if active}
+      <dl class="divide-y divide-line px-5">
+        <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Status</dt><dd><StatusPill status={sslStatus.ssl_status || 'none'} /></dd></div>
+        <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Issuer</dt><dd class="truncate text-sm text-fg">{sslStatus.ssl_issuer || '—'}</dd></div>
+        <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Expires</dt><dd class="text-sm text-fg tabular-nums">{sslStatus.ssl_expires_at ? fmtDate(sslStatus.ssl_expires_at) : '—'}</dd></div>
+      </dl>
+    {:else}
+      <EmptyState compact icon={ShieldCheck} title="No SSL status available" description="Issue a certificate below." />
+    {/if}
+    <div class="border-t border-line px-5 py-4">
+      <p class="mb-3 max-w-lg text-[13px] text-muted">Issue a Let's Encrypt SSL certificate or renew the existing one. The certificate uses the site owner's email automatically.</p>
+      <div class="flex flex-wrap gap-2">
+        <button onclick={issueSSL} disabled={sslBusy} class="btn btn-primary btn-sm">
+          {#if sslBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Lock size={14} />{/if} Issue SSL
+        </button>
+        <button onclick={renewSSL} disabled={sslBusy} class="btn btn-secondary btn-sm">
+          <RefreshCw size={14} class={sslBusy ? 'animate-spin' : ''} /> Renew
+        </button>
       </div>
     </div>
-  {:else if !site}
-    <div class="flex flex-col items-center justify-center py-32">
-      <div class="w-20 h-20 rounded-3xl bg-white/[0.03] border border-white/[0.07] flex items-center justify-center mb-6"><Globe size={36} class="text-white/[0.08]" /></div>
-      <h2 class="text-lg font-semibold text-slate-300 mb-1">Site not found</h2>
-    </div>
-  {:else}
-    <!-- Back link -->
-    <!-- Header -->
-    <div class="flex items-center gap-3 mb-6">
-      <div class="w-10 h-10 rounded-xl bg-emerald-400/10 flex items-center justify-center"><ShieldCheck size={18} class="text-emerald-400" /></div>
-      <div>
-        <h1 class="text-lg font-bold text-slate-200">SSL Certificate</h1>
-        <p class="text-xs text-slate-500">{site.domain}</p>
-      </div>
-    </div>
-
-    <!-- SSL Status -->
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300 mb-4">
-      <div class="flex items-center gap-2.5 px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-white/[0.05]">
-        <div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg {sslStatus?.ssl_status && sslStatus.ssl_status !== 'none' ? 'bg-emerald-400/10 text-emerald-400' : 'bg-slate-400/10 text-slate-500'} flex items-center justify-center">
-          <ShieldCheck size={13} />
-        </div>
-        <span class="text-sm font-semibold text-slate-200">SSL Certificate</span>
-      </div>
-      <div class="p-3.5 sm:p-5">
-        {#if sslStatus && sslStatus.ssl_status && sslStatus.ssl_status !== 'none'}
-          <div class="space-y-0 mb-6">
-            <div class="flex justify-between py-2.5 border-b border-white/[0.04]"><span class="text-sm text-slate-500">Status</span><StatusPill status={sslStatus.ssl_status || 'none'} /></div>
-            <div class="flex justify-between py-2.5 border-b border-white/[0.04]"><span class="text-sm text-slate-500">Issuer</span><span class="text-sm text-slate-200">{sslStatus.ssl_issuer || '—'}</span></div>
-            <div class="flex justify-between py-2.5"><span class="text-sm text-slate-500">Expires</span><span class="text-sm text-slate-200">{sslStatus.ssl_expires_at ? fmtDate(sslStatus.ssl_expires_at) : '—'}</span></div>
-          </div>
-        {:else}
-          <div class="flex flex-col items-center justify-center py-8">
-            <div class="w-14 h-14 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mb-3">
-              <ShieldCheck size={22} class="text-white/[0.08]" />
-            </div>
-            <p class="text-sm font-medium text-slate-400 mb-0.5">No SSL status available</p>
-            <p class="text-xs text-slate-600">Issue a certificate below</p>
-          </div>
-        {/if}
-        <div class="border-t border-white/[0.04] pt-5">
-          <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Actions</h4>
-          <p class="text-xs text-slate-500 mb-3 max-w-lg">Issue a Let's Encrypt SSL certificate or renew existing one. The certificate uses the site owner's email automatically.</p>
-          <div class="flex gap-3 flex-wrap">
-            <button onclick={issueSSL} disabled={sslBusy} class="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-400 to-teal-400 text-[#0a1628] rounded-xl text-sm font-semibold hover:-translate-y-0.5 transition-all shadow-[0_4px_15px_rgba(52,211,153,0.15)] cursor-pointer disabled:opacity-40 border-0">
-              {#if sslBusy}<Loader2 size={14} class="animate-spin" />{:else}<Lock size={14} />{/if} Issue SSL
-            </button>
-            <button onclick={renewSSL} disabled={sslBusy} class="inline-flex items-center gap-2 px-5 py-2.5 text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] rounded-xl text-sm font-semibold transition cursor-pointer disabled:opacity-40">
-              <RefreshCw size={14} /> Renew
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  {/if}
-
+  </div>
+{/if}

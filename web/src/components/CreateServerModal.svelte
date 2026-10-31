@@ -2,6 +2,7 @@
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import Modal from '$components/Modal.svelte';
+  import { Copy, Check, TriangleAlert } from 'lucide-svelte';
 
   let {
     open = $bindable(false),
@@ -66,120 +67,94 @@
     }
   }
 
+  let copied = $state(false);
+
+  async function copyToken() {
+    try {
+      await navigator.clipboard.writeText(createdToken);
+      copied = true;
+      setTimeout(() => (copied = false), 2000);
+    } catch {
+      // clipboard unavailable (non-HTTPS) — the token stays visible for manual copy
+    }
+  }
+
   function close() {
     open = false;
   }
 </script>
 
 {#if canManage}
-  <Modal bind:open title={createdServer ? 'Server Created' : 'Add Server'} maxWidth="md">
+  <Modal bind:open title={createdServer ? 'Server created' : 'Add server'} maxWidth="md">
     {#snippet footer()}
       {#if createdServer}
-        <button
-          onclick={close}
-          class="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] font-semibold hover:-translate-y-0.5 transition-all duration-150 cursor-pointer border-0"
-        >Done</button>
+        <button onclick={close} class="btn btn-primary btn-sm">Done</button>
       {:else}
-        <button
-          onclick={close}
-          class="px-4 py-2 text-sm rounded-lg bg-gray-700/50 text-gray-300 hover:bg-gray-700 transition cursor-pointer border-0"
-        >Cancel</button>
-        <button
-          onclick={create}
-          disabled={saving || !name || !hostname || !agent_url}
-          class="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] font-semibold hover:-translate-y-0.5 transition-all duration-150 cursor-pointer border-0 disabled:opacity-50"
-        >{saving ? 'Creating...' : 'Create Server'}</button>
+        <button onclick={close} class="btn btn-secondary btn-sm">Cancel</button>
+        <button onclick={create} disabled={saving || !name || !hostname || !agent_url} class="btn btn-primary btn-sm">
+          {saving ? 'Creating…' : 'Create server'}
+        </button>
       {/if}
     {/snippet}
 
     {#if error}
-      <div class="mb-4 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{error}</div>
+      <div class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-[13px] text-danger">{error}</div>
     {/if}
 
     {#if createdServer}
-      <div class="flex flex-col gap-4">
-        <div class="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm">
-          Server <strong>{createdServer.name}</strong> created successfully.
+      <div class="space-y-4">
+        <div class="rounded-lg bg-success/10 px-3 py-2 text-[13px] text-success">
+          Server <strong class="font-semibold">{createdServer.name}</strong> created.
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-400 mb-1">Agent Token</label>
-          <p class="text-xs text-yellow-400 mb-2">⚠ Copy this token now — it won't be shown again.</p>
-          <div class="flex items-center gap-2">
-            <code class="flex-1 px-3 py-2 bg-gray-800/80 border border-gray-700/50 rounded-lg text-emerald-300 text-xs font-mono break-all">{createdToken}</code>
-            <button
-              onclick={() => navigator.clipboard.writeText(createdToken)}
-              class="px-3 py-2 text-xs rounded-lg bg-gray-700/50 text-gray-300 hover:bg-gray-700 hover:text-white transition cursor-pointer border-0 whitespace-nowrap"
-            >Copy</button>
+          <p class="label">Agent token</p>
+          <p class="mb-2 flex items-center gap-1.5 text-xs text-warning">
+            <TriangleAlert size={12} /> Copy this token now — it won't be shown again.
+          </p>
+          <div class="flex items-start gap-2">
+            <code class="flex-1 rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs break-all text-fg">{createdToken}</code>
+            <button onclick={copyToken} class="btn btn-secondary btn-sm">
+              {#if copied}<Check size={14} /> Copied{:else}<Copy size={14} /> Copy{/if}
+            </button>
           </div>
         </div>
 
-        <div class="border-t border-gray-700/50 pt-4">
-          <p class="text-xs text-slate-500">Install the agent on your server with this token:</p>
-          <code class="block mt-2 px-3 py-2 bg-gray-800/80 border border-gray-700/50 rounded-lg text-slate-300 text-xs font-mono">
+        <div class="border-t border-line pt-4">
+          <p class="text-xs text-subtle">Install the agent on your server with this token:</p>
+          <code class="mt-2 block rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs break-all text-muted">
             curl -sL https://panel.sigarda.com/api/install-agent.sh | bash -s -- --token {createdToken}
           </code>
         </div>
       </div>
     {:else}
-      <div class="flex flex-col gap-4">
+      <div class="space-y-4">
         <div>
-          <label class="block text-sm font-medium text-gray-400 mb-1">Name *</label>
-          <input
-            type="text"
-            bind:value={name}
-            class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-            placeholder="My Server"
-          />
+          <label class="label" for="cs-name">Name <span class="text-danger">*</span></label>
+          <input id="cs-name" type="text" bind:value={name} class="input" placeholder="My server" />
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-400 mb-1">Hostname *</label>
-          <input
-            type="text"
-            bind:value={hostname}
-            class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-            placeholder="server.example.com"
-          />
+          <label class="label" for="cs-hostname">Hostname <span class="text-danger">*</span></label>
+          <input id="cs-hostname" type="text" bind:value={hostname} class="input" placeholder="server.example.com" />
         </div>
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-sm font-medium text-gray-400 mb-1">IP Address</label>
-            <input
-              type="text"
-              bind:value={ip_address}
-              class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-              placeholder="1.2.3.4"
-            />
+            <label class="label" for="cs-ip">IP address</label>
+            <input id="cs-ip" type="text" bind:value={ip_address} class="input font-mono text-[13px]" placeholder="1.2.3.4" />
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-400 mb-1">SSH Port</label>
-            <input
-              type="number"
-              bind:value={ssh_port}
-              min="1"
-              max="65535"
-              class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-            />
+            <label class="label" for="cs-port">SSH port</label>
+            <input id="cs-port" type="number" bind:value={ssh_port} min="1" max="65535" class="input tabular-nums" />
           </div>
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-400 mb-1">Agent URL <span class="text-yellow-400">*</span></label>
-          <input
-            type="text"
-            bind:value={agent_url}
-            class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-            placeholder="http://1.2.3.4:9090"
-          />
-          <p class="text-xs text-slate-500 mt-1">Auto-filled from IP. Must be reachable from this panel server.</p>
+          <label class="label" for="cs-agent">Agent URL <span class="text-danger">*</span></label>
+          <input id="cs-agent" type="text" bind:value={agent_url} class="input font-mono text-[13px]" placeholder="http://1.2.3.4:9090" />
+          <p class="hint">Auto-filled from IP. Must be reachable from this panel server.</p>
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-400 mb-1">Description</label>
-          <textarea
-            bind:value={description}
-            rows="2"
-            class="w-full px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-1 focus:ring-sky-500/50 resize-none"
-            placeholder="Optional notes about this server..."
-          ></textarea>
+          <label class="label" for="cs-desc">Description</label>
+          <textarea id="cs-desc" bind:value={description} rows="2" class="input resize-none" placeholder="Optional notes about this server…"></textarea>
         </div>
       </div>
     {/if}

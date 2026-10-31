@@ -2,12 +2,14 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import {
-    Layers, Globe, Code2, FileCode, Box, Lock, Database, Cpu, Zap,
-    ArrowLeft, RefreshCw, Download, Trash2, Play, Square, RotateCw,
-    CheckCircle2, XCircle, AlertCircle, Loader2, Settings, Terminal
+    Globe, Code2, FileCode, Box, Lock, Database, Zap,
+    RefreshCw, Download, Trash2, Play, Square, RotateCw,
+    CheckCircle2, XCircle, Loader2, Settings, Terminal
   } from 'lucide-svelte';
   import ServiceManagerModal from './ServiceManagerModal.svelte';
 
@@ -25,16 +27,16 @@
   let activeManagePkg = $state<any>(null);
 
   const knownPackages = [
-    { name: 'nginx', label: 'Nginx', icon: Globe, color: 'emerald', desc: 'Web server & reverse proxy', multiVersion: false, availableVersions: ['1.26.0', '1.24.0'] },
-    { name: 'php', label: 'PHP', icon: FileCode, color: 'indigo', desc: 'PHP-FPM runtime + extensions', multiVersion: true, availableVersions: ['8.5', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4'] },
-    { name: 'node', label: 'Node.js', icon: Code2, color: 'green', desc: 'JavaScript runtime + npm', multiVersion: true, availableVersions: ['22', '20', '18'] },
-    { name: 'python', label: 'Python', icon: Terminal, color: 'yellow', desc: 'Python 3 + pip + venv', multiVersion: false, availableVersions: ['3.12', '3.11'] },
-    { name: 'go', label: 'Go', icon: Box, color: 'cyan', desc: 'Go programming language', multiVersion: true, availableVersions: ['1.24.0', '1.23.6', '1.22.12'] },
-    { name: 'docker', label: 'Docker', icon: Box, color: 'sky', desc: 'Container runtime', multiVersion: false },
-    { name: 'certbot', label: 'Certbot', icon: Lock, color: 'amber', desc: 'SSL/TLS certificates', multiVersion: false },
-    { name: 'mariadb', label: 'MariaDB', icon: Database, color: 'purple', desc: 'MySQL-compatible database', multiVersion: false },
-    { name: 'redis', label: 'Redis', icon: Zap, color: 'red', desc: 'In-memory data store', multiVersion: false },
-    { name: 'supervisor', label: 'Supervisor', icon: Settings, color: 'slate', desc: 'Process manager', multiVersion: false },
+    { name: 'nginx', label: 'Nginx', icon: Globe, desc: 'Web server & reverse proxy', multiVersion: false, availableVersions: ['1.26.0', '1.24.0'] },
+    { name: 'php', label: 'PHP', icon: FileCode, desc: 'PHP-FPM runtime + extensions', multiVersion: true, availableVersions: ['8.5', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4'] },
+    { name: 'node', label: 'Node.js', icon: Code2, desc: 'JavaScript runtime + npm', multiVersion: true, availableVersions: ['22', '20', '18'] },
+    { name: 'python', label: 'Python', icon: Terminal, desc: 'Python 3 + pip + venv', multiVersion: false, availableVersions: ['3.12', '3.11'] },
+    { name: 'go', label: 'Go', icon: Box, desc: 'Go programming language', multiVersion: true, availableVersions: ['1.24.0', '1.23.6', '1.22.12'] },
+    { name: 'docker', label: 'Docker', icon: Box, desc: 'Container runtime', multiVersion: false },
+    { name: 'certbot', label: 'Certbot', icon: Lock, desc: 'SSL/TLS certificates', multiVersion: false },
+    { name: 'mariadb', label: 'MariaDB', icon: Database, desc: 'MySQL-compatible database', multiVersion: false },
+    { name: 'redis', label: 'Redis', icon: Zap, desc: 'In-memory data store', multiVersion: false },
+    { name: 'supervisor', label: 'Supervisor', icon: Settings, desc: 'Process manager', multiVersion: false },
   ];
 
   function loadServer() {
@@ -67,13 +69,23 @@
 
   function statusConfig(status: string) {
     switch (status) {
-      case 'running': return { label: 'Running', color: 'emerald', dot: 'bg-emerald-400', text: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/20' };
-      case 'installed': return { label: 'Installed', color: 'sky', dot: 'bg-sky-400', text: 'text-sky-400', bg: 'bg-sky-400/10', border: 'border-sky-400/20' };
-      case 'stopped': return { label: 'Stopped', color: 'yellow', dot: 'bg-yellow-400', text: 'text-yellow-400', bg: 'bg-yellow-400/10', border: 'border-yellow-400/20' };
-      case 'missing': return { label: 'Not Installed', color: 'slate', dot: 'bg-slate-500', text: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
-      default: return { label: 'Unknown', color: 'slate', dot: 'bg-slate-500', text: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' };
+      case 'running': return { label: 'Running', badge: 'badge-success' };
+      case 'installed': return { label: 'Installed', badge: 'badge-info' };
+      case 'stopped': return { label: 'Stopped', badge: 'badge-warning' };
+      case 'missing': return { label: 'Not installed', badge: '' };
+      default: return { label: 'Unknown', badge: '' };
     }
   }
+
+  let uninstallPkg = $state<any>(null);
+  let confirmUninstall = $state(false);
+
+  const quickActions = [
+    { pkg: 'nginx', label: 'Restart Nginx' },
+    { pkg: 'php', label: 'Restart PHP' },
+    { pkg: 'redis', label: 'Restart Redis' },
+    { pkg: 'docker', label: 'Restart Docker' },
+  ];
 
   async function doAction(pkg: string, action: string, version?: string) {
     if (!auth.user) return;
@@ -98,11 +110,6 @@
     }
   }
 
-  function pkgColor(name: string) {
-    const pkg = knownPackages.find(p => p.name === name);
-    return pkg?.color || 'slate';
-  }
-
   function pkgIcon(name: string) {
     const pkg = knownPackages.find(p => p.name === name);
     return pkg?.icon || Box;
@@ -110,244 +117,112 @@
 </script>
 
 <DashboardLayout active="Stack">
-  <!-- Breadcrumb -->
-  <div class="flex items-center gap-2 text-sm text-slate-500 mb-6">
-    <a href="/stack" class="hover:text-white transition no-underline text-slate-500 flex items-center gap-1">
-      <ArrowLeft size={14} />
-      Stack
-    </a>
-    <span class="text-slate-600">/</span>
-    <span class="text-white">{server?.name ?? '...'}</span>
-  </div>
-
-  <!-- Hero Header -->
-  <header class="relative mb-8 overflow-hidden rounded-2xl border border-white/[0.06] p-8 lg:p-10 bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-secondary)]/80">
-    <div class="absolute top-0 right-0 w-96 h-96 rounded-full bg-sky-500/5 blur-3xl -translate-y-1/2 translate-x-1/2"></div>
-    <div class="absolute inset-0" style="background-image: radial-gradient(rgba(255,255,255,0.15) 1px, transparent 1px); background-size: 24px 24px;"></div>
-    <div class="relative flex items-start justify-between">
-      <div>
-        <p class="mb-2 text-[0.65rem] font-bold uppercase tracking-[0.25em] text-sky-300/60">SERVER STACK</p>
-        <h1 class="text-2xl lg:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-sky-100 to-indigo-200 bg-clip-text text-transparent">
-          {server?.name ?? 'Loading...'}
-        </h1>
-        <p class="mt-2 text-sm text-slate-400">
-          {#if osInfo}
-            <span class="font-mono text-xs bg-white/[0.05] px-2 py-0.5 rounded">{osInfo}</span>
-          {/if}
-          {server?.hostname ? `· ${server.hostname}` : ''}
-        </p>
-      </div>
-      <button
-        onclick={() => loadStack()}
-        disabled={loading}
-        class="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/[0.05] border border-white/[0.08] text-sm text-slate-300 hover:bg-white/[0.08] hover:text-white transition-all disabled:opacity-50 cursor-pointer"
-      >
-        <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
-        Refresh
+  <PageHeader title={server?.name ?? 'Loading…'} back="/stack" backLabel="Stack" description={server?.hostname ?? ''}>
+    {#snippet meta()}
+      {#if osInfo}<span class="badge font-mono">{osInfo}</span>{/if}
+    {/snippet}
+    {#snippet actions()}
+      <button onclick={() => loadStack()} disabled={loading} class="btn btn-secondary btn-sm">
+        <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
-    </div>
-  </header>
+    {/snippet}
+  </PageHeader>
 
-  <!-- Error / Result Toast -->
   {#if error}
-    <div class="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-center gap-2">
-      <XCircle size={16} />
-      {error}
+    <div class="mb-6 flex items-center gap-2 rounded-lg bg-danger/10 px-4 py-3 text-[13px] text-danger">
+      <XCircle size={16} class="shrink-0" /> {error}
     </div>
   {/if}
 
   {#if actionResult}
-    <div class="mb-6 p-4 rounded-xl flex items-center gap-2 text-sm {actionResult.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border border-red-500/20 text-red-400'}">
-      {#if actionResult.type === 'success'}
-        <CheckCircle2 size={16} />
-      {:else}
-        <XCircle size={16} />
-      {/if}
-      {actionResult.message}
+    <div class="mb-6 flex items-center gap-2 rounded-lg px-4 py-3 text-[13px] {actionResult.type === 'success' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}">
+      {#if actionResult.type === 'success'}<CheckCircle2 size={16} class="shrink-0" />{:else}<XCircle size={16} class="shrink-0" />{/if}
+      <span class="min-w-0 flex-1">{actionResult.message}</span>
       {#if lastOutput}
-        <button onclick={() => showOutput = !showOutput} class="ml-auto text-xs underline opacity-70 hover:opacity-100 cursor-pointer bg-transparent border-0 text-inherit">
-          {showOutput ? 'Hide' : 'Show'} output
-        </button>
+        <button onclick={() => (showOutput = !showOutput)} class="btn btn-ghost btn-xs">{showOutput ? 'Hide' : 'Show'} output</button>
       {/if}
     </div>
     {#if showOutput && lastOutput}
-      <div class="mb-6 p-4 rounded-xl bg-black/30 border border-white/[0.06] font-mono text-xs text-slate-400 max-h-48 overflow-auto whitespace-pre-wrap">
-        {lastOutput}
-      </div>
+      <pre class="mb-6 max-h-48 overflow-auto rounded-lg border border-line bg-surface-2 p-4 font-mono text-xs whitespace-pre-wrap text-muted">{lastOutput}</pre>
     {/if}
   {/if}
 
   {#if loading}
-    <div class="flex items-center justify-center py-20">
-      <div class="flex flex-col items-center gap-4">
-        <Loader2 size={24} class="text-sky-400 animate-spin" />
-        <span class="text-sm text-slate-500">Detecting installed software...</span>
-      </div>
+    <div class="skeleton mb-6 h-14 rounded-xl"></div>
+    <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {#each Array(6) as _, i (i)}<div class="skeleton h-44 rounded-xl"></div>{/each}
     </div>
   {:else}
-    <!-- Quick Actions Bar -->
-    <div class="mb-6 p-4 rounded-2xl bg-white/[0.02] border border-white/[0.06]">
-      <div class="flex items-center gap-2 flex-wrap">
-        <span class="text-xs text-slate-500 font-medium mr-2">Quick Actions:</span>
-        <button
-          onclick={() => doAction('nginx', 'restart')}
-          disabled={actionPending !== ''}
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 transition-all disabled:opacity-40 cursor-pointer"
-        >
-          {#if actionPending === 'nginx:restart'}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <RotateCw size={12} />
-          {/if}
-          Restart Nginx
+    <div class="card mb-6 flex flex-wrap items-center gap-2 px-4 py-3">
+      <span class="mr-1 text-xs font-medium text-subtle">Quick actions</span>
+      {#each quickActions as qa (qa.pkg)}
+        <button onclick={() => doAction(qa.pkg, 'restart')} disabled={actionPending !== ''} class="btn btn-secondary btn-xs">
+          {#if actionPending === `${qa.pkg}:restart`}<Loader2 size={12} class="animate-spin" />{:else}<RotateCw size={12} />{/if}
+          {qa.label}
         </button>
-        <button
-          onclick={() => doAction('php', 'restart')}
-          disabled={actionPending !== ''}
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 border border-indigo-500/20 transition-all disabled:opacity-40 cursor-pointer"
-        >
-          {#if actionPending === 'php:restart'}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <RotateCw size={12} />
-          {/if}
-          Restart PHP
-        </button>
-        <button
-          onclick={() => doAction('redis', 'restart')}
-          disabled={actionPending !== ''}
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-all disabled:opacity-40 cursor-pointer"
-        >
-          {#if actionPending === 'redis:restart'}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <RotateCw size={12} />
-          {/if}
-          Restart Redis
-        </button>
-        <button
-          onclick={() => doAction('docker', 'restart')}
-          disabled={actionPending !== ''}
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-sky-500/20 transition-all disabled:opacity-40 cursor-pointer"
-        >
-          {#if actionPending === 'docker:restart'}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <RotateCw size={12} />
-          {/if}
-          Restart Docker
-        </button>
-      </div>
+      {/each}
     </div>
 
-    <!-- Package Grid -->
-    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-      {#each knownPackages as pkg}
+    <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {#each knownPackages as pkg (pkg.name)}
         {@const info = getPackageInfo(pkg.name)}
         {@const status = info?.status ?? 'missing'}
         {@const sc = statusConfig(status)}
         {@const Icon = pkg.icon}
         {@const isActive = actionPending.startsWith(pkg.name + ':')}
 
-        <div class="group relative overflow-hidden rounded-2xl border border-white/[0.06] bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-secondary)]/80 hover:border-white/[0.12] transition-all duration-300">
-          <!-- Header -->
-          <div class="p-5 pb-4">
-            <div class="flex items-start justify-between mb-4">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-xl bg-{pkg.color}-500/10 flex items-center justify-center border border-white/[0.06]">
-                  <Icon size={18} class="text-{pkg.color}-400" />
+        <div class="card flex flex-col">
+          <div class="flex-1 p-4">
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex min-w-0 items-center gap-3">
+                <div class="flex size-9 shrink-0 items-center justify-center rounded-lg border border-line bg-surface-2 text-muted">
+                  <Icon size={16} />
                 </div>
-                <div>
-                  <h3 class="font-semibold text-white">{pkg.label}</h3>
-                  <p class="text-xs text-slate-500 mt-0.5">{pkg.desc}</p>
+                <div class="min-w-0">
+                  <h3 class="text-sm font-semibold text-fg">{pkg.label}</h3>
+                  <p class="truncate text-xs text-subtle">{pkg.desc}</p>
                 </div>
               </div>
-              <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[0.65rem] font-medium {sc.bg} {sc.text} border {sc.border}">
-                <span class="w-1.5 h-1.5 rounded-full {sc.dot} {status === 'running' ? 'animate-pulse' : ''}"></span>
-                {sc.label}
-              </span>
+              <span class="badge {sc.badge}"><span class="dot"></span>{sc.label}</span>
             </div>
-
             {#if info?.version}
-              <div class="text-xs text-slate-400 font-mono bg-white/[0.03] rounded-lg px-3 py-1.5 mb-4">
-                v{info.version}
-              </div>
+              <p class="mt-3"><span class="code text-xs">v{info.version}</span></p>
             {/if}
           </div>
 
-          <!-- Actions -->
-          <div class="px-5 pb-5 pt-2 border-t border-white/[0.04]">
-            <div class="mb-2">
-              <button
-                onclick={() => activeManagePkg = pkg}
-                class="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/[0.06] text-xs font-medium transition cursor-pointer"
-              >
-                <Settings size={13} />
-                Manage Service & Versions
-              </button>
-            </div>
+          <div class="space-y-2 border-t border-line p-3">
+            <button onclick={() => (activeManagePkg = pkg)} class="btn btn-secondary btn-sm w-full">
+              <Settings size={14} /> Manage service & versions
+            </button>
 
             {#if status === 'missing'}
-              <button
-                onclick={() => doAction(pkg.name, 'install')}
-                disabled={actionPending !== ''}
-                class="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-500 text-white text-xs font-medium hover:from-sky-400 hover:to-indigo-400 transition-all shadow-lg shadow-sky-500/20 disabled:opacity-50 cursor-pointer border-0"
-              >
-                {#if isActive}
-                  <Loader2 size={13} class="animate-spin" />
-                  Installing...
-                {:else}
-                  <Download size={13} />
-                  Install {pkg.label}
-                {/if}
+              <button onclick={() => doAction(pkg.name, 'install')} disabled={actionPending !== ''} class="btn btn-primary btn-sm w-full">
+                {#if isActive}<Loader2 size={14} class="animate-spin" /> Installing…{:else}<Download size={14} /> Install {pkg.label}{/if}
               </button>
             {:else}
-              <div class="flex items-center gap-1.5">
+              <div class="flex items-center gap-1">
                 {#if status === 'stopped'}
-                  <button
-                    onclick={() => doAction(pkg.name, 'start')}
-                    disabled={actionPending !== ''}
-                    title="Start"
-                    class="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 text-xs font-medium transition disabled:opacity-40 cursor-pointer"
-                  >
-                    {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<Play size={12} />{/if}
-                    Start
+                  <button onclick={() => doAction(pkg.name, 'start')} disabled={actionPending !== ''} title="Start" class="btn btn-ghost btn-xs flex-1 text-success">
+                    {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<Play size={12} />{/if} Start
                   </button>
                 {/if}
                 {#if status === 'running'}
-                  <button
-                    onclick={() => doAction(pkg.name, 'stop')}
-                    disabled={actionPending !== ''}
-                    title="Stop"
-                    class="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 border border-yellow-500/20 text-xs font-medium transition disabled:opacity-40 cursor-pointer"
-                  >
-                    {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<Square size={12} />{/if}
-                    Stop
+                  <button onclick={() => doAction(pkg.name, 'stop')} disabled={actionPending !== ''} title="Stop" class="btn btn-ghost btn-xs flex-1 text-warning">
+                    {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<Square size={12} />{/if} Stop
                   </button>
                 {/if}
-                <button
-                  onclick={() => doAction(pkg.name, 'restart')}
-                  disabled={actionPending !== ''}
-                  title="Restart"
-                  class="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] border border-white/[0.06] text-xs font-medium transition disabled:opacity-40 cursor-pointer"
-                >
-                  {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<RotateCw size={12} />{/if}
-                  Restart
+                <button onclick={() => doAction(pkg.name, 'restart')} disabled={actionPending !== ''} title="Restart" class="btn btn-ghost btn-xs flex-1">
+                  {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<RotateCw size={12} />{/if} Restart
+                </button>
+                <button onclick={() => doAction(pkg.name, 'update')} disabled={actionPending !== ''} title="Update" class="btn btn-ghost btn-xs flex-1">
+                  {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<RefreshCw size={12} />{/if} Update
                 </button>
                 <button
-                  onclick={() => doAction(pkg.name, 'update')}
-                  disabled={actionPending !== ''}
-                  title="Update"
-                  class="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] border border-white/[0.06] text-xs font-medium transition disabled:opacity-40 cursor-pointer"
-                >
-                  {#if isActive}<Loader2 size={12} class="animate-spin" />{:else}<RefreshCw size={12} />{/if}
-                  Update
-                </button>
-                <button
-                  onclick={() => { if (confirm(`Uninstall ${pkg.label}?`)) doAction(pkg.name, 'uninstall'); }}
+                  onclick={() => { uninstallPkg = pkg; confirmUninstall = true; }}
                   disabled={actionPending !== ''}
                   title="Uninstall"
-                  class="flex items-center justify-center p-1.5 rounded-lg bg-red-500/5 text-red-400/60 hover:bg-red-500/10 hover:text-red-400 border border-red-500/10 text-xs font-medium transition disabled:opacity-40 cursor-pointer"
+                  aria-label="Uninstall {pkg.label}"
+                  class="btn btn-danger-ghost btn-xs btn-icon"
                 >
                   <Trash2 size={12} />
                 </button>
@@ -358,6 +233,15 @@
       {/each}
     </div>
   {/if}
+
+  <ConfirmDialog
+    bind:open={confirmUninstall}
+    title="Uninstall {uninstallPkg?.label ?? 'package'}?"
+    message="The package will be removed from this server. Sites that depend on it may stop working."
+    confirmLabel="Uninstall"
+    destructive
+    onconfirm={() => { if (uninstallPkg) doAction(uninstallPkg.name, 'uninstall'); }}
+  />
 </DashboardLayout>
 
 <ServiceManagerModal

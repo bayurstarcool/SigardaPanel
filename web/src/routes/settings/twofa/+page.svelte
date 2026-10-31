@@ -1,12 +1,17 @@
 <script lang="ts">
   import { auth, bearerHeaders } from '$lib/auth.svelte';
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import DashboardLayout from '$components/DashboardLayout.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import { ShieldCheck, ShieldOff, AlertCircle, CheckCircle2, KeyRound } from 'lucide-svelte';
 
   let loading = $state(true);
   let enabled = $state(false);
   let setupPhase = $state(false);
   let verifyPhase = $state(false);
   let qrUrl = $state('');
+  let qrDataUrl = $state('');
   let secret = $state('');
   let code = $state('');
   let error = $state('');
@@ -14,7 +19,7 @@
   let recoveryCodes = $state<string[]>([]);
 
   onMount(async () => {
-    if (!auth.user) { window.location.href = '/login'; return; }
+    if (!auth.user) { goto('/login'); return; }
     await checkStatus();
   });
 
@@ -46,6 +51,10 @@
       qrUrl = data.qr_url;
       secret = data.secret;
       setupPhase = true;
+      // Render the otpauth:// URI locally — it contains the TOTP secret and
+      // must never be sent to a third-party QR service.
+      const QR = await import('qrcode');
+      qrDataUrl = await QR.toDataURL(qrUrl, { width: 360, margin: 1 });
     } catch (e) {
       error = 'Failed to start 2FA setup';
     }
@@ -121,252 +130,120 @@
   }
 </script>
 
-<div class="twofa-page">
-  <div class="header">
-    <h1>Two-Factor Authentication</h1>
-    <p>Add an extra layer of security to your account</p>
-  </div>
+<DashboardLayout active="Settings">
+  <PageHeader title="Two-factor authentication" description="Add an extra layer of security to your account" back="/settings" backLabel="Settings" />
 
-  {#if loading}
-    <div class="loading">Loading...</div>
-  {:else}
-    {#if error}
-      <div class="alert alert-error">{error}</div>
-    {/if}
-    {#if success}
-      <div class="alert alert-success">{success}</div>
-    {/if}
-
-    <div class="card">
-      <div class="status">
-        <span class="dot" class:active={enabled}></span>
-        <span>{enabled ? '2FA is enabled' : '2FA is disabled'}</span>
+  <div class="max-w-2xl space-y-4">
+    {#if loading}
+      <div class="card card-body space-y-3">
+        <div class="skeleton h-5 w-40"></div>
+        <div class="skeleton h-9 w-32"></div>
       </div>
-
-      {#if !enabled && !setupPhase}
-        <button class="btn btn-primary" onclick={startSetup}>
-          Enable 2FA
-        </button>
+    {:else}
+      {#if error}
+        <div class="flex items-start gap-2 rounded-lg bg-danger/10 px-3 py-2.5 text-[13px] text-danger ring-1 ring-danger/20 ring-inset" role="alert">
+          <AlertCircle size={16} class="mt-px shrink-0" /><span>{error}</span>
+        </div>
       {/if}
-
-      {#if setupPhase && !enabled}
-        <div class="setup-section">
-          <h3>Scan QR Code</h3>
-          <p>Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)</p>
-          
-          {#if qrUrl}
-            <div class="qr-container">
-              <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={encodeURIComponent(qrUrl)}" alt="QR Code" />
-            </div>
-          {/if}
-
-          <div class="manual-entry">
-            <p>Or enter this secret manually:</p>
-            <code>{secret}</code>
-          </div>
-
-          <div class="verify-section">
-            <label for="totp-code">Enter verification code:</label>
-            <div class="input-group">
-              <input
-                id="totp-code"
-                type="text"
-                bind:value={code}
-                placeholder="000000"
-                maxlength="6"
-                pattern="[0-9]*"
-                inputmode="numeric"
-              />
-              <button class="btn btn-primary" onclick={enable2FA}>
-                Verify & Enable
-              </button>
-            </div>
-          </div>
+      {#if success}
+        <div class="flex items-start gap-2 rounded-lg bg-success/10 px-3 py-2.5 text-[13px] text-success ring-1 ring-success/20 ring-inset" role="status">
+          <CheckCircle2 size={16} class="mt-px shrink-0" /><span>{success}</span>
         </div>
       {/if}
 
-      {#if enabled}
-        <div class="enabled-section">
-          <p>Two-factor authentication is currently <strong>enabled</strong>.</p>
-          
-          {#if recoveryCodes.length > 0}
-            <div class="recovery-codes">
-              <h3>Recovery Codes</h3>
-              <p>Save these codes securely. Each code can only be used once.</p>
-              <div class="codes-grid">
-                {#each recoveryCodes as code}
-                  <code>{code}</code>
-                {/each}
+      <section class="card">
+        <div class="card-header">
+          <div class="flex items-center gap-2.5">
+            <span class="flex size-8 items-center justify-center rounded-lg {enabled ? 'bg-success/10 text-success' : 'bg-surface-2 text-subtle'}">
+              {#if enabled}<ShieldCheck size={16} />{:else}<ShieldOff size={16} />{/if}
+            </span>
+            <h2 class="card-title">{enabled ? '2FA is enabled' : '2FA is disabled'}</h2>
+          </div>
+          <span class="badge {enabled ? 'badge-success' : ''}"><span class="dot"></span>{enabled ? 'On' : 'Off'}</span>
+        </div>
+
+        <div class="card-body">
+          {#if !enabled && !setupPhase}
+            <p class="mb-4 text-[13px] text-muted">Use an authenticator app (Google Authenticator, Authy, 1Password…) to generate a one-time code at sign-in.</p>
+            <button class="btn btn-primary btn-sm" onclick={startSetup}><KeyRound size={14} /> Enable 2FA</button>
+          {/if}
+
+          {#if setupPhase && !enabled}
+            <div class="space-y-5">
+              <div>
+                <h3 class="text-sm font-semibold text-fg">1. Scan QR code</h3>
+                <p class="mt-1 text-[13px] text-muted">Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)</p>
+                {#if qrDataUrl}
+                  <div class="mt-3 inline-block rounded-lg border border-line bg-white p-3">
+                    <img src={qrDataUrl} alt="QR code for your authenticator app" width="180" height="180" />
+                  </div>
+                {:else if qrUrl}
+                  <div class="skeleton mt-3 size-[206px]"></div>
+                {/if}
+              </div>
+
+              <div>
+                <p class="text-[13px] text-muted">Or enter this secret manually:</p>
+                <code class="mt-1.5 block rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-sm tracking-widest break-all text-fg select-all">{secret}</code>
+              </div>
+
+              <div>
+                <h3 class="text-sm font-semibold text-fg">2. Verify</h3>
+                <label for="totp-code" class="label mt-2">Enter verification code</label>
+                <div class="flex gap-2">
+                  <input
+                    id="totp-code"
+                    type="text"
+                    bind:value={code}
+                    placeholder="000000"
+                    maxlength="6"
+                    pattern="[0-9]*"
+                    inputmode="numeric"
+                    autocomplete="one-time-code"
+                    class="input max-w-40 text-center font-mono tracking-[0.3em]"
+                  />
+                  <button class="btn btn-primary" onclick={enable2FA}>Verify &amp; enable</button>
+                </div>
               </div>
             </div>
           {/if}
 
-          <div class="disable-section">
-            <h3>Disable 2FA</h3>
-            <p>Enter a verification code to disable 2FA:</p>
-            <div class="input-group">
-              <input
-                type="text"
-                bind:value={code}
-                placeholder="000000"
-                maxlength="6"
-                pattern="[0-9]*"
-                inputmode="numeric"
-              />
-              <button class="btn btn-danger" onclick={disable2FA}>
-                Disable 2FA
-              </button>
-            </div>
-          </div>
-        </div>
-      {/if}
-    </div>
-  {/if}
-</div>
+          {#if enabled}
+            <p class="text-[13px] text-muted">Two-factor authentication is currently <strong class="font-semibold text-fg">enabled</strong>.</p>
 
-<style>
-  .twofa-page {
-    max-width: 600px;
-    margin: 2rem auto;
-    padding: 0 1rem;
-  }
-  .header {
-    text-align: center;
-    margin-bottom: 2rem;
-  }
-  .header h1 {
-    font-size: 1.5rem;
-    margin-bottom: 0.5rem;
-  }
-  .header p {
-    color: #666;
-  }
-  .card {
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
-    padding: 2rem;
-  }
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
-    font-weight: 500;
-  }
-  .dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: #ef4444;
-  }
-  .dot.active {
-    background: #22c55e;
-  }
-  .btn {
-    padding: 0.75rem 1.5rem;
-    border: none;
-    border-radius: 8px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .btn-primary {
-    background: #3b82f6;
-    color: white;
-  }
-  .btn-primary:hover {
-    background: #2563eb;
-  }
-  .btn-danger {
-    background: #ef4444;
-    color: white;
-  }
-  .btn-danger:hover {
-    background: #dc2626;
-  }
-  .setup-section, .enabled-section {
-    margin-top: 1.5rem;
-  }
-  .setup-section h3, .enabled-section h3 {
-    font-size: 1.125rem;
-    margin-bottom: 0.75rem;
-  }
-  .qr-container {
-    text-align: center;
-    margin: 1.5rem 0;
-    padding: 1rem;
-    background: #f9fafb;
-    border-radius: 8px;
-  }
-  .manual-entry {
-    margin: 1rem 0;
-    padding: 1rem;
-    background: #f3f4f6;
-    border-radius: 8px;
-  }
-  .manual-entry code {
-    display: block;
-    margin-top: 0.5rem;
-    font-family: monospace;
-    font-size: 1.125rem;
-    letter-spacing: 2px;
-  }
-  .verify-section {
-    margin-top: 1.5rem;
-  }
-  .input-group {
-    display: flex;
-    gap: 0.75rem;
-    margin-top: 0.5rem;
-  }
-  .input-group input {
-    flex: 1;
-    padding: 0.75rem;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    font-family: monospace;
-    font-size: 1.25rem;
-    text-align: center;
-    letter-spacing: 4px;
-  }
-  .recovery-codes {
-    margin: 1.5rem 0;
-    padding: 1rem;
-    background: #fef3c7;
-    border: 1px solid #fbbf24;
-    border-radius: 8px;
-  }
-  .codes-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.5rem;
-    margin-top: 0.75rem;
-  }
-  .codes-grid code {
-    padding: 0.5rem;
-    background: white;
-    border-radius: 4px;
-    font-family: monospace;
-  }
-  .disable-section {
-    margin-top: 2rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid #e5e7eb;
-  }
-  .alert {
-    padding: 1rem;
-    border-radius: 8px;
-    margin-bottom: 1rem;
-  }
-  .alert-error {
-    background: #fef2f2;
-    color: #dc2626;
-    border: 1px solid #fecaca;
-  }
-  .alert-success {
-    background: #f0fdf4;
-    color: #16a34a;
-    border: 1px solid #bbf7d0;
-  }
-</style>
+            {#if recoveryCodes.length > 0}
+              <div class="mt-5 rounded-lg bg-warning/10 p-4 ring-1 ring-warning/20 ring-inset">
+                <h3 class="text-sm font-semibold text-fg">Recovery codes</h3>
+                <p class="mt-1 text-[13px] text-muted">Save these codes securely. Each code can only be used once.</p>
+                <div class="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                  {#each recoveryCodes as rc, i (i)}
+                    <code class="rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-[13px] text-fg select-all">{rc}</code>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <div class="mt-6 border-t border-line pt-5">
+              <h3 class="text-sm font-semibold text-fg">Disable 2FA</h3>
+              <label for="totp-disable" class="label mt-2">Enter a verification code to disable 2FA</label>
+              <div class="flex gap-2">
+                <input
+                  id="totp-disable"
+                  type="text"
+                  bind:value={code}
+                  placeholder="000000"
+                  maxlength="6"
+                  pattern="[0-9]*"
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
+                  class="input max-w-40 text-center font-mono tracking-[0.3em]"
+                />
+                <button class="btn btn-danger" onclick={disable2FA}>Disable 2FA</button>
+              </div>
+            </div>
+          {/if}
+        </div>
+      </section>
+    {/if}
+  </div>
+</DashboardLayout>

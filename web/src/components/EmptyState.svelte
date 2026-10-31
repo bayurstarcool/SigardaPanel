@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Component, Snippet } from 'svelte';
+  import type { Snippet } from 'svelte';
 
   let {
     icon = null,
@@ -10,7 +10,7 @@
     compact = false,
     children,
   }: {
-    icon?: Component<any> | null;
+    icon?: any;
     title?: string;
     description?: string;
     actionLabel?: string;

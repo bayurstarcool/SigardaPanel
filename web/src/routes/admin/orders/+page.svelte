@@ -5,10 +5,13 @@
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import Modal from '$components/Modal.svelte';
   import StatusPill from '$components/StatusPill.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
 
   import {
     ShoppingCart, Search, X, Check, Loader2, Eye, CheckCircle2,
-    XCircle, Clock, Filter
+    XCircle, ShieldOff
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
@@ -76,8 +79,20 @@
     loadOrders();
   });
 
+  // Approve / reject confirmation (replaces window.confirm)
+  let pending = $state<{ order: Order; action: 'approve' | 'reject' } | null>(null);
+  let confirmOpen = $state(false);
+  function ask(order: Order, action: 'approve' | 'reject') {
+    pending = { order, action };
+    confirmOpen = true;
+  }
+  function runPending() {
+    if (!pending) return;
+    if (pending.action === 'approve') approveOrder(pending.order);
+    else rejectOrder(pending.order);
+  }
+
   async function approveOrder(o: Order) {
-    if (!confirm(`Approve order #${o.id} for ${o.username || 'user'}? Plan will be auto-assigned.`)) return;
     actionBusy = o.id;
     try {
       await apiFetch(auth.token, 'PATCH', `orders/${o.id}`, { status: 'approved', admin_notes: noteText });
@@ -92,7 +107,6 @@
   }
 
   async function rejectOrder(o: Order) {
-    if (!confirm(`Reject order #${o.id}?`)) return;
     actionBusy = o.id;
     try {
       await apiFetch(auth.token, 'PATCH', `orders/${o.id}`, { status: 'rejected', admin_notes: noteText });
@@ -119,6 +133,16 @@
     }
   }
 
+  function fmtDate(d: string) {
+    return d ? new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+  }
+
+  function openDetail(o: Order) {
+    detailOrder = o;
+    showDetail = true;
+    noteText = o.admin_notes || '';
+  }
+
   function statusVariant(s: string) {
     switch (s) {
       case 'approved': return 'active';
@@ -132,126 +156,79 @@
 
 <DashboardLayout active="Orders">
   {#if !hasRole(auth.user?.role, 'super_admin')}
-    <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl py-20 px-6 text-center">
-      <ShoppingCart size={48} class="mx-auto mb-4 text-slate-600 opacity-40" />
-      <h2 class="text-lg font-semibold text-slate-300 mb-2">Access Denied</h2>
-      <p class="text-sm text-slate-500">Only super admins can manage orders.</p>
+    <div class="card">
+      <EmptyState icon={ShieldOff as any} title="Access denied" description="Only super admins can manage orders." />
     </div>
   {:else}
-    <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-      <div>
-        <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent">License Orders</h1>
-        <p class="text-sm text-slate-500 mt-1">
-          {loading ? 'Loading...' : `${orders.length} order${orders.length !== 1 ? 's' : ''} total`}
-        </p>
-      </div>
-    </div>
+    <PageHeader title="License orders" description={loading ? 'Loading…' : `${orders.length} order${orders.length !== 1 ? 's' : ''} ${statusFilter === 'all' ? 'total' : statusFilter}`} />
 
-    <!-- Filters -->
-    {#if !loading && orders.length > 0}
-      <div class="flex flex-col sm:flex-row gap-3 mb-5">
-        <div class="relative flex-1">
-          <Search size={16} class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
-          <input bind:value={search} type="text" placeholder="Search by user, plan, or ID..."
-            class="w-full bg-white/[0.03] border border-white/[0.07] rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-200 placeholder-slate-600 outline-none focus:border-sky-400/30 focus:ring-1 focus:ring-sky-400/10 transition" />
-          {#if search}
-            <button onclick={() => search = ''} class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition cursor-pointer border-0 bg-transparent p-1"><X size={14} /></button>
-          {/if}
+    <div class="card">
+      {#if orders.length > 0 || statusFilter !== 'all'}
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <div class="segmented overflow-x-auto">
+            {#each statusOptions as s (s)}
+              <button onclick={() => { statusFilter = s; loadOrders(); }} class="segment {statusFilter === s ? 'segment-active' : ''}">
+                {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
+              </button>
+            {/each}
+          </div>
+          <div class="relative w-full sm:w-64">
+            <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+            <input bind:value={search} type="text" aria-label="Search orders" placeholder="Search by user, plan, or ID…" class="input h-8 pr-8 pl-8" />
+            {#if search}
+              <button onclick={() => (search = '')} class="btn btn-ghost btn-xs btn-icon absolute top-1/2 right-0.5 -translate-y-1/2" aria-label="Clear search"><X size={12} /></button>
+            {/if}
+          </div>
         </div>
-        <div class="flex items-center gap-1.5 bg-white/[0.03] border border-white/[0.07] rounded-xl p-1">
-          {#each statusOptions as s}
-            <button onclick={() => { statusFilter = s; loadOrders(); }}
-              class="px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border-0 {statusFilter === s ? 'bg-sky-500/15 text-sky-400' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04]'}">
-              {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-            </button>
-          {/each}
-        </div>
-      </div>
-    {/if}
+      {/if}
 
-    <!-- Loading skeleton -->
-    {#if loading}
-      <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl overflow-hidden">
-        <div class="p-5 space-y-0">
-          {#each Array(4) as _}
-            <div class="flex items-center gap-4 py-3.5 border-b border-white/[0.03] last:border-0">
-              <div class="flex-1 space-y-2">
-                <div class="h-3 w-40 bg-white/[0.06] rounded-lg animate-pulse"></div>
-                <div class="h-2.5 w-56 bg-white/[0.04] rounded-lg animate-pulse"></div>
-              </div>
-              <div class="h-5 w-20 bg-white/[0.05] rounded-full animate-pulse"></div>
-            </div>
-          {/each}
+      {#if loading}
+        <div class="space-y-3 p-4">
+          {#each Array(4) as _, i (i)}<div class="skeleton h-9"></div>{/each}
         </div>
-      </div>
-    {:else if orders.length === 0}
-      <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl py-16 px-6 text-center">
-        <div class="w-16 h-16 rounded-2xl bg-white/[0.04] flex items-center justify-center mx-auto mb-5"><ShoppingCart size={28} class="text-slate-600" /></div>
-        <h2 class="text-lg font-semibold text-slate-300 mb-2">No orders yet</h2>
-        <p class="text-sm text-slate-500 mb-6 max-w-sm mx-auto">License orders will appear here once users purchase plans.</p>
-      </div>
-    {:else if filtered.length === 0}
-      <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl py-16 px-6 text-center">
-        <Search size={28} class="text-slate-600 mx-auto mb-3" />
-        <h2 class="text-lg font-semibold text-slate-300 mb-2">No results</h2>
-        <p class="text-sm text-slate-500">No orders match your filters.</p>
-        <button onclick={() => { search = ''; statusFilter = 'all'; loadOrders(); }}
-          class="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0"><X size={14} /> Clear filters</button>
-      </div>
-    {:else}
-      <!-- Desktop table -->
-      <div class="hidden md:block bg-[#040a14] border border-white/[0.07] rounded-2xl overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full border-separate border-spacing-0">
+      {:else if orders.length === 0 && statusFilter === 'all'}
+        <EmptyState icon={ShoppingCart as any} title="No orders yet" description="License orders will appear here once users purchase plans." />
+      {:else if filtered.length === 0}
+        <EmptyState compact icon={Search as any} title="No results" description="No orders match your filters." actionLabel="Clear filters" onaction={() => { search = ''; statusFilter = 'all'; loadOrders(); }} />
+      {:else}
+        <div class="table-wrap">
+          <table class="table">
             <thead>
-              <tr class="text-left">
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Order</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">User</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Plan</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Status</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Amount</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Payment</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Date</th>
-                <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Actions</th>
+              <tr>
+                <th>Order</th>
+                <th>User</th>
+                <th class="max-md:hidden">Plan</th>
+                <th>Status</th>
+                <th class="max-sm:hidden">Amount</th>
+                <th class="max-lg:hidden">Payment</th>
+                <th class="max-md:hidden">Date</th>
+                <th class="text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {#each filtered as o (o.id)}
-                <tr class="hover:bg-white/[0.02] transition group">
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="text-sm text-slate-200 font-medium">#{o.id}</span>
+                <tr>
+                  <td>
+                    <button onclick={() => openDetail(o)} class="cursor-pointer font-mono text-[13px] font-medium text-fg hover:text-accent">#{o.id}</button>
                   </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="text-sm text-slate-200">{o.username || `User #${o.user_id}`}</span>
+                  <td>
+                    <div class="text-fg">{o.username || `User #${o.user_id}`}</div>
+                    <div class="text-xs text-subtle md:hidden">{o.plan_name || `Plan #${o.plan_id}`}</div>
                   </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="text-sm text-slate-300">{o.plan_name || `Plan #${o.plan_id}`}</span>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <StatusPill status={statusVariant(o.status)} />
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="text-sm text-emerald-400 font-semibold">{formatIDR(o.amount_idr)}</span>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="text-xs text-slate-400 bg-white/[0.04] px-2 py-1 rounded-md capitalize">{o.payment_method || '—'}</span>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <span class="text-xs text-slate-500">{o.created_at ? new Date(o.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</span>
-                  </td>
-                  <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                    <div class="flex items-center gap-1">
-                      <button onclick={() => { detailOrder = o; showDetail = true; noteText = o.admin_notes || ''; }}
-                        class="inline-flex items-center gap-1 text-xs text-indigo-400/70 hover:text-indigo-400 transition px-2 py-1 rounded-lg hover:bg-indigo-400/5 cursor-pointer border-0 bg-transparent"><Eye size={12} /> View</button>
+                  <td class="text-muted max-md:hidden">{o.plan_name || `Plan #${o.plan_id}`}</td>
+                  <td><StatusPill status={statusVariant(o.status)} label={o.status} /></td>
+                  <td class="font-medium whitespace-nowrap text-fg tabular-nums max-sm:hidden">{formatIDR(o.amount_idr)}</td>
+                  <td class="text-muted capitalize max-lg:hidden">{o.payment_method || '—'}</td>
+                  <td class="text-xs whitespace-nowrap text-subtle tabular-nums max-md:hidden">{fmtDate(o.created_at)}</td>
+                  <td>
+                    <div class="flex items-center justify-end gap-0.5">
+                      <button onclick={() => openDetail(o)} class="btn btn-ghost btn-xs btn-icon" aria-label="View order #{o.id}" title="View"><Eye size={14} /></button>
                       {#if o.status === 'pending'}
-                        <button onclick={() => approveOrder(o)} disabled={actionBusy === o.id}
-                          class="inline-flex items-center gap-1 text-xs text-emerald-400/70 hover:text-emerald-400 transition px-2 py-1 rounded-lg hover:bg-emerald-400/5 cursor-pointer border-0 bg-transparent disabled:opacity-40">
-                          {#if actionBusy === o.id}<Loader2 size={11} class="animate-spin" />{:else}<CheckCircle2 size={12} />{/if} Approve
+                        <button onclick={() => ask(o, 'approve')} disabled={actionBusy === o.id} class="btn btn-ghost btn-xs text-success">
+                          {#if actionBusy === o.id}<Loader2 size={12} class="animate-spin" />{:else}<CheckCircle2 size={12} />{/if}<span class="max-sm:hidden">Approve</span>
                         </button>
-                        <button onclick={() => rejectOrder(o)} disabled={actionBusy === o.id}
-                          class="inline-flex items-center gap-1 text-xs text-red-400/50 hover:text-red-400 transition px-2 py-1 rounded-lg hover:bg-red-400/5 cursor-pointer border-0 bg-transparent disabled:opacity-40">
-                          {#if actionBusy === o.id}<Loader2 size={11} class="animate-spin" />{:else}<XCircle size={12} />{/if} Reject
+                        <button onclick={() => ask(o, 'reject')} disabled={actionBusy === o.id} class="btn btn-danger-ghost btn-xs">
+                          {#if actionBusy === o.id}<Loader2 size={12} class="animate-spin" />{:else}<XCircle size={12} />{/if}<span class="max-sm:hidden">Reject</span>
                         </button>
                       {/if}
                     </div>
@@ -261,100 +238,76 @@
             </tbody>
           </table>
         </div>
-      </div>
+      {/if}
+    </div>
 
-      <!-- Mobile cards -->
-      <div class="md:hidden space-y-3">
-        {#each filtered as o (o.id)}
-          <div class="bg-[#040a14] border border-white/[0.07] rounded-2xl p-4 space-y-3">
-            <div class="flex items-start justify-between">
-              <div>
-                <div class="text-sm font-medium text-slate-200">#{o.id} — {o.username || `User #${o.user_id}`}</div>
-                <div class="text-xs text-slate-500 mt-0.5">{o.plan_name || `Plan #${o.plan_id}`}</div>
-              </div>
-              <StatusPill status={statusVariant(o.status)} />
-            </div>
-            <div class="flex items-center justify-between">
-              <span class="text-emerald-400 font-semibold text-sm">{formatIDR(o.amount_idr)}</span>
-              <span class="text-[0.65rem] text-slate-500">{o.created_at ? new Date(o.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</span>
-            </div>
-            <div class="flex items-center gap-1">
-              <button onclick={() => { detailOrder = o; showDetail = true; noteText = o.admin_notes || ''; }}
-                class="inline-flex items-center gap-1 text-xs text-indigo-400/70 hover:text-indigo-400 transition px-2 py-1 rounded-lg hover:bg-indigo-400/5 cursor-pointer border-0 bg-transparent"><Eye size={12} /></button>
-              {#if o.status === 'pending'}
-                <button onclick={() => approveOrder(o)} disabled={actionBusy === o.id}
-                  class="inline-flex items-center gap-1 text-xs text-emerald-400/70 hover:text-emerald-400 transition px-2 py-1 rounded-lg hover:bg-emerald-400/5 cursor-pointer border-0 bg-transparent disabled:opacity-40">
-                  {#if actionBusy === o.id}<Loader2 size={11} class="animate-spin" />{:else}<CheckCircle2 size={12} />{/if} Approve
-                </button>
-                <button onclick={() => rejectOrder(o)} disabled={actionBusy === o.id}
-                  class="inline-flex items-center gap-1 text-xs text-red-400/50 hover:text-red-400 transition px-2 py-1 rounded-lg hover:bg-red-400/5 cursor-pointer border-0 bg-transparent disabled:opacity-40">
-                  {#if actionBusy === o.id}<Loader2 size={11} class="animate-spin" />{:else}<XCircle size={12} />{/if} Reject
-                </button>
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-
-    <!-- Detail Modal -->
-    <Modal bind:open={showDetail} title={detailOrder ? `Order #${detailOrder.id}` : 'Order Detail'} maxWidth="lg">
+    <!-- Detail -->
+    <Modal bind:open={showDetail} title={detailOrder ? `Order #${detailOrder.id}` : 'Order detail'} maxWidth="lg">
       {#if detailOrder}
-        <div class="space-y-4">
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <div class="text-xs text-slate-500 mb-1">User</div>
-              <div class="text-sm text-slate-200">{detailOrder.username || `User #${detailOrder.user_id}`}</div>
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Plan</div>
-              <div class="text-sm text-slate-200">{detailOrder.plan_name || `Plan #${detailOrder.plan_id}`}</div>
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Status</div>
-              <StatusPill status={statusVariant(detailOrder.status)} />
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Amount</div>
-              <div class="text-sm text-emerald-400 font-semibold">{formatIDR(detailOrder.amount_idr)}</div>
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Payment Method</div>
-              <div class="text-sm text-slate-200 capitalize">{detailOrder.payment_method || '—'}</div>
-            </div>
-            <div>
-              <div class="text-xs text-slate-500 mb-1">Created</div>
-              <div class="text-sm text-slate-200">{detailOrder.created_at ? new Date(detailOrder.created_at).toLocaleString('id-ID') : '—'}</div>
-            </div>
-          </div>
-
-          <!-- Admin notes -->
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-4">
           <div>
-            <label for="order-notes" class="block text-xs text-slate-500 mb-1.5">Admin Notes</label>
-            <textarea id="order-notes" bind:value={noteText} rows={3}
-              class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition"
-              placeholder="Add admin notes..."></textarea>
+            <dt class="stat-label">User</dt>
+            <dd class="mt-1 text-sm text-fg">{detailOrder.username || `User #${detailOrder.user_id}`}</dd>
           </div>
+          <div>
+            <dt class="stat-label">Plan</dt>
+            <dd class="mt-1 text-sm text-fg">{detailOrder.plan_name || `Plan #${detailOrder.plan_id}`}</dd>
+          </div>
+          <div>
+            <dt class="stat-label">Status</dt>
+            <dd class="mt-1"><StatusPill status={statusVariant(detailOrder.status)} label={detailOrder.status} /></dd>
+          </div>
+          <div>
+            <dt class="stat-label">Amount</dt>
+            <dd class="mt-1 text-sm font-semibold text-fg tabular-nums">{formatIDR(detailOrder.amount_idr)}</dd>
+          </div>
+          <div>
+            <dt class="stat-label">Payment method</dt>
+            <dd class="mt-1 text-sm text-fg capitalize">{detailOrder.payment_method || '—'}</dd>
+          </div>
+          <div>
+            <dt class="stat-label">Created</dt>
+            <dd class="mt-1 text-sm text-fg">{detailOrder.created_at ? new Date(detailOrder.created_at).toLocaleString('id-ID') : '—'}</dd>
+          </div>
+        </dl>
+        {#if detailOrder.notes}
+          <div class="mt-4">
+            <div class="stat-label">Customer notes</div>
+            <p class="mt-1 text-[13px] whitespace-pre-line text-muted">{detailOrder.notes}</p>
+          </div>
+        {/if}
+        <div class="mt-5 border-t border-line pt-4">
+          <label for="order-notes" class="label">Admin notes</label>
+          <textarea id="order-notes" bind:value={noteText} rows={3} class="input" placeholder="Add admin notes..."></textarea>
         </div>
       {/if}
       {#snippet footer()}
-        <button onclick={() => { showDetail = false; detailOrder = null; }}
-          class="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Close</button>
-        <button onclick={() => { if (detailOrder) saveNote(detailOrder); }} disabled={noteBusy}
-          class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-sky-500/15 text-sky-400 hover:bg-sky-500/25 transition disabled:opacity-40 cursor-pointer border-0">
-          {#if noteBusy}<Loader2 size={14} class="animate-spin" />{:else}<Check size={14} />{/if} Save Notes
+        <button onclick={() => { showDetail = false; detailOrder = null; }} class="btn btn-ghost btn-sm">Close</button>
+        <button onclick={() => { if (detailOrder) saveNote(detailOrder); }} disabled={noteBusy} class="btn btn-secondary btn-sm">
+          {#if noteBusy}<Loader2 size={14} class="animate-spin" />{:else}<Check size={14} />{/if} Save notes
         </button>
         {#if detailOrder?.status === 'pending'}
-          <button onclick={() => { if (detailOrder) approveOrder(detailOrder); showDetail = false; detailOrder = null; }}
-            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition cursor-pointer border-0">
-            <CheckCircle2 size={14} /> Approve
-          </button>
-          <button onclick={() => { if (detailOrder) rejectOrder(detailOrder); showDetail = false; detailOrder = null; }}
-            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 transition cursor-pointer border-0">
+          <button onclick={() => { if (detailOrder) ask(detailOrder, 'reject'); showDetail = false; detailOrder = null; }} class="btn btn-danger-ghost btn-sm">
             <XCircle size={14} /> Reject
+          </button>
+          <button onclick={() => { if (detailOrder) ask(detailOrder, 'approve'); showDetail = false; detailOrder = null; }} class="btn btn-primary btn-sm">
+            <CheckCircle2 size={14} /> Approve
           </button>
         {/if}
       {/snippet}
     </Modal>
+
+    <ConfirmDialog
+      bind:open={confirmOpen}
+      title={pending?.action === 'approve' ? 'Approve order' : 'Reject order'}
+      message={pending
+        ? pending.action === 'approve'
+          ? `Approve order #${pending.order.id} for ${pending.order.username || 'user'}? Plan will be auto-assigned.`
+          : `Reject order #${pending.order.id}?`
+        : ''}
+      confirmLabel={pending?.action === 'approve' ? 'Approve' : 'Reject'}
+      destructive={pending?.action === 'reject'}
+      onconfirm={runPending}
+    />
   {/if}
 </DashboardLayout>

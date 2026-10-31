@@ -1,7 +1,8 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { auth } from '$lib/auth.svelte';
-  import { Shield, LayoutDashboard, CreditCard, Key, ArrowLeft, LogOut, User, Settings } from 'lucide-svelte';
+  import { LayoutDashboard, CreditCard, Key } from 'lucide-svelte';
+  import Logo from '$components/Logo.svelte';
 
   let { children } = $props();
 
@@ -16,44 +17,37 @@
   }
 </script>
 
-<div class="min-h-screen bg-[#060d1f] text-white">
-  <!-- Fixed Navbar -->
-  <nav class="fixed top-0 left-0 right-0 z-50 bg-[#060d1f]/80 backdrop-blur-xl border-b border-white/[0.06]">
-    <div class="flex items-center justify-between px-6 lg:px-12 py-4 max-w-7xl mx-auto">
-      <div class="flex items-center gap-4">
-        <a href="/" class="flex items-center gap-3">
-          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-400 to-indigo-500 flex items-center justify-center">
-            <Shield size={16} class="text-white" />
-          </div>
-          <span class="text-sm font-bold tracking-tight hidden sm:block">SigardaPanel</span>
-        </a>
-        <div class="w-px h-5 bg-white/[0.08]"></div>
-        <span class="text-xs text-slate-500">Member Area</span>
+<div class="min-h-dvh bg-bg text-fg">
+  <header class="sticky top-0 z-40 border-b border-line bg-bg">
+    <div class="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
+      <div class="flex min-w-0 items-center gap-3">
+        <a href="/" aria-label="SigardaPanel home"><Logo size={26} withText /></a>
+        <span class="h-5 w-px bg-line max-sm:hidden"></span>
+        <span class="text-xs text-subtle max-sm:hidden">Member area</span>
       </div>
-      <div class="flex items-center gap-3">
-        <a href="/dashboard" class="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-white/[0.05] transition-all hidden sm:block">
-          Panel Dashboard
-        </a>
-        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.04]">
-          <div class="w-6 h-6 rounded-full bg-gradient-to-br from-sky-400 to-indigo-400 flex items-center justify-center text-[0.6rem] font-bold">
+      <div class="flex items-center gap-2">
+        <a href="/dashboard" class="btn btn-ghost btn-sm max-sm:hidden">Panel dashboard</a>
+        <div class="flex items-center gap-2 rounded-lg border border-line bg-surface px-2 py-1">
+          <span class="flex size-6 items-center justify-center rounded-full bg-accent/10 text-[11px] font-semibold text-accent">
             {auth.user?.username?.[0]?.toUpperCase() || 'U'}
-          </div>
-          <span class="text-xs text-slate-300 hidden sm:block">{auth.user?.username}</span>
+          </span>
+          <span class="text-xs text-muted max-sm:hidden">{auth.user?.username}</span>
         </div>
       </div>
     </div>
-  </nav>
+  </header>
 
-  <div class="h-16"></div>
-
-  <div class="max-w-7xl mx-auto flex">
-    <!-- Sidebar -->
-    <aside class="w-56 shrink-0 border-r border-white/[0.06] min-h-[calc(100vh-64px)] sticky top-16 hidden lg:block">
-      <nav class="p-4 space-y-1">
-        {#each navItems as item}
-          <a href={item.href}
-            class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-200 {isActive(item.href) ? 'bg-white/[0.08] text-white shadow-sm' : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'}">
-            <item.icon size={16} class="{isActive(item.href) ? 'text-sky-400' : ''}" />
+  <div class="mx-auto flex max-w-7xl">
+    <aside class="sticky top-14 hidden h-[calc(100dvh-3.5rem)] w-56 shrink-0 border-r border-line lg:block">
+      <nav class="space-y-0.5 p-3">
+        {#each navItems as item (item.href)}
+          {@const active = isActive(item.href)}
+          <a
+            href={item.href}
+            aria-current={active ? 'page' : undefined}
+            class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors duration-150 {active ? 'bg-surface-2 font-medium text-fg' : 'text-muted hover:bg-surface-2 hover:text-fg'}"
+          >
+            <item.icon size={16} class={active ? 'text-accent' : ''} />
             <span>{item.label}</span>
           </a>
         {/each}
@@ -61,19 +55,17 @@
     </aside>
 
     <!-- Mobile nav -->
-    <div class="fixed bottom-0 left-0 right-0 z-40 bg-[#0a1122]/95 backdrop-blur-xl border-t border-white/[0.06] lg:hidden">
-      <nav class="flex items-center justify-around py-2">
-        {#each navItems as item}
-          <a href={item.href} class="flex flex-col items-center gap-1 px-3 py-2 rounded-lg {isActive(item.href) ? 'text-sky-400' : 'text-slate-500'}">
-            <item.icon size={18} />
-            <span class="text-[0.6rem]">{item.label}</span>
-          </a>
-        {/each}
-      </nav>
-    </div>
+    <nav class="fixed inset-x-0 bottom-0 z-40 flex items-center justify-around border-t border-line bg-surface py-1.5 lg:hidden">
+      {#each navItems as item (item.href)}
+        {@const active = isActive(item.href)}
+        <a href={item.href} aria-current={active ? 'page' : undefined} class="flex flex-col items-center gap-0.5 rounded-lg px-3 py-1.5 {active ? 'text-accent' : 'text-subtle'}">
+          <item.icon size={18} />
+          <span class="text-[11px]">{item.label}</span>
+        </a>
+      {/each}
+    </nav>
 
-    <!-- Main content -->
-    <main class="flex-1 min-w-0 p-6 lg:p-10 pb-24 lg:pb-10">
+    <main class="min-w-0 flex-1 p-4 pb-24 sm:p-6 lg:p-10 lg:pb-10">
       {@render children()}
     </main>
   </div>

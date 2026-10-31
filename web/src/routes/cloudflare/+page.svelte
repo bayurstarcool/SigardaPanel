@@ -2,8 +2,11 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import StatusPill from '$components/StatusPill.svelte';
-  import { Cloud, Settings, Check, Trash2, ExternalLink, Shield, AlertTriangle, Eye, EyeOff } from 'lucide-svelte';
+  import { Cloud, Settings, Check, Trash2, ChevronRight, Shield, Eye, EyeOff, Search, LoaderCircle } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
@@ -16,6 +19,7 @@
   let showConfigForm = $state(false);
   let saving = $state(false);
   let deleting = $state(false);
+  let confirmRemove = $state(false);
 
   // Form inputs
   let formToken = $state('');
@@ -28,9 +32,14 @@
   // Zones
   let zones = $state<any[]>([]);
   let zonesLoading = $state(false);
+  let query = $state('');
 
   // Password visibility
   let showPassword = $state(false);
+
+  const visibleZones = $derived(
+    query ? zones.filter((z) => String(z.name || '').toLowerCase().includes(query.toLowerCase())) : zones,
+  );
 
   onMount(async () => {
     if (!auth.user) { loading = false; return; }
@@ -105,7 +114,6 @@
   }
 
   async function removeConfig() {
-    if (!confirm('Remove Cloudflare configuration? This will disconnect your Cloudflare account.')) return;
     deleting = true;
     try {
       await apiFetch(auth.token, 'DELETE', 'cloudflare/config');
@@ -150,268 +158,172 @@
 </svelte:head>
 
 <DashboardLayout active="Cloudflare">
-  <!-- Header -->
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-    <div>
-      <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent flex items-center gap-2.5">
-        <Cloud size={28} class="text-sky-400" />
-        Cloudflare
-      </h1>
-      <p class="text-sm text-slate-500 mt-1">
-        {#if loading}
-          Loading...
-        {:else if configured}
-          {zones.length} zone{zones.length !== 1 ? 's' : ''} connected
-        {:else}
-          Configure your API token to manage DNS zones
-        {/if}
-      </p>
-    </div>
-    {#if configured && !showConfigForm}
-      <div class="flex items-center gap-2">
-        <button
-          onclick={startChangeToken}
-          class="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium bg-white/[0.04] border border-white/[0.12] text-slate-300 hover:bg-white/[0.08] hover:border-white/20 transition-all duration-150 cursor-pointer whitespace-nowrap"
-        >
-          <Settings size={14} />
-          Change Token
+  <PageHeader
+    title="Cloudflare"
+    description={loading ? 'Loading…' : configured ? `${zones.length} zone${zones.length !== 1 ? 's' : ''} connected` : 'Connect an API token to manage DNS zones'}>
+    {#snippet meta()}
+      {#if !loading && configured}<span class="badge badge-success"><span class="dot"></span>Connected</span>{/if}
+    {/snippet}
+    {#snippet actions()}
+      {#if configured && !showConfigForm}
+        <button onclick={startChangeToken} class="btn btn-secondary btn-sm"><Settings size={14} /> Change token</button>
+        <button onclick={() => (confirmRemove = true)} disabled={deleting} class="btn btn-danger-ghost btn-sm">
+          <Trash2 size={14} /> {deleting ? 'Removing…' : 'Remove'}
         </button>
-        <button
-          onclick={removeConfig}
-          disabled={deleting}
-          class="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all duration-150 cursor-pointer whitespace-nowrap disabled:opacity-40"
-        >
-          <Trash2 size={14} />
-          {deleting ? 'Removing...' : 'Remove'}
-        </button>
-      </div>
-    {:else if !configured && !showConfigForm}
-      <button
-        onclick={startNewConfig}
-        class="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl text-sm font-medium bg-sky-500/10 border border-sky-500/20 text-sky-400 hover:bg-sky-500/20 hover:border-sky-400/30 transition-all duration-150 cursor-pointer whitespace-nowrap"
-      >
-        <Shield size={14} />
-        Configure API
-      </button>
-    {/if}
-  </div>
-
-  <!-- Alerts -->
-
-
-  <!-- Config Card: when configured and NOT editing -->
-  {#if configured && !showConfigForm}
-    <div class="mb-6 bg-white/[0.03] border border-white/[0.07] rounded-2xl p-6">
-      <div class="flex items-center gap-3 mb-4">
-        <div class="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
-          <Check size={20} class="text-emerald-400" />
-        </div>
-        <div>
-          <h3 class="text-sm font-semibold text-slate-200">Configuration Active</h3>
-          <p class="text-xs text-slate-500">Your Cloudflare API token is configured and verified.</p>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <!-- Masked Token -->
-        <div class="bg-white/[0.02] border border-white/[0.05] rounded-xl p-4">
-          <label class="block text-[0.7rem] font-medium uppercase tracking-wider text-slate-500 mb-2">API Token</label>
-          <div class="flex items-center gap-2">
-            <code class="text-sm text-slate-300 font-mono break-all">{maskedToken}</code>
-          </div>
-        </div>
-
-        <!-- Email -->
-        {#if configEmail}
-          <div class="bg-white/[0.02] border border-white/[0.05] rounded-xl p-4">
-            <label class="block text-[0.7rem] font-medium uppercase tracking-wider text-slate-500 mb-2">Email</label>
-            <span class="text-sm text-slate-300">{configEmail}</span>
-          </div>
-        {/if}
-      </div>
-
-      <!-- Verification badge -->
-      {#if verified && verifiedUserId !== null}
-        <div class="mt-4 flex items-center gap-2 text-xs text-emerald-400/80">
-          <Check size={12} />
-          Verified — user ID: {verifiedUserId}
-        </div>
+      {:else if !configured && !showConfigForm && !loading}
+        <button onclick={startNewConfig} class="btn btn-primary btn-sm"><Shield size={14} /> Configure API</button>
       {/if}
+    {/snippet}
+  </PageHeader>
+
+  <!-- Config summary: configured and not editing -->
+  {#if configured && !showConfigForm}
+    <div class="card mb-6">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <Check size={16} class="text-success" />
+          <h2 class="card-title">Configuration active</h2>
+        </div>
+        {#if verified && verifiedUserId !== null}
+          <span class="text-xs text-subtle">Verified — user ID {verifiedUserId}</span>
+        {/if}
+      </div>
+      <dl class="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
+        <div class="min-w-0">
+          <dt class="stat-label">API token</dt>
+          <dd class="mt-1 font-mono text-[13px] break-all text-fg">{maskedToken}</dd>
+        </div>
+        {#if configEmail}
+          <div class="min-w-0">
+            <dt class="stat-label">Email</dt>
+            <dd class="mt-1 truncate text-sm text-fg">{configEmail}</dd>
+          </div>
+        {/if}
+      </dl>
     </div>
   {/if}
 
-  <!-- Config Form -->
+  <!-- Config form -->
   {#if showConfigForm}
-    <div class="mb-6 bg-white/[0.03] border border-white/[0.07] rounded-2xl p-6">
-      <div class="flex items-center gap-3 mb-5">
-        <div class="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center">
-          <Shield size={20} class="text-sky-400" />
-        </div>
+    <form class="card mb-6" onsubmit={(e) => { e.preventDefault(); saveConfig(); }}>
+      <div class="card-header">
         <div>
-          <h3 class="text-sm font-semibold text-slate-200">Cloudflare API Configuration</h3>
-          <p class="text-xs text-slate-500">Enter your Cloudflare API token to connect your account.</p>
+          <h2 class="card-title">Cloudflare API configuration</h2>
+          <p class="mt-0.5 text-xs text-subtle">Enter your Cloudflare API token to connect your account.</p>
         </div>
       </div>
-
-      <div class="space-y-4">
-        <!-- API Token -->
+      <div class="card-body space-y-4">
         <div>
-          <label for="cf-api-token" class="block text-xs font-medium text-slate-400 mb-1.5">API Token</label>
+          <label for="cf-api-token" class="label">API token</label>
           <div class="relative">
             <input
               id="cf-api-token"
               type={showPassword ? 'text' : 'password'}
               bind:value={formToken}
-              placeholder={configured ? '••••••••••••••••••••••••••••••••' : 'Enter your Cloudflare API token'}
-              class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 pr-11 text-sm text-slate-200 placeholder-slate-600 outline-none focus:border-sky-400/40 transition-colors"
-            />
+              autocomplete="off"
+              placeholder={configured ? '••••••••••••••••••••••••' : 'Enter your Cloudflare API token'}
+              class="input pr-10 font-mono" />
             <button
               type="button"
-              onclick={() => showPassword = !showPassword}
-              class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition cursor-pointer"
-            >
-              {#if showPassword}
-                <EyeOff size={16} />
-              {:else}
-                <Eye size={16} />
-              {/if}
+              onclick={() => (showPassword = !showPassword)}
+              class="btn btn-ghost btn-icon btn-xs absolute top-1/2 right-1.5 -translate-y-1/2"
+              aria-label={showPassword ? 'Hide token' : 'Show token'}>
+              {#if showPassword}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
             </button>
           </div>
           {#if configured && !formToken}
-            <p class="mt-1.5 text-xs text-slate-500 flex items-center gap-1.5">
-              <AlertTriangle size={11} />
-              Leave empty to keep current token
-            </p>
+            <p class="hint">Leave empty to keep the current token.</p>
           {/if}
         </div>
-
-        <!-- Email -->
         <div>
-          <label for="cf-email" class="block text-xs font-medium text-slate-400 mb-1.5">
-            Email
-            <span class="text-slate-600">(optional)</span>
-          </label>
-          <input
-            id="cf-email"
-            type="email"
-            bind:value={formEmail}
-            placeholder="Cloudflare account email"
-            class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 placeholder-slate-600 outline-none focus:border-sky-400/40 transition-colors"
-          />
+          <label for="cf-email" class="label">Email <span class="font-normal text-subtle">(optional)</span></label>
+          <input id="cf-email" type="email" bind:value={formEmail} placeholder="Cloudflare account email" class="input" />
         </div>
       </div>
-
-      <div class="flex gap-3 mt-5">
-        <button
-          onclick={saveConfig}
-          disabled={saving || (!formToken && !configured)}
-          class="px-5 py-2.5 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer border-0"
-        >
-          {#if saving}
-            <span class="flex items-center gap-2">
-              <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25" /><path d="M4 12a8 8 0 018-8" stroke="currentColor" stroke-width="4" stroke-linecap="round" class="opacity-75" /></svg>
-              Saving...
-            </span>
-          {:else}
-            <span class="flex items-center gap-1.5">
-              <Check size={14} />
-              Save Configuration
-            </span>
-          {/if}
-        </button>
-        <button
-          onclick={cancelConfig}
-          class="px-5 py-2.5 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition-colors cursor-pointer border-0"
-        >
-          Cancel
+      <div class="flex justify-end gap-2 border-t border-line px-5 py-3">
+        <button type="button" onclick={cancelConfig} class="btn btn-secondary btn-sm">Cancel</button>
+        <button type="submit" disabled={saving || (!formToken && !configured)} class="btn btn-primary btn-sm">
+          {#if saving}<LoaderCircle size={14} class="animate-spin" /> Saving…{:else}<Check size={14} /> Save configuration{/if}
         </button>
       </div>
-    </div>
+    </form>
   {/if}
 
-  <!-- Zones Section -->
+  <!-- Zones -->
   {#if loading}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-6 text-center py-20">
-      <div class="animate-pulse text-slate-500">Loading...</div>
+    <div class="card space-y-3 p-4">
+      {#each Array(4) as _, i (i)}<div class="skeleton h-9"></div>{/each}
     </div>
   {:else if !configured && !showConfigForm}
-    <!-- Empty state: not configured -->
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-12 text-center">
-      <div class="w-16 h-16 rounded-2xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center mx-auto mb-5">
-        <Cloud size={32} class="text-sky-400 opacity-60" />
-      </div>
-      <h2 class="text-lg font-semibold text-slate-200 mb-2">Connect Cloudflare</h2>
-      <p class="text-sm text-slate-500 max-w-md mx-auto mb-6">
-        Configure your Cloudflare API token to manage DNS zones and records.
-      </p>
-      <button
-        onclick={startNewConfig}
-        class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-sky-500/10 border border-sky-500/20 text-sky-400 hover:bg-sky-500/20 transition-all duration-150 cursor-pointer"
-      >
-        <Shield size={14} />
-        Configure API Token
-      </button>
+    <div class="card">
+      <EmptyState
+        icon={Cloud as any}
+        title="Connect Cloudflare"
+        description="Configure your Cloudflare API token to manage DNS zones and records."
+        actionLabel="Configure API token"
+        onaction={startNewConfig} />
     </div>
-  {:else if zones.length === 0 && !zonesLoading}
-    <!-- Empty state: configured but no zones -->
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl p-12 text-center">
-      <div class="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-5">
-        <Cloud size={32} class="text-indigo-400 opacity-60" />
+  {:else if configured}
+    <div class="card">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <h2 class="card-title">DNS zones <span class="font-normal text-subtle tabular-nums">{zones.length}</span></h2>
+        {#if zones.length > 0}
+          <div class="relative w-full sm:w-64">
+            <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+            <input bind:value={query} class="input h-8 pl-8" placeholder="Filter zones…" aria-label="Filter zones" />
+          </div>
+        {/if}
       </div>
-      <h2 class="text-lg font-semibold text-slate-200 mb-2">No Zones Found</h2>
-      <p class="text-sm text-slate-500 max-w-md mx-auto">
-        No Cloudflare zones were found for your account. Check that your API token has the correct permissions.
-      </p>
-    </div>
-  {:else}
-    <!-- Zone table -->
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl overflow-hidden">
-      <div class="px-6 py-4 border-b border-white/[0.05]">
-        <h3 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
-          <Cloud size={16} class="text-sky-400" />
-          DNS Zones
-          <span class="text-xs text-slate-500 font-normal">({zones.length})</span>
-        </h3>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full border-separate border-spacing-0">
-          <thead>
-            <tr class="text-left">
-              <th class="px-6 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Name</th>
-              <th class="px-6 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Status</th>
-              <th class="px-6 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] hidden sm:table-cell">Plan</th>
-              <th class="px-6 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each zones as z (z.id)}
-              <tr class="hover:bg-white/[0.02] transition-colors">
-                <td class="px-6 py-3.5 border-b border-white/[0.03]">
-                  <span class="font-medium text-slate-200 text-sm">{z.name}</span>
-                  {#if z.id}
-                    <span class="block text-xs text-slate-600 font-mono mt-0.5">{z.id}</span>
-                  {/if}
-                </td>
-                <td class="px-6 py-3.5 border-b border-white/[0.03]">
-                  <StatusPill status={z.status || 'active'} />
-                </td>
-                <td class="px-6 py-3.5 border-b border-white/[0.03] hidden sm:table-cell">
-                  <span class="text-sm text-slate-400">{z.plan?.name || z.plan?.title || '—'}</span>
-                </td>
-                <td class="px-6 py-3.5 border-b border-white/[0.03]">
-                  <a
-                    href="/cloudflare/{z.id}"
-                    class="inline-flex items-center gap-1.5 text-xs font-medium text-sky-400 hover:text-sky-300 transition-colors"
-                  >
-                    <ExternalLink size={12} />
-                    Manage DNS
-                  </a>
-                </td>
+
+      {#if zonesLoading && zones.length === 0}
+        <div class="space-y-3 p-4">
+          {#each Array(4) as _, i (i)}<div class="skeleton h-9"></div>{/each}
+        </div>
+      {:else if zones.length === 0}
+        <EmptyState
+          compact
+          icon={Cloud as any}
+          title="No zones found"
+          description="No Cloudflare zones were found for your account. Check that your API token has the correct permissions." />
+      {:else if visibleZones.length === 0}
+        <EmptyState compact icon={Search as any} title="No zones match" description="Try a different filter." />
+      {:else}
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th class="max-sm:hidden">Plan</th>
+                <th class="text-right"><span class="sr-only">Actions</span></th>
               </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {#each visibleZones as z (z.id)}
+                <tr>
+                  <td>
+                    <a href="/cloudflare/{z.id}" class="font-medium text-fg hover:text-accent">{z.name}</a>
+                    {#if z.id}<div class="font-mono text-xs text-subtle max-sm:hidden">{z.id}</div>{/if}
+                  </td>
+                  <td><StatusPill status={z.status || 'active'} /></td>
+                  <td class="text-muted max-sm:hidden">{z.plan?.name || z.plan?.title || '—'}</td>
+                  <td class="text-right">
+                    <a href="/cloudflare/{z.id}" class="btn btn-ghost btn-xs">Manage DNS <ChevronRight size={14} /></a>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
     </div>
   {/if}
+
+  <ConfirmDialog
+    bind:open={confirmRemove}
+    title="Remove Cloudflare configuration?"
+    message="This will disconnect your Cloudflare account. DNS records at Cloudflare are not changed."
+    confirmLabel="Remove"
+    destructive
+    onconfirm={removeConfig} />
 </DashboardLayout>

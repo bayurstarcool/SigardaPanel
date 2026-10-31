@@ -3,8 +3,12 @@
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
-  import { ArrowLeft, X, Loader2, Check, Shield, Key, User, Globe, Trash2, Eye, RefreshCw, LogIn, AlertTriangle, ExternalLink, Settings } from 'lucide-svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import ConfirmDialog from '$components/ConfirmDialog.svelte';
+  import { ArrowLeft, Loader2, Check, Shield, Key, User, Globe, Trash2, Eye, RefreshCw, LogIn, AlertTriangle, Settings, Gauge } from 'lucide-svelte';
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { toasts } from '$lib/toast.svelte';
 
   const userId = $derived(Number($page.params.id));
@@ -111,6 +115,11 @@
     finally { assigningSite = false; }
   }
 
+  // Confirm before removing a site assignment
+  let confirmRemove = $state<any>(null);
+  let confirmRemoveOpen = $state(false);
+  function askRemove(site: any) { confirmRemove = site; confirmRemoveOpen = true; }
+
   async function removeSite(siteId: number) {
     if (!auth.user) return;
     removingSiteId = siteId;
@@ -148,7 +157,7 @@
     try {
       await auth.impersonateUser(userId);
       showImpersonateDialog = false;
-      window.location.href = '/sites';
+      goto('/sites');
     } catch (e: any) {
       toasts.error(e.message || 'Impersonation failed');
       showImpersonateDialog = false;
@@ -181,19 +190,23 @@
   // ─── Helpers ───
   function roleBadge(role: string) {
     switch (role) {
-      case 'super_admin': return 'bg-amber-500/15 text-amber-400 ring-1 ring-amber-400/20';
-      case 'admin': return 'bg-sky-500/15 text-sky-400 ring-1 ring-sky-400/20';
-      default: return 'bg-white/5 text-slate-400 ring-1 ring-white/10';
+      case 'super_admin': return 'badge-warning';
+      case 'admin': return 'badge-accent';
+      default: return '';
     }
   }
 
   function permissionBadge(perm: string) {
     switch (perm) {
-      case 'owner': return 'bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-400/20';
-      case 'admin': return 'bg-amber-500/15 text-amber-400 ring-1 ring-amber-400/20';
-      case 'write': return 'bg-sky-500/15 text-sky-400 ring-1 ring-sky-400/20';
-      default: return 'bg-white/5 text-slate-400 ring-1 ring-white/10';
+      case 'owner': return 'badge-success';
+      case 'admin': return 'badge-warning';
+      case 'write': return 'badge-info';
+      default: return '';
     }
+  }
+
+  function pct(used: number, limit: number) {
+    return Math.min(100, ((used || 0) / limit) * 100);
   }
 
   function formatBytes(bytes: number) {
@@ -213,420 +226,268 @@
 </script>
 
 <DashboardLayout active="Users">
-  <!-- Impersonation banner -->
   {#if impersonating}
-    <div class="mb-6 bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-      <div class="flex items-center gap-2 text-amber-400">
-        <AlertTriangle size={18} />
+    <div class="mb-6 flex flex-col items-start gap-3 rounded-xl bg-warning/10 p-4 ring-1 ring-warning/20 ring-inset sm:flex-row sm:items-center">
+      <div class="flex items-center gap-2 text-warning">
+        <AlertTriangle size={16} />
         <span class="text-sm font-medium">You are impersonating a user</span>
       </div>
-      <button
-        onclick={stopImpersonation}
-        class="ml-0 sm:ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition cursor-pointer border-0"
-      >
-        <Eye size={12} /> Stop Impersonation
+      <button onclick={stopImpersonation} class="btn btn-secondary btn-sm sm:ml-auto">
+        <Eye size={14} /> Stop impersonation
       </button>
     </div>
   {/if}
 
-  <a href="/users" class="inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200 transition mb-6">
-    <ArrowLeft size={14} /> Back to Users
-  </a>
+  <PageHeader title={user ? `Edit user — ${form.username}` : 'Edit user'} back="/users" backLabel="Users">
+    {#snippet meta()}
+      {#if user}
+        <span class="badge {roleBadge(user.role)}">
+          {#if user.role === 'super_admin'}<Shield size={11} />{/if}
+          {user.role === 'super_admin' ? 'Super Admin' : user.role === 'admin' ? 'Admin' : 'User'}
+        </span>
+      {/if}
+    {/snippet}
+    {#snippet actions()}
+      {#if user && hasRole(auth.user?.role, 'admin') && auth.user?.id !== userId}
+        <button onclick={() => (showImpersonateDialog = true)} class="btn btn-secondary btn-sm">
+          <LogIn size={14} /> Impersonate
+        </button>
+      {/if}
+    {/snippet}
+  </PageHeader>
 
-  <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent mb-6">
-    Edit User {#if user}— {form.username}{/if}
-  </h1>
-
-  <!-- Loading skeleton -->
   {#if loading}
-    <div class="space-y-6 max-w-3xl">
-      <!-- Edit form skeleton -->
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6">
-        <div class="space-y-5">
-          {#each Array(4) as _}
-            <div>
-              <div class="h-2.5 w-20 bg-white/[0.06] rounded-lg animate-pulse mb-2"></div>
-              <div class="h-10 w-full bg-white/[0.04] rounded-xl animate-pulse"></div>
-            </div>
-          {/each}
-          <div class="flex gap-3 pt-2">
-            <div class="h-9 w-32 bg-white/[0.06] rounded-xl animate-pulse"></div>
-            <div class="h-9 w-20 bg-white/[0.04] rounded-xl animate-pulse"></div>
+    <div class="max-w-3xl space-y-6">
+      <div class="card card-body space-y-5">
+        {#each Array(4) as _, i (i)}
+          <div>
+            <div class="skeleton mb-2 h-3 w-20"></div>
+            <div class="skeleton h-9 w-full"></div>
           </div>
-        </div>
-      </div>
-      <!-- Sites skeleton -->
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6">
-        <div class="h-5 w-32 bg-white/[0.06] rounded-lg animate-pulse mb-5"></div>
-        {#each Array(2) as _}
-          <div class="h-14 w-full bg-white/[0.04] rounded-xl animate-pulse mb-3"></div>
         {/each}
       </div>
-      <!-- Usage skeleton -->
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6">
-        <div class="h-5 w-28 bg-white/[0.06] rounded-lg animate-pulse mb-5"></div>
-        <div class="grid grid-cols-2 gap-4">
-          {#each Array(4) as _}
-            <div class="h-16 bg-white/[0.04] rounded-xl animate-pulse"></div>
-          {/each}
-        </div>
+      <div class="card card-body space-y-3">
+        <div class="skeleton h-4 w-32"></div>
+        {#each Array(2) as _, i (i)}<div class="skeleton h-12 w-full"></div>{/each}
       </div>
     </div>
-
   {:else if user}
-    <div class="space-y-6 max-w-3xl">
-
-      <!-- ═══════════ SECTION: Edit User ═══════════ -->
-      <div class="bg-[#040a14] border border-white/[0.07] backdrop-blur-sm rounded-xl p-6">
-        <div class="flex items-center gap-2 mb-5 pb-4 border-b border-white/[0.05]">
-          <Settings size={16} class="text-sky-400" />
-          <h2 class="text-sm font-semibold text-slate-200">Edit Profile</h2>
+    <div class="max-w-3xl space-y-6">
+      <!-- Edit profile -->
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title flex items-center gap-2"><Settings size={16} class="text-subtle" /> Profile</h2>
         </div>
-
-        <!-- User header -->
-        <div class="flex items-center gap-3 mb-6">
-          <div class="w-12 h-12 rounded-xl bg-white/[0.05] flex items-center justify-center">
-            <User size={20} class="text-slate-400" />
-          </div>
-          <div>
-            <div class="text-base font-medium text-slate-200">{user.username}</div>
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[0.65rem] font-medium {roleBadge(user.role)} mt-1">
-              {#if user.role === 'super_admin'}<Shield size={9} />{/if}
-              {user.role === 'super_admin' ? 'Super Admin' : user.role === 'admin' ? 'Admin' : 'User'}
-            </span>
-          </div>
-        </div>
-
-        <div class="space-y-4">
-          <div>
-            <label for="ude-name" class="block text-xs text-slate-500 mb-1.5">Username</label>
-            <input id="ude-name" bind:value={form.username} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition" />
-          </div>
-          <div>
-            <label for="ude-email" class="block text-xs text-slate-500 mb-1.5">Email</label>
-            <input id="ude-email" bind:value={form.email} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition" />
-          </div>
-          <div>
-            <label for="ude-role" class="block text-xs text-slate-500 mb-1.5">Role</label>
-            <select id="ude-role" bind:value={form.role} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition">
-              <option value="user">User</option>
-              <option value="admin">Admin</option>
-              {#if hasRole(auth.user?.role, 'super_admin')}
-                <option value="super_admin">Super Admin</option>
-              {/if}
-            </select>
-          </div>
-          <div>
-            <label for="ude-pass" class="block text-xs text-slate-500 mb-1.5">
-              <span class="flex items-center gap-1"><Key size={10} /> New Password (leave blank to keep current)</span>
-            </label>
-            <input id="ude-pass" type="password" bind:value={form.password} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition" placeholder="••••••••" />
+        <div class="card-body">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label for="ude-name" class="label">Username</label>
+              <input id="ude-name" bind:value={form.username} class="input" autocomplete="off" />
+            </div>
+            <div>
+              <label for="ude-email" class="label">Email</label>
+              <input id="ude-email" type="email" bind:value={form.email} class="input" autocomplete="off" />
+            </div>
+            <div>
+              <label for="ude-role" class="label">Role</label>
+              <select id="ude-role" bind:value={form.role} class="input">
+                <option value="user">User</option>
+                <option value="admin">Admin</option>
+                {#if hasRole(auth.user?.role, 'super_admin')}
+                  <option value="super_admin">Super Admin</option>
+                {/if}
+              </select>
+            </div>
+            <div>
+              <label for="ude-pass" class="label flex items-center gap-1"><Key size={12} /> Reset password</label>
+              <input id="ude-pass" type="password" bind:value={form.password} class="input" placeholder="••••••••" autocomplete="new-password" />
+              <p class="hint">Leave blank to keep the current password.</p>
+            </div>
           </div>
         </div>
-
-        <div class="flex gap-3 mt-6 pt-4 border-t border-white/[0.05]">
-          <button onclick={save} disabled={busy}
-            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition disabled:opacity-40 cursor-pointer border-0">
-            {#if busy}
-              <Loader2 size={14} class="animate-spin" /> Saving...
-            {:else}
-              <Check size={14} /> Save Changes
-            {/if}
-          </button>
-          <a href="/users" class="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition inline-flex items-center">Cancel</a>
-        </div>
-      </div>
-
-      <!-- ═══════════ SECTION: Impersonate ═══════════ -->
-      {#if hasRole(auth.user?.role, 'admin') && auth.user?.id !== userId}
-        <div class="bg-[#040a14] border border-white/[0.07] backdrop-blur-sm rounded-xl p-6">
-          <div class="flex items-center gap-2 mb-5 pb-4 border-b border-white/[0.05]">
-            <Eye size={16} class="text-indigo-400" />
-            <h2 class="text-sm font-semibold text-slate-200">Impersonate</h2>
-          </div>
-          <p class="text-sm text-slate-400 mb-4">
-            Log in as this user to view the panel from their perspective. Your original session is preserved.
-          </p>
-          <button
-            onclick={() => showImpersonateDialog = true}
-            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-indigo-500/15 text-indigo-400 hover:bg-indigo-500/25 ring-1 ring-indigo-400/20 transition cursor-pointer border-0"
-          >
-            <LogIn size={14} /> Impersonate User
+        <div class="flex justify-end gap-2 border-t border-line px-5 py-3.5">
+          <a href="/users" class="btn btn-ghost btn-sm">Cancel</a>
+          <button onclick={save} disabled={busy} class="btn btn-primary btn-sm">
+            {#if busy}<Loader2 size={14} class="animate-spin" /> Saving...{:else}<Check size={14} /> Save changes{/if}
           </button>
         </div>
-      {/if}
+      </section>
 
-      <!-- ═══════════ SECTION: Assigned Sites ═══════════ -->
-      <div class="bg-[#040a14] border border-white/[0.07] backdrop-blur-sm rounded-xl p-6">
-        <div class="flex items-center justify-between mb-5 pb-4 border-b border-white/[0.05]">
-          <div class="flex items-center gap-2">
-            <Globe size={16} class="text-sky-400" />
-            <h2 class="text-sm font-semibold text-slate-200">Assigned Sites</h2>
-            {#if assignedSites.length > 0}
-              <span class="text-[0.65rem] px-1.5 py-0.5 rounded-lg bg-white/[0.06] text-slate-500 font-medium">{assignedSites.length}</span>
-            {/if}
-          </div>
-          <button
-            onclick={fetchAssignedSites}
-            disabled={sitesLoading}
-            class="text-slate-500 hover:text-slate-300 transition cursor-pointer border-0 bg-transparent p-1"
-            title="Refresh"
-          >
+      <!-- Assigned sites -->
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title flex items-center gap-2">
+            <Globe size={16} class="text-subtle" /> Assigned sites
+            {#if assignedSites.length > 0}<span class="badge tabular-nums">{assignedSites.length}</span>{/if}
+          </h2>
+          <button onclick={fetchAssignedSites} disabled={sitesLoading} class="btn btn-ghost btn-xs btn-icon" aria-label="Refresh assigned sites" title="Refresh">
             <RefreshCw size={14} class={sitesLoading ? 'animate-spin' : ''} />
           </button>
         </div>
 
         {#if sitesLoading}
-          <div class="space-y-3">
-            {#each Array(2) as _}
-              <div class="h-14 bg-white/[0.03] rounded-xl animate-pulse"></div>
-            {/each}
+          <div class="space-y-2 p-4">
+            {#each Array(2) as _, i (i)}<div class="skeleton h-10"></div>{/each}
           </div>
         {:else if assignedSites.length === 0}
-          <div class="text-center py-10">
-            <div class="w-12 h-12 rounded-2xl bg-white/[0.04] flex items-center justify-center mx-auto mb-3">
-              <Globe size={20} class="text-slate-600" />
-            </div>
-            <p class="text-sm text-slate-500">No sites assigned to this user</p>
-          </div>
+          <EmptyState compact icon={Globe as any} title="No sites assigned" description="Assign a site below to give this user access." />
         {:else}
-          <div class="space-y-2 mb-5">
-            {#each assignedSites as site}
-              <div class="flex items-center gap-3 bg-white/[0.03] border border-white/[0.05] rounded-xl px-4 py-3 group">
-                <Globe size={16} class="text-sky-400 shrink-0" />
-                <div class="flex-1 min-w-0">
-                  <div class="text-sm text-slate-200 font-medium truncate">{site.site_domain || site.site_name}</div>
-                  <div class="text-[0.65rem] text-slate-500 mt-0.5">
-                    {#if site.is_owner}
-                      Created by this user
-                    {:else}
-                      Assigned {formatDate(site.assigned_at)}
-                    {/if}
-                  </div>
-                </div>
-                {#if site.is_owner}
-                  <span class="inline-flex items-center px-2 py-0.5 rounded-lg text-[0.65rem] font-medium {permissionBadge(site.permission)} shrink-0">
-                    {site.permission}
-                  </span>
-                {:else}
-                  <select
-                    value={site.permission}
-                    onchange={(e) => updatePermission(site.site_id, (e.target as HTMLSelectElement).value)}
-                    disabled={updatingPermSiteId === site.site_id}
-                    class="text-[0.65rem] font-medium px-1.5 py-0.5 rounded-lg border border-white/[0.1] bg-white/[0.04] text-slate-300 outline-none cursor-pointer hover:border-sky-400/30 transition shrink-0"
-                  >
-                    <option value="read">read</option>
-                    <option value="write">write</option>
-                    <option value="admin">admin</option>
-                  </select>
-                {/if}
-                {#if site.permission !== 'owner'}
-                  <button
-                    onclick={() => removeSite(site.site_id)}
-                    disabled={removingSiteId === site.site_id}
-                    class="text-slate-600 hover:text-red-400 transition cursor-pointer border-0 bg-transparent p-1 opacity-0 group-hover:opacity-100 shrink-0"
-                    title="Remove site"
-                  >
-                    {#if removingSiteId === site.site_id}
-                      <Loader2 size={14} class="animate-spin text-red-400" />
-                    {:else}
-                      <Trash2 size={14} />
-                    {/if}
-                  </button>
-                {/if}
-              </div>
-            {/each}
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Site</th>
+                  <th class="max-sm:hidden">Access</th>
+                  <th>Permission</th>
+                  <th class="text-right"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each assignedSites as site (site.site_id)}
+                  <tr>
+                    <td>
+                      <a href="/sites/{site.site_id}" class="font-medium text-fg hover:text-accent">{site.site_domain || site.site_name}</a>
+                    </td>
+                    <td class="text-xs text-subtle max-sm:hidden">
+                      {site.is_owner ? 'Created by this user' : `Assigned ${formatDate(site.assigned_at)}`}
+                    </td>
+                    <td>
+                      {#if site.is_owner}
+                        <span class="badge {permissionBadge(site.permission)}">{site.permission}</span>
+                      {:else}
+                        <select
+                          value={site.permission}
+                          onchange={(e) => updatePermission(site.site_id, (e.target as HTMLSelectElement).value)}
+                          disabled={updatingPermSiteId === site.site_id}
+                          aria-label="Permission for {site.site_domain || site.site_name}"
+                          class="input h-7 w-24 text-xs"
+                        >
+                          <option value="read">read</option>
+                          <option value="write">write</option>
+                          <option value="admin">admin</option>
+                        </select>
+                      {/if}
+                    </td>
+                    <td class="text-right">
+                      {#if site.permission !== 'owner'}
+                        <button
+                          onclick={() => askRemove(site)}
+                          disabled={removingSiteId === site.site_id}
+                          class="btn btn-danger-ghost btn-xs btn-icon"
+                          aria-label="Remove {site.site_domain || site.site_name}"
+                          title="Remove site"
+                        >
+                          {#if removingSiteId === site.site_id}<Loader2 size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
+                        </button>
+                      {/if}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
           </div>
         {/if}
 
-        <!-- Assign new site -->
         {#if availableSites.length > 0}
-          <div class="pt-4 border-t border-white/[0.05]">
-            <label class="block text-xs text-slate-500 mb-1.5">Assign New Site</label>
-            <div class="flex flex-col sm:flex-row gap-2">
-              <select
-                bind:value={assignSiteId}
-                class="flex-1 bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition"
-              >
+          <div class="border-t border-line p-4">
+            <label for="ude-assign-site" class="label">Assign new site</label>
+            <div class="flex flex-col gap-2 sm:flex-row">
+              <select id="ude-assign-site" bind:value={assignSiteId} class="input flex-1">
                 <option value={null} disabled>Select a site...</option>
-                {#each availableSites as site}
+                {#each availableSites as site (site.id)}
                   <option value={site.id}>{site.domain || site.name}</option>
                 {/each}
               </select>
-              <select
-                bind:value={assignPermission}
-                class="w-full sm:w-32 bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-slate-200 outline-none focus:border-sky-400/40 transition"
-              >
+              <select bind:value={assignPermission} aria-label="Permission" class="input sm:w-32">
                 <option value="read">Read</option>
                 <option value="write">Write</option>
                 <option value="admin">Admin</option>
               </select>
-              <button
-                onclick={assignSite}
-                disabled={!assignSiteId || assigningSite}
-                class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition disabled:opacity-40 cursor-pointer border-0 shrink-0"
-              >
-                {#if assigningSite}
-                  <Loader2 size={14} class="animate-spin" />
-                {:else}
-                  <Check size={14} /> Assign
-                {/if}
+              <button onclick={assignSite} disabled={!assignSiteId || assigningSite} class="btn btn-primary">
+                {#if assigningSite}<Loader2 size={14} class="animate-spin" />{:else}<Check size={14} /> Assign{/if}
               </button>
             </div>
           </div>
         {/if}
-      </div>
+      </section>
 
-      <!-- ═══════════ SECTION: Usage / Quota ═══════════ -->
-      <div class="bg-[#040a14] border border-white/[0.07] backdrop-blur-sm rounded-xl p-6">
-        <div class="flex items-center justify-between mb-5 pb-4 border-b border-white/[0.05]">
-          <div class="flex items-center gap-2">
-            <Shield size={16} class="text-sky-400" />
-            <h2 class="text-sm font-semibold text-slate-200">Usage &amp; Quota</h2>
-          </div>
-          <button
-            onclick={fetchUsage}
-            disabled={usageLoading}
-            class="text-slate-500 hover:text-slate-300 transition cursor-pointer border-0 bg-transparent p-1"
-            title="Refresh"
-          >
+      <!-- Usage & quota -->
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title flex items-center gap-2"><Gauge size={16} class="text-subtle" /> Usage &amp; quota</h2>
+          <button onclick={fetchUsage} disabled={usageLoading} class="btn btn-ghost btn-xs btn-icon" aria-label="Refresh usage" title="Refresh">
             <RefreshCw size={14} class={usageLoading ? 'animate-spin' : ''} />
           </button>
         </div>
-
-        {#if usageLoading}
-          <div class="grid grid-cols-2 gap-3">
-            {#each Array(4) as _}
-              <div class="h-16 bg-white/[0.03] rounded-xl animate-pulse"></div>
-            {/each}
-          </div>
-        {:else if usage}
-          <div class="grid grid-cols-2 gap-3">
-            <!-- Disk usage -->
-            <div class="bg-white/[0.03] border border-white/[0.05] rounded-xl p-4">
-              <div class="text-[0.65rem] text-slate-500 mb-1">Disk Usage</div>
-              <div class="text-lg font-semibold text-slate-200">{formatBytes(usage.disk_usage || 0)}</div>
-              {#if usage.disk_limit}
-                <div class="text-[0.65rem] text-slate-500 mt-0.5">
-                  of {formatBytes(usage.disk_limit)} limit
-                </div>
-                <div class="mt-2 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                  <div
-                    class="h-full bg-sky-400 rounded-full transition-all"
-                    style="width: {Math.min(100, ((usage.disk_usage || 0) / usage.disk_limit) * 100)}%"
-                  ></div>
-                </div>
-              {/if}
+        <div class="card-body">
+          {#if usageLoading}
+            <div class="grid grid-cols-2 gap-3">
+              {#each Array(4) as _, i (i)}<div class="skeleton h-20"></div>{/each}
             </div>
-
-            <!-- Site count -->
-            <div class="bg-white/[0.03] border border-white/[0.05] rounded-xl p-4">
-              <div class="text-[0.65rem] text-slate-500 mb-1">Sites</div>
-              <div class="text-lg font-semibold text-slate-200">{assignedSites.length}</div>
-              {#if usage.max_sites}
-                <div class="text-[0.65rem] text-slate-500 mt-0.5">
-                  of {usage.max_sites} max
-                </div>
-                <div class="mt-2 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                  <div
-                    class="h-full bg-indigo-400 rounded-full transition-all"
-                    style="width: {Math.min(100, (assignedSites.length / usage.max_sites) * 100)}%"
-                  ></div>
-                </div>
-              {/if}
-            </div>
-
-            <!-- Bandwidth -->
-            {#if usage.bandwidth_usage !== undefined}
-              <div class="bg-white/[0.03] border border-white/[0.05] rounded-xl p-4">
-                <div class="text-[0.65rem] text-slate-500 mb-1">Bandwidth</div>
-                <div class="text-lg font-semibold text-slate-200">{formatBytes(usage.bandwidth_usage || 0)}</div>
-                {#if usage.bandwidth_limit}
-                  <div class="text-[0.65rem] text-slate-500 mt-0.5">
-                    of {formatBytes(usage.bandwidth_limit)} limit
-                  </div>
-                  <div class="mt-2 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                    <div
-                      class="h-full bg-sky-400 rounded-full transition-all"
-                      style="width: {Math.min(100, ((usage.bandwidth_usage || 0) / usage.bandwidth_limit) * 100)}%"
-                    ></div>
-                  </div>
+          {:else if usage}
+            <div class="grid grid-cols-2 gap-3">
+              <div class="rounded-lg border border-line p-4">
+                <div class="stat-label">Disk usage</div>
+                <div class="mt-1 text-lg font-semibold text-fg tabular-nums">{formatBytes(usage.disk_usage || 0)}</div>
+                {#if usage.disk_limit}
+                  <div class="text-xs text-subtle">of {formatBytes(usage.disk_limit)} limit</div>
+                  <div class="progress mt-2"><div class="progress-bar" style="width: {pct(usage.disk_usage, usage.disk_limit)}%"></div></div>
                 {/if}
               </div>
-            {/if}
 
-            <!-- Created at -->
-            <div class="bg-white/[0.03] border border-white/[0.05] rounded-xl p-4">
-              <div class="text-[0.65rem] text-slate-500 mb-1">Created</div>
-              <div class="text-sm font-medium text-slate-200">{formatDate(user.created_at || usage.created_at)}</div>
+              <div class="rounded-lg border border-line p-4">
+                <div class="stat-label">Sites</div>
+                <div class="mt-1 text-lg font-semibold text-fg tabular-nums">{assignedSites.length}</div>
+                {#if usage.max_sites}
+                  <div class="text-xs text-subtle">of {usage.max_sites} max</div>
+                  <div class="progress mt-2"><div class="progress-bar" style="width: {pct(assignedSites.length, usage.max_sites)}%"></div></div>
+                {/if}
+              </div>
+
+              {#if usage.bandwidth_usage !== undefined}
+                <div class="rounded-lg border border-line p-4">
+                  <div class="stat-label">Bandwidth</div>
+                  <div class="mt-1 text-lg font-semibold text-fg tabular-nums">{formatBytes(usage.bandwidth_usage || 0)}</div>
+                  {#if usage.bandwidth_limit}
+                    <div class="text-xs text-subtle">of {formatBytes(usage.bandwidth_limit)} limit</div>
+                    <div class="progress mt-2"><div class="progress-bar" style="width: {pct(usage.bandwidth_usage, usage.bandwidth_limit)}%"></div></div>
+                  {/if}
+                </div>
+              {/if}
+
+              <div class="rounded-lg border border-line p-4">
+                <div class="stat-label">Created</div>
+                <div class="mt-1 text-sm font-medium text-fg">{formatDate(user.created_at || usage.created_at)}</div>
+              </div>
             </div>
-          </div>
-        {:else}
-          <div class="text-center py-8">
-            <p class="text-sm text-slate-500">No usage data available</p>
-          </div>
-        {/if}
-      </div>
+          {:else}
+            <p class="py-6 text-center text-[13px] text-muted">No usage data available</p>
+          {/if}
+        </div>
+      </section>
     </div>
-
   {:else}
-    <div class="bg-[#040a14] border border-white/[0.07] rounded-xl py-16 px-6 text-center">
-      <div class="w-16 h-16 rounded-2xl bg-white/[0.04] flex items-center justify-center mx-auto mb-5">
-        <User size={28} class="text-slate-600" />
-      </div>
-      <h2 class="text-lg font-semibold text-slate-300 mb-2">User not found</h2>
-      <p class="text-sm text-slate-500 mb-5">This user may have been deleted or you don't have permission to view it.</p>
-      <a href="/users" class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-white/[0.05] text-slate-300 hover:bg-white/[0.08] transition">
-        <ArrowLeft size={14} /> Back to Users
-      </a>
+    <div class="card">
+      <EmptyState icon={User as any} title="User not found" description="This user may have been deleted or you don't have permission to view it.">
+        <a href="/users" class="btn btn-secondary btn-sm"><ArrowLeft size={14} /> Back to users</a>
+      </EmptyState>
     </div>
   {/if}
 
-  <!-- ═══════════ Impersonate Confirmation Dialog ═══════════ -->
-  {#if showImpersonateDialog}
-    <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <!-- Backdrop -->
-      <div
-        class="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onclick={() => showImpersonateDialog = false}
-        role="button"
-        tabindex="-1"
-        onkeydown={(e) => e.key === 'Escape' && (showImpersonateDialog = false)}
-      ></div>
+  <ConfirmDialog
+    bind:open={showImpersonateDialog}
+    title="Impersonate user"
+    message={`You will log in as ${user?.username ?? 'this user'}. Your current session will be preserved and you can stop impersonation at any time.`}
+    confirmLabel="Confirm impersonation"
+    onconfirm={doImpersonate}
+  />
 
-      <!-- Dialog -->
-      <div class="relative bg-[#0a1120] border border-white/[0.1] rounded-2xl p-6 max-w-sm w-full shadow-2xl">
-        <button
-          onclick={() => showImpersonateDialog = false}
-          class="absolute top-4 right-4 text-slate-500 hover:text-slate-300 transition cursor-pointer border-0 bg-transparent"
-        >
-          <X size={16} />
-        </button>
-
-        <div class="w-12 h-12 rounded-xl bg-indigo-500/15 flex items-center justify-center mb-4">
-          <AlertTriangle size={22} class="text-indigo-400" />
-        </div>
-
-        <h3 class="text-base font-semibold text-slate-200 mb-2">Impersonate User</h3>
-        <p class="text-sm text-slate-400 mb-6">
-          You will log in as <span class="text-slate-200 font-medium">{user?.username}</span>. Your current session will be preserved and you can stop impersonation at any time.
-        </p>
-
-        <div class="flex gap-3 justify-end">
-          <button
-            onclick={() => showImpersonateDialog = false}
-            class="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0 bg-transparent"
-          >
-            Cancel
-          </button>
-          <button
-            onclick={doImpersonate}
-            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-indigo-500 text-white hover:bg-indigo-400 transition cursor-pointer border-0"
-          >
-            <LogIn size={14} /> Confirm Impersonation
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <ConfirmDialog
+    bind:open={confirmRemoveOpen}
+    title="Remove site access"
+    message={confirmRemove ? `Remove ${confirmRemove.site_domain || confirmRemove.site_name} from ${user?.username ?? 'this user'}? They will lose access to it.` : ''}
+    confirmLabel="Remove"
+    destructive
+    onconfirm={() => confirmRemove && removeSite(confirmRemove.site_id)}
+  />
 </DashboardLayout>

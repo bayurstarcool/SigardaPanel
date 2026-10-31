@@ -1,10 +1,9 @@
 <script lang="ts">
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import {
-    Key, UserPlus, Terminal, Trash2, Download, Lock, Loader2,
-    Copy, Check, X, AlertTriangle,
-  } from 'lucide-svelte';
+  import Modal from '$components/Modal.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import { Key, UserPlus, Terminal, Trash2, Download, Copy, Check, TriangleAlert } from 'lucide-svelte';
   import { toasts } from '$lib/toast.svelte';
   import SiteTerminal from './SiteTerminal.svelte';
 
@@ -20,6 +19,8 @@
   let sshInfoData = $state<any>(null);
   let sshInfoLoaded = $state(false);
   let copiedField = $state('');
+
+  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
 
   function copyText(text: string, field: string) { navigator.clipboard.writeText(text); copiedField = field; setTimeout(() => copiedField = '', 1500); }
   function sshUsername(): string { if (!site?.domain) return 'deploy'; return 'deploy-' + site.domain.replace(/\./g, '-'); }
@@ -48,69 +49,116 @@
   }
 </script>
 
-<!-- ═══════ Per-Site SSH Terminal ═══════ -->
-<div class="mb-3">
+<div class="space-y-4">
   <SiteTerminal {siteId} {site} />
-</div>
 
-{#if sshInfoData}
-  <div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300 mb-3">
-    <div class="flex items-center gap-2.5 px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-white/[0.05]"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-emerald-400/10 flex items-center justify-center"><Download size={13} class="text-emerald-400" /></div><span class="text-sm font-semibold text-slate-200">FTP Access</span><span class="text-[0.65rem] text-slate-500 bg-white/[0.04] px-2 py-0.5 rounded-full border border-white/[0.06]">ProFTPD</span></div>
-    <div class="p-3.5 sm:p-5">
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-        <div><div class="text-[11px] text-slate-500 mb-1">Host</div><div class="flex items-center gap-2"><code class="text-sm text-slate-200 font-mono bg-black/30 px-2 py-1 rounded-lg">{sshInfoData.host}</code><button onclick={() => copyText(sshInfoData.host, 'host')} class="text-sky-400/60 hover:text-sky-400 transition"><Copy size={12} /></button></div></div>
-        <div><div class="text-[11px] text-slate-500 mb-1">Port</div><code class="text-sm text-slate-200 font-mono bg-black/30 px-2 py-1 rounded-lg">21</code></div>
-        <div><div class="text-[11px] text-slate-500 mb-1">Username</div><code class="text-sm text-slate-200 font-mono bg-black/30 px-2 py-1 rounded-lg">{sshInfoData.system_user}</code></div>
-        <div><div class="text-[11px] text-slate-500 mb-1">Root Path</div><code class="text-sm text-slate-200 font-mono bg-black/30 px-2 py-1 rounded-lg truncate block max-w-[200px]">{sshInfoData.root_path}</code></div>
-      </div>
-      <div class="bg-black/20 rounded-xl p-4 space-y-3">
-        <div class="flex items-center gap-2 text-xs text-slate-300 font-medium"><Terminal size={12} class="text-emerald-400" /> Quick Guide</div>
-        <ol class="text-xs text-slate-400 space-y-2 list-decimal list-inside">
-          <li>Open your FTP client (FileZilla, WinSCP, Cyberduck)</li>
-          <li>Enter host <code class="text-sky-300 bg-black/30 px-1.5 py-0.5 rounded">{sshInfoData.host}</code> port <code class="text-sky-300 bg-black/30 px-1.5 py-0.5 rounded">21</code></li>
-          <li>Username: <code class="text-sky-300 bg-black/30 px-1.5 py-0.5 rounded">{sshInfoData.system_user}</code></li>
-          <li>For SSH: <code class="text-sky-300 bg-black/30 px-1.5 py-0.5 rounded">{sshInfoData.ssh_command}</code></li>
-        </ol>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<div class="bg-white/[0.03] border border-white/[0.07] rounded-2xl shadow-lg overflow-hidden hover:border-white/[0.12] transition-all duration-300">
-  <div class="flex items-center justify-between px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-white/[0.05]">
-    <div class="flex items-center gap-2.5"><div class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-sky-400/10 flex items-center justify-center"><Key size={12} class="text-sky-400" /></div><span class="text-sm font-semibold text-slate-200">SSH Access</span><span class="text-[0.65rem] text-slate-500 bg-white/[0.04] px-2 py-0.5 rounded-full border border-white/[0.06]">{sshUsers.length}</span></div>
-    {#if hasRole(auth.user?.role, 'admin')}<button onclick={() => showCreateSSH = !showCreateSSH} class="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium bg-sky-400/[0.08] text-sky-400 border border-sky-400/15 hover:bg-sky-400/[0.12] hover:border-sky-400/25 transition-all duration-200"><UserPlus size={12} /> Add SSH User</button>{/if}
-  </div>
-  {#if showCreateSSH}
-    <div class="px-5 py-4 border-b border-white/[0.05] bg-white/[0.01]">
-      <div class="space-y-3">
-        <div><label class="block text-xs text-slate-500 mb-1">Username</label><div class="w-full bg-white/[0.02] border border-white/[0.05] rounded-xl px-4 py-2.5 text-sm text-slate-400 font-mono">{sshUsername()}</div></div>
-        <div><label class="block text-xs text-slate-500 mb-1">SSH Public Keys <span class="text-slate-600">(optional)</span></label><textarea bind:value={newSSH.ssh_keys} rows={4} class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 font-mono outline-none focus:border-sky-400/50 focus:ring-2 focus:ring-sky-400/10 transition-all duration-200 placeholder:text-slate-600 resize-none" placeholder={"ssh-ed25519 AAAA... user1@host\nssh-ed25519 BBBB... user2@host"}></textarea></div>
+  {#if sshInfoData}
+    <div class="card">
+      <div class="card-header">
         <div class="flex items-center gap-2">
-          <button onclick={createSSH} disabled={sshBusy} class="px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 transition-all disabled:opacity-40 cursor-pointer border-0">{sshBusy ? '...' : 'Create'}</button>
-          <button onclick={() => showCreateSSH = false} class="px-3 py-2.5 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Cancel</button>
+          <Download size={16} class="text-subtle" />
+          <h3 class="card-title">FTP access</h3>
+          <span class="badge">ProFTPD</span>
+        </div>
+      </div>
+      <div class="card-body space-y-4">
+        <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <dt class="stat-label mb-1">Host</dt>
+            <dd class="flex items-center gap-1.5">
+              <span class="code">{sshInfoData.host}</span>
+              <button onclick={() => copyText(sshInfoData.host, 'host')} class="btn btn-ghost btn-icon btn-xs" aria-label="Copy host">
+                {#if copiedField === 'host'}<Check size={13} class="text-success" />{:else}<Copy size={13} />{/if}
+              </button>
+            </dd>
+          </div>
+          <div><dt class="stat-label mb-1">Port</dt><dd><span class="code">21</span></dd></div>
+          <div><dt class="stat-label mb-1">Username</dt><dd><span class="code">{sshInfoData.system_user}</span></dd></div>
+          <div class="min-w-0"><dt class="stat-label mb-1">Root path</dt><dd class="truncate"><span class="code" title={sshInfoData.root_path}>{sshInfoData.root_path}</span></dd></div>
+        </dl>
+        <div class="rounded-lg border border-line bg-surface-2 p-4">
+          <p class="mb-2 flex items-center gap-2 text-[13px] font-medium text-fg"><Terminal size={14} class="text-subtle" /> Quick guide</p>
+          <ol class="list-inside list-decimal space-y-1.5 text-[13px] text-muted">
+            <li>Open your FTP client (FileZilla, WinSCP, Cyberduck)</li>
+            <li>Enter host <span class="code">{sshInfoData.host}</span> port <span class="code">21</span></li>
+            <li>Username: <span class="code">{sshInfoData.system_user}</span></li>
+            <li>For SSH: <span class="code break-all">{sshInfoData.ssh_command}</span></li>
+          </ol>
         </div>
       </div>
     </div>
   {/if}
-  {#if sshLoading}
-    <div class="divide-y divide-white/5">{#each Array(2) as _}<div class="px-5 py-4 flex items-center gap-3"><div class="w-8 h-8 bg-white/[0.04] rounded-lg animate-pulse"></div><div class="space-y-1"><div class="h-3 w-20 bg-white/[0.04] rounded animate-pulse"></div></div></div>{/each}</div>
-  {:else if sshUsers.length === 0}
-    <div class="flex flex-col items-center justify-center py-14"><Key size={22} class="text-white/[0.08] mb-3" /><p class="text-sm font-medium text-slate-400 mb-0.5">No SSH users</p><p class="text-xs text-slate-600">Add an SSH user for this site</p></div>
-  {:else}
-    <div class="divide-y divide-white/[0.04]">{#each sshUsers as u}<div class="flex items-center justify-between px-5 py-3.5 hover:bg-white/[0.02] transition"><div class="flex items-center gap-3"><Terminal size={14} class="text-slate-500" /><span class="text-sm font-medium text-slate-200">{u.username}</span><span class="text-xs text-slate-500 font-mono">{u.home_dir || '—'}</span></div><button onclick={() => deleteSSH(u)} class="text-xs text-red-400/60 hover:text-red-400 transition p-1 rounded-lg hover:bg-red-400/10"><Trash2 size={14} /></button></div>{/each}</div>
-  {/if}
+
+  <div class="card">
+    <div class="card-header">
+      <div class="flex items-center gap-2">
+        <Key size={16} class="text-subtle" />
+        <h3 class="card-title">SSH access</h3>
+        <span class="badge tabular-nums">{sshUsers.length}</span>
+      </div>
+      {#if isAdmin}
+        <button onclick={() => (showCreateSSH = !showCreateSSH)} class="btn btn-secondary btn-sm"><UserPlus size={14} /> Add SSH user</button>
+      {/if}
+    </div>
+    {#if showCreateSSH}
+      <div class="space-y-3 border-b border-line bg-surface-2/50 px-5 py-4">
+        <div>
+          <span class="label">Username</span>
+          <div class="input flex items-center font-mono text-[13px] text-muted">{sshUsername()}</div>
+        </div>
+        <div>
+          <label for="ssh-keys" class="label">SSH public keys <span class="text-subtle">(optional)</span></label>
+          <textarea id="ssh-keys" bind:value={newSSH.ssh_keys} rows={4} class="input resize-none font-mono text-[13px]" placeholder={"ssh-ed25519 AAAA... user1@host\nssh-ed25519 BBBB... user2@host"}></textarea>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick={createSSH} disabled={sshBusy} class="btn btn-primary btn-sm">{sshBusy ? 'Creating…' : 'Create'}</button>
+          <button onclick={() => (showCreateSSH = false)} class="btn btn-ghost btn-sm">Cancel</button>
+        </div>
+      </div>
+    {/if}
+    {#if sshLoading}
+      <div class="space-y-3 p-4">{#each Array(2) as _, i (i)}<div class="skeleton h-9"></div>{/each}</div>
+    {:else if sshUsers.length === 0}
+      <EmptyState compact icon={Key} title="No SSH users" description="Add an SSH user for this site." />
+    {:else}
+      <ul class="divide-y divide-line">
+        {#each sshUsers as u (u.id)}
+          <li class="flex items-center justify-between gap-3 px-5 py-3">
+            <div class="flex min-w-0 items-center gap-3">
+              <Terminal size={14} class="shrink-0 text-subtle" />
+              <span class="text-sm font-medium text-fg">{u.username}</span>
+              <span class="truncate font-mono text-xs text-subtle max-sm:hidden">{u.home_dir || '—'}</span>
+            </div>
+            <button onclick={() => deleteSSH(u)} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Delete SSH user {u.username}"><Trash2 size={14} /></button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
 </div>
 
-{#if sshKeyModal}
-  <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onclick={() => sshKeyModal = null}>
-    <div class="bg-[#161b22] border border-white/[0.1] rounded-2xl p-6 max-w-lg w-full shadow-2xl" onclick={(e) => e.stopPropagation()}>
-      <div class="flex items-center justify-between mb-4"><h3 class="text-lg font-semibold text-slate-200">SSH Keys Generated</h3><button onclick={() => sshKeyModal = null} class="text-slate-500 hover:text-slate-300 transition"><X size={18} /></button></div>
-      <p class="text-xs text-amber-400 mb-4 flex items-center gap-1.5"><AlertTriangle size={14} /> Save the private key now — it won't be shown again.</p>
-      <div class="space-y-3">
-        <div><label class="block text-xs text-slate-500 mb-1">Public Key</label><div class="flex"><pre class="flex-1 bg-[#0d1117] text-emerald-300 font-mono text-[11px] p-3 rounded-xl overflow-x-auto">{sshKeyModal.pub}</pre><button onclick={() => copyText(sshKeyModal!.pub, 'sshpub')} class="ml-2 text-slate-500 hover:text-slate-300 transition">{#if copiedField === 'sshpub'}<Check size={14} class="text-emerald-400" />{:else}<Copy size={14} />{/if}</button></div></div>
-        <div><label class="block text-xs text-slate-500 mb-1">Private Key</label><div class="flex"><pre class="flex-1 bg-[#0d1117] text-amber-300 font-mono text-[11px] p-3 rounded-xl overflow-x-auto max-h-40">{sshKeyModal.priv}</pre><button onclick={() => copyText(sshKeyModal!.priv, 'sshpriv')} class="ml-2 text-slate-500 hover:text-slate-300 transition">{#if copiedField === 'sshpriv'}<Check size={14} class="text-emerald-400" />{:else}<Copy size={14} />{/if}</button></div></div>
+<Modal open={!!sshKeyModal} title="SSH keys generated" maxWidth="lg" onclose={() => (sshKeyModal = null)}>
+  {#if sshKeyModal}
+    <p class="mb-4 flex items-center gap-1.5 text-[13px] text-warning"><TriangleAlert size={14} /> Save the private key now — it won't be shown again.</p>
+    <div class="space-y-3">
+      <div>
+        <div class="mb-1.5 flex items-center justify-between">
+          <span class="label mb-0">Public key</span>
+          <button onclick={() => copyText(sshKeyModal!.pub, 'sshpub')} class="btn btn-ghost btn-xs">
+            {#if copiedField === 'sshpub'}<Check size={12} class="text-success" /> Copied{:else}<Copy size={12} /> Copy{/if}
+          </button>
+        </div>
+        <pre class="overflow-x-auto rounded-lg border border-line bg-surface-2 p-3 font-mono text-[11px] text-fg">{sshKeyModal.pub}</pre>
+      </div>
+      <div>
+        <div class="mb-1.5 flex items-center justify-between">
+          <span class="label mb-0">Private key</span>
+          <button onclick={() => copyText(sshKeyModal!.priv, 'sshpriv')} class="btn btn-ghost btn-xs">
+            {#if copiedField === 'sshpriv'}<Check size={12} class="text-success" /> Copied{:else}<Copy size={12} /> Copy{/if}
+          </button>
+        </div>
+        <pre class="max-h-40 overflow-auto rounded-lg border border-line bg-surface-2 p-3 font-mono text-[11px] text-fg">{sshKeyModal.priv}</pre>
       </div>
     </div>
-  </div>
-{/if}
+  {/if}
+</Modal>

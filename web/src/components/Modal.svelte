@@ -12,7 +12,7 @@
   }: {
     open: boolean;
     title?: string;
-    maxWidth?: 'sm' | 'md' | 'lg' | 'xl';
+    maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl';
     onclose?: () => void;
     children?: Snippet;
     footer?: Snippet;
@@ -24,7 +24,9 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') close();
+    // Only the open modal reacts; otherwise every mounted (closed) modal would
+    // fire its onclose on any Escape press.
+    if (open && e.key === 'Escape') close();
   }
 
   const maxWidths: Record<string, string> = {
@@ -32,24 +34,26 @@
     md: 'max-w-md',
     lg: 'max-w-lg',
     xl: 'max-w-xl',
+    '2xl': 'max-w-2xl',
+    '4xl': 'max-w-4xl',
   };
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
 {#if open}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- Backdrop click closes; Escape is handled on window above. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class="overlay animate-fade-in flex items-end justify-center p-0 sm:items-center sm:p-4"
-    onclick={close}
+    onclick={(e) => { if (e.target === e.currentTarget) close(); }}
     role="dialog"
     aria-modal="true"
     aria-label={title}
+    tabindex="-1"
   >
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="popover animate-pop-in flex max-h-[90dvh] w-full flex-col {maxWidths[maxWidth]} max-sm:rounded-b-none"
-      onclick={(e) => e.stopPropagation()}
       role="document"
     >
       {#if title}

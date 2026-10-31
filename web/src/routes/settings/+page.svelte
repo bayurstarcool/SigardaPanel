@@ -2,9 +2,9 @@
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
+  import PageHeader from '$components/PageHeader.svelte';
   import { fmtBytes } from '$lib/format';
-  import { toasts } from '$lib/toast.svelte';
-  import { Server, HardDrive, Database, ExternalLink, Clock, Cpu, Trash2, AlertTriangle, Activity } from 'lucide-svelte';
+  import { Server, HardDrive, Database, ChevronRight, Clock, Cpu, Trash2, AlertTriangle, Activity, KeyRound } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
   let version = $state('—');
@@ -12,8 +12,6 @@
   let diskUsed = $state(0);
   let diskTotal = $state(0);
   let loading = $state(true);
-  let clearingCache = $state(false);
-  let clearingAudit = $state(false);
   const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
 
   onMount(async () => {
@@ -44,112 +42,97 @@
     const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
     return d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m` : `${m}m`;
   }
-  async function clearCache() {
-    if (!auth.user) return; clearingCache = true;
-    try { await apiFetch(auth.token, 'POST', 'settings/clear-cache'); toasts.success('Cache cleared'); }
-    catch (e: any) { toasts.error(e.message || 'Failed to clear cache'); }
-    finally { clearingCache = false; }
-  }
-  async function resetAuditLogs() {
-    if (!auth.user) return; clearingAudit = true;
-    try { await apiFetch(auth.token, 'DELETE', 'audit-logs'); toasts.success('Audit logs cleared'); }
-    catch (e: any) { toasts.error(e.message || 'Failed to clear audit logs'); }
-    finally { clearingAudit = false; }
-  }
+  // "Clear cache" (POST settings/clear-cache) and "Reset audit logs" (DELETE audit-logs)
+  // used to live here, but the API exposes neither endpoint — the controls are shown
+  // disabled until the backend implements them.
 </script>
 
 <DashboardLayout active="Settings">
-  <div class="mb-8">
-    <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent">Settings</h1>
-    <p class="text-sm text-slate-500 mt-1">System configuration and management</p>
-  </div>
+  <PageHeader title="Settings" description="System configuration and management" />
 
   <div class="grid gap-4 md:grid-cols-2">
-    <!-- Backup Settings -->
-    <a href="/backups" class="group bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 hover:border-sky-500/30 hover:bg-sky-500/[0.03] transition-all">
-      <div class="flex items-start justify-between">
-        <div>
-          <h3 class="text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
-            <span class="w-6 h-6 rounded-lg bg-sky-500/10 flex items-center justify-center"><HardDrive size={14} /></span>
-            Backup Settings
-          </h3>
-          <p class="text-xs text-slate-500 leading-relaxed">Configure retention, providers, schedules, and backup history.</p>
-        </div>
-        <ExternalLink size={14} class="text-slate-600 group-hover:text-sky-400 transition mt-1" />
-      </div>
-      <div class="mt-4 pt-3 border-t border-white/[0.05]">
-        <span class="text-xs text-sky-400 group-hover:text-sky-300 transition">Manage Backups →</span>
-      </div>
-    </a>
-
-    <!-- System Info -->
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6">
-      <h3 class="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
-        <span class="w-6 h-6 rounded-lg bg-purple-500/10 flex items-center justify-center"><Server size={14} /></span>
-        System Info
-      </h3>
-      {#if loading}
-        <div class="space-y-2.5">{#each [1,2,3] as _}<div class="h-7 bg-white/[0.03] rounded-lg animate-pulse"></div>{/each}</div>
-      {:else}
-        <div class="space-y-2 text-sm">
-          <div class="flex justify-between py-1.5 border-b border-white/[0.03]">
-            <span class="text-slate-500 flex items-center gap-1.5"><Activity size={12} /> Version</span>
-            <code class="text-sky-300 text-xs font-mono">{version}</code>
-          </div>
-          <div class="flex justify-between py-1.5 border-b border-white/[0.03]">
-            <span class="text-slate-500 flex items-center gap-1.5"><Clock size={12} /> Uptime</span>
-            <span class="text-slate-300 text-xs">{uptimeStr()}</span>
-          </div>
-          <div class="flex justify-between py-1.5 last:border-0">
-            <span class="text-slate-500 flex items-center gap-1.5"><Cpu size={12} /> Backend</span>
-            <span class="text-slate-300 text-xs">Go + Echo + SQLite</span>
-          </div>
-        </div>
-        {#if diskTotal > 0}
-          <div class="mt-3 pt-3 border-t border-white/[0.05]">
-            <div class="flex items-center justify-between text-xs mb-1.5">
-              <span class="text-slate-500">Disk Usage</span>
-              <span class="text-slate-400">{fmtBytes(diskUsed)} / {fmtBytes(diskTotal)} ({diskPct()}%)</span>
-            </div>
-            <div class="w-full h-1.5 bg-white/[0.05] rounded-full overflow-hidden">
-              <div class="h-full rounded-full transition-all" class:bg-emerald-500={diskPct() < 70} class:bg-amber-500={diskPct() >= 70 && diskPct() < 90} class:bg-red-500={diskPct() >= 90} style="width: {diskPct()}%"></div>
-            </div>
-          </div>
-        {/if}
-      {/if}
+    <!-- Shortcuts -->
+    <div class="card divide-y divide-line">
+      <a href="/backups" class="group flex items-center gap-3 p-5 transition-colors duration-150 hover:bg-surface-2">
+        <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent"><HardDrive size={16} /></span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-sm font-semibold text-fg">Backup settings</span>
+          <span class="block text-[13px] text-muted">Configure retention, providers, schedules, and backup history.</span>
+        </span>
+        <ChevronRight size={16} class="shrink-0 text-subtle transition-colors group-hover:text-fg" />
+      </a>
+      <a href="/settings/twofa" class="group flex items-center gap-3 p-5 transition-colors duration-150 hover:bg-surface-2">
+        <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent"><KeyRound size={16} /></span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-sm font-semibold text-fg">Two-factor authentication</span>
+          <span class="block text-[13px] text-muted">Protect your account with an authenticator app.</span>
+        </span>
+        <ChevronRight size={16} class="shrink-0 text-subtle transition-colors group-hover:text-fg" />
+      </a>
     </div>
 
-    <!-- Danger Zone (admin only) -->
+    <!-- System info -->
+    <section class="card">
+      <div class="card-header">
+        <h2 class="card-title flex items-center gap-2"><Server size={16} class="text-subtle" /> System info</h2>
+      </div>
+      <div class="card-body">
+        {#if loading}
+          <div class="space-y-2.5">{#each [1, 2, 3] as i (i)}<div class="skeleton h-7"></div>{/each}</div>
+        {:else}
+          <dl class="divide-y divide-line text-sm">
+            <div class="flex items-center justify-between py-2 first:pt-0">
+              <dt class="flex items-center gap-1.5 text-muted"><Activity size={14} /> Version</dt>
+              <dd><code class="code">{version}</code></dd>
+            </div>
+            <div class="flex items-center justify-between py-2">
+              <dt class="flex items-center gap-1.5 text-muted"><Clock size={14} /> Uptime</dt>
+              <dd class="text-fg tabular-nums">{uptimeStr()}</dd>
+            </div>
+            <div class="flex items-center justify-between py-2 last:pb-0">
+              <dt class="flex items-center gap-1.5 text-muted"><Cpu size={14} /> Backend</dt>
+              <dd class="text-fg">Go + Echo + SQLite</dd>
+            </div>
+          </dl>
+          {#if diskTotal > 0}
+            {@const pct = diskPct()}
+            <div class="mt-4 border-t border-line pt-4">
+              <div class="mb-1.5 flex items-center justify-between text-xs">
+                <span class="text-subtle">Disk usage</span>
+                <span class="text-muted tabular-nums">{fmtBytes(diskUsed)} / {fmtBytes(diskTotal)} ({pct}%)</span>
+              </div>
+              <div class="progress">
+                <div class="progress-bar {pct >= 90 ? 'bg-danger' : pct >= 70 ? 'bg-warning' : 'bg-success'}" style="width: {pct}%"></div>
+              </div>
+            </div>
+          {/if}
+        {/if}
+      </div>
+    </section>
+
+    <!-- Danger zone (admin only) -->
     {#if isAdmin}
-      <div class="bg-red-500/[0.03] border border-red-500/20 rounded-xl p-6">
-        <h3 class="text-sm font-semibold text-red-400 mb-4 flex items-center gap-2">
-          <span class="w-6 h-6 rounded-lg bg-red-500/10 flex items-center justify-center"><AlertTriangle size={14} /></span>
-          Danger Zone
-        </h3>
-        <div class="space-y-3">
-          <div class="flex items-center justify-between gap-4">
+      <section class="card border-danger/30">
+        <div class="card-header">
+          <h2 class="card-title flex items-center gap-2 text-danger"><AlertTriangle size={16} /> Danger zone</h2>
+        </div>
+        <div class="card-body divide-y divide-line py-0">
+          <div class="flex items-center justify-between gap-4 py-4">
             <div>
-              <p class="text-sm text-slate-300">Clear Cache</p>
-              <p class="text-xs text-slate-500">Flush all cached data and rebuild.</p>
+              <p class="text-sm text-fg">Clear cache</p>
+              <p class="text-xs text-subtle">Flush all cached data and rebuild. Not available yet — the API has no endpoint for this.</p>
             </div>
-            <button onclick={clearCache} disabled={clearingCache} class="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-400/20 hover:bg-red-500/20 disabled:opacity-50 transition">
-              {#if clearingCache}<span class="w-3 h-3 border border-red-400/40 border-t-red-400 rounded-full animate-spin"></span>{:else}<Trash2 size={12} />{/if}
-              Clear
-            </button>
+            <button disabled class="btn btn-danger-ghost btn-sm" title="Not available"><Trash2 size={14} /> Clear</button>
           </div>
-          <div class="border-t border-red-500/10"></div>
-          <div class="flex items-center justify-between gap-4">
+          <div class="flex items-center justify-between gap-4 py-4">
             <div>
-              <p class="text-sm text-slate-300">Reset Audit Logs</p>
-              <p class="text-xs text-slate-500">Permanently delete all audit log entries.</p>
+              <p class="text-sm text-fg">Reset audit logs</p>
+              <p class="text-xs text-subtle">Permanently delete all audit log entries. Not available yet — the API has no endpoint for this.</p>
             </div>
-            <button onclick={resetAuditLogs} disabled={clearingAudit} class="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-400/20 hover:bg-red-500/20 disabled:opacity-50 transition">
-              {#if clearingAudit}<span class="w-3 h-3 border border-red-400/40 border-t-red-400 rounded-full animate-spin"></span>{:else}<Database size={12} />{/if}
-              Clear
-            </button>
+            <button disabled class="btn btn-danger-ghost btn-sm" title="Not available"><Database size={14} /> Clear</button>
           </div>
         </div>
-      </div>
+      </section>
     {/if}
   </div>
 </DashboardLayout>
