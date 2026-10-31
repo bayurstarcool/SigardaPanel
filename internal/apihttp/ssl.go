@@ -12,7 +12,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
-	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/store"
@@ -93,8 +92,9 @@ func (h *sslHandler) issue(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	// Issuing/renewing certificates changes the site: needs write permission.
+	if err := requireSitePermission(c.Request().Context(), h.store, sess, site, sitePermWrite); err != nil {
+		return err
 	}
 
 	// Resolve email: body override > site owner email > current user email > fallback
@@ -177,8 +177,9 @@ func (h *sslHandler) renew(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	// Issuing/renewing certificates changes the site: needs write permission.
+	if err := requireSitePermission(c.Request().Context(), h.store, sess, site, sitePermWrite); err != nil {
+		return err
 	}
 
 	payload := fmt.Sprintf(`{"site_id":%d,"domain":%q}`, site.ID, site.Domain)
@@ -273,22 +274,9 @@ func (h *sslHandler) renewAll(c echo.Context) error {
 	})
 }
 
+// canAccess reports whether the session can read the site (any assignment).
 func (h *sslHandler) canAccess(ctx context.Context, sess *store.Session, site *store.Site) bool {
-	if sess == nil {
-		return false
-	}
-	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
-	if user == nil {
-		return false
-	}
-	if user.Role == auth.RoleSuperAdmin {
-		return true
-	}
-	if site.OwnerID.Valid && site.OwnerID.Int64 == sess.UserID {
-		return true
-	}
-	hasAccess, _ := h.store.UserSites.HasAccess(ctx, sess.UserID, site.ID)
-	return hasAccess
+	return hasSitePermission(ctx, h.store, sess, site, sitePermRead)
 }
 
 func nullStringValue(n sql.NullString) any {

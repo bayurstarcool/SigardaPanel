@@ -316,7 +316,7 @@ func (s *SQLiteJobStore) CleanupStuckRunning(ctx context.Context, staleAfter tim
 	cutoff := time.Now().Add(-staleAfter)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE jobs SET status = 'failed', error = 'cleanup: stuck in running state', updated_at = CURRENT_TIMESTAMP
-		 WHERE status = 'running' AND updated_at < ?`, cutoff)
+		 WHERE status = 'running' AND updated_at < ?`, cutoff.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return 0, fmt.Errorf("cleanup stuck jobs: %w", err)
 	}

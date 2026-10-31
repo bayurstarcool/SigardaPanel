@@ -22,7 +22,11 @@ func newTwoFactorHandler(s *store.Store) *TwoFactorHandler {
 
 // setup2FA generates a TOTP secret and returns the provisioning URI + QR code URL.
 func (h *TwoFactorHandler) setup2FA(c echo.Context) error {
-	userID := c.Get("user_id").(int64)
+	userID, ok := c.Get("user_id").(int64)
+	if !ok || userID == 0 {
+		// Service tokens have no user behind them; 2FA is a per-user setting.
+		return echo.NewHTTPError(http.StatusForbidden, "2FA requires a user session")
+	}
 
 	// Generate a random secret
 	secret := make([]byte, 20)
@@ -33,9 +37,18 @@ func (h *TwoFactorHandler) setup2FA(c echo.Context) error {
 	}
 	secretBase32 := base32.StdEncoding.EncodeToString(secret)
 
+	// Re-running setup while 2FA is on would overwrite the live secret without
+	// proving possession of the current one (locking the user out, or letting a
+	// hijacked session replace the second factor). Disable first.
+	if enabled, err := h.store.TwoFactor.IsTOTPEnabled(c.Request().Context(), userID); err == nil && enabled {
+		return c.JSON(http.StatusConflict, map[string]any{
+			"error": "2FA is already enabled; disable it before setting it up again",
+		})
+	}
+
 	// Get user for display name
 	user, err := h.store.Users.GetByID(c.Request().Context(), userID)
-	if err != nil {
+	if err != nil || user == nil {
 		return c.JSON(http.StatusNotFound, map[string]any{
 			"error": "user not found",
 		})
@@ -73,7 +86,11 @@ func (h *TwoFactorHandler) setup2FA(c echo.Context) error {
 
 // enable2FA verifies a TOTP code and enables 2FA for the user.
 func (h *TwoFactorHandler) enable2FA(c echo.Context) error {
-	userID := c.Get("user_id").(int64)
+	userID, ok := c.Get("user_id").(int64)
+	if !ok || userID == 0 {
+		// Service tokens have no user behind them; 2FA is a per-user setting.
+		return echo.NewHTTPError(http.StatusForbidden, "2FA requires a user session")
+	}
 
 	var body struct {
 		Code string `json:"code"`
@@ -121,7 +138,11 @@ func (h *TwoFactorHandler) enable2FA(c echo.Context) error {
 
 // disable2FA verifies a TOTP code and disables 2FA for the user.
 func (h *TwoFactorHandler) disable2FA(c echo.Context) error {
-	userID := c.Get("user_id").(int64)
+	userID, ok := c.Get("user_id").(int64)
+	if !ok || userID == 0 {
+		// Service tokens have no user behind them; 2FA is a per-user setting.
+		return echo.NewHTTPError(http.StatusForbidden, "2FA requires a user session")
+	}
 
 	var body struct {
 		Code string `json:"code"`
@@ -169,7 +190,11 @@ func (h *TwoFactorHandler) disable2FA(c echo.Context) error {
 
 // verify2FA verifies a TOTP code (used during login).
 func (h *TwoFactorHandler) verify2FA(c echo.Context) error {
-	userID := c.Get("user_id").(int64)
+	userID, ok := c.Get("user_id").(int64)
+	if !ok || userID == 0 {
+		// Service tokens have no user behind them; 2FA is a per-user setting.
+		return echo.NewHTTPError(http.StatusForbidden, "2FA requires a user session")
+	}
 
 	var body struct {
 		Code string `json:"code"`
@@ -209,7 +234,11 @@ func (h *TwoFactorHandler) verify2FA(c echo.Context) error {
 
 // status2FA returns the 2FA status for the current user.
 func (h *TwoFactorHandler) status2FA(c echo.Context) error {
-	userID := c.Get("user_id").(int64)
+	userID, ok := c.Get("user_id").(int64)
+	if !ok || userID == 0 {
+		// Service tokens have no user behind them; 2FA is a per-user setting.
+		return echo.NewHTTPError(http.StatusForbidden, "2FA requires a user session")
+	}
 
 	enabled, err := h.store.TwoFactor.IsTOTPEnabled(c.Request().Context(), userID)
 	if err != nil {
@@ -228,7 +257,11 @@ func (h *TwoFactorHandler) status2FA(c echo.Context) error {
 
 // generateRecoveryCodes generates backup recovery codes for 2FA.
 func (h *TwoFactorHandler) generateRecoveryCodes(c echo.Context) error {
-	userID := c.Get("user_id").(int64)
+	userID, ok := c.Get("user_id").(int64)
+	if !ok || userID == 0 {
+		// Service tokens have no user behind them; 2FA is a per-user setting.
+		return echo.NewHTTPError(http.StatusForbidden, "2FA requires a user session")
+	}
 
 	// Check if 2FA is enabled
 	enabled, err := h.store.TwoFactor.IsTOTPEnabled(c.Request().Context(), userID)

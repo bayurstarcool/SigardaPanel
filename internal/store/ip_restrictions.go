@@ -21,7 +21,7 @@ type IPRestriction struct {
 type IPRestrictionRepository interface {
 	Create(ctx context.Context, restriction *IPRestriction) error
 	List(ctx context.Context, siteID int64) ([]IPRestriction, error)
-	Delete(ctx context.Context, id int64) error
+	Delete(ctx context.Context, siteID, id int64) error
 	DeleteBySite(ctx context.Context, siteID int64) error
 	IsAllowed(ctx context.Context, siteID int64, ip string) (bool, error)
 }
@@ -70,11 +70,16 @@ func (s *SQLiteIPRestrictionStore) List(ctx context.Context, siteID int64) ([]IP
 	return restrictions, rows.Err()
 }
 
-// Delete removes an IP restriction rule.
-func (s *SQLiteIPRestrictionStore) Delete(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM ip_restrictions WHERE id = ?`, id)
+// Delete removes an IP restriction rule belonging to siteID. It returns
+// sql.ErrNoRows when no rule with that id exists on that site, so a rule of
+// one site can never be deleted through another site's URL.
+func (s *SQLiteIPRestrictionStore) Delete(ctx context.Context, siteID, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM ip_restrictions WHERE id = ? AND site_id = ?`, id, siteID)
 	if err != nil {
 		return fmt.Errorf("delete ip restriction: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
 	}
 	return nil
 }

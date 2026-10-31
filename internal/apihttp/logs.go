@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v4"
-	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -219,21 +218,9 @@ func parseNginxTime(s string) string {
 	return s
 }
 
+// canAccess reports whether the session may read the site's logs: owner,
+// super_admin or any user_sites assignment (read and up). Being a non-super
+// admin does not grant access to other tenants' logs.
 func (h *logsHandler) canAccess(ctx context.Context, sess *store.Session, site *store.Site) bool {
-	if sess == nil {
-		return false
-	}
-	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
-	if user == nil {
-		return false
-	}
-	if auth.HasRole(user.Role, auth.RoleAdmin) {
-		return true
-	}
-	if site.OwnerID.Valid && site.OwnerID.Int64 == sess.UserID {
-		return true
-	}
-	// Check user_sites assignment
-	hasAccess, _ := h.store.UserSites.HasAccess(ctx, sess.UserID, site.ID)
-	return hasAccess
+	return hasSitePermission(ctx, h.store, sess, site, sitePermRead)
 }

@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"sigardapanel/internal/audit"
+	"sigardapanel/internal/auth"
 	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/member"
@@ -30,6 +32,14 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 		echo.TrustLinkLocal(false),
 		echo.TrustPrivateNet(false),
 	)
+	// A panic in any handler must turn into a 500 for that request, not take
+	// down the API process (and the job worker and scheduler running in it).
+	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
+		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
+			slog.Error("api: recovered from handler panic", "route", c.Path(), "error", err, "stack", string(stack))
+			return err
+		},
+	}))
 	e.Use(middleware.BodyLimit("32M"))
 
 	// Request ID middleware — Echo built-in
@@ -86,21 +96,23 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/auth/logout", ah.logout, RequireAuth(s))
 	e.POST("/api/v1/auth/stop-impersonation", ah.stopImpersonation, RequireAuth(s), RequireUserSession)
 
-	// User management (admin only)
-	e.GET("/api/v1/users", uh.list, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/users", uh.create, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/users/:id", uh.delete, RequireAuth(s), RequireAdmin(s))
-	e.PATCH("/api/v1/users/:id", uh.update, RequireAuth(s), RequireAdmin(s))
+	// User management (admin only). Real user sessions only: a service token
+	// carries no user, so it must not be able to manage (super) admins.
+	e.GET("/api/v1/users", uh.list, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.POST("/api/v1/users", uh.create, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.DELETE("/api/v1/users/:id", uh.delete, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.PATCH("/api/v1/users/:id", uh.update, RequireAuth(s), RequireUserSession, RequireAdmin(s))
 
 	// User usage/quota (authenticated users can check their own)
-	e.GET("/api/v1/users/:id/usage", uh.usage, RequireAuth(s))
+	e.GET("/api/v1/users/:id/usage", uh.usage, RequireAuth(s), RequireUserSession)
 
-	// User ↔ Site access mappings (admin only)
-	e.GET("/api/v1/users/:id/sites", uh.listUserSites, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/users/:id/sites", uh.assignUserSite, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/users/:id/sites/:siteId", uh.unassignUserSite, RequireAuth(s), RequireAdmin(s))
-	e.PATCH("/api/v1/users/:id/sites/:siteId", uh.updateSitePermission, RequireAuth(s), RequireAdmin(s))
-	e.GET("/api/v1/sites/:id/users", uh.listSiteUsers, RequireAuth(s), RequireAdmin(s))
+	// User ↔ Site access mappings (admin only; assign/unassign/permission
+	// changes additionally require site owner or super_admin)
+	e.GET("/api/v1/users/:id/sites", uh.listUserSites, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.POST("/api/v1/users/:id/sites", uh.assignUserSite, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.DELETE("/api/v1/users/:id/sites/:siteId", uh.unassignUserSite, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.PATCH("/api/v1/users/:id/sites/:siteId", uh.updateSitePermission, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.GET("/api/v1/sites/:id/users", uh.listSiteUsers, RequireAuth(s), RequireUserSession, RequireAdmin(s))
 
 	// Impersonation (admin only)
 	e.POST("/api/v1/users/:id/impersonate", ah.impersonate, RequireAuth(s), RequireAdmin(s), RequireUserSession)
@@ -140,7 +152,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/jobs/:id/cancel", jh.cancel, RequireAuth(s))
 
 	jobLogH := newJobLogHandler(s)
-	e.POST("/api/v1/jobs/:id/logs", jobLogH.append, RequireAuth(s))
+	// Appending log lines is for the worker side (admin-scoped service
+	// tokens) and admins only.
+	e.POST("/api/v1/jobs/:id/logs", jobLogH.append, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/jobs/:id/logs", jobLogH.getSince, RequireAuth(s))
 
 	sslH := newSSLHandler(s, auditRec)
@@ -248,8 +262,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.PUT("/api/v1/settings/retention", setRetention(db), RequireAuth(s), RequireAdmin(s))
 
 	metricH := newMetricHandler(s)
-	// POST metrics — accepts both user sessions AND service tokens
-	e.POST("/api/v1/servers/:id/metrics", metricH.ingest, RequireAuth(s))
+	// POST metrics — admins and admin-scoped service tokens only
+	e.POST("/api/v1/servers/:id/metrics", metricH.ingest, RequireAuth(s), RequireAdmin(s))
 	// GET metrics = user-facing dashboard
 	e.GET("/api/v1/servers/:id/metrics/latest", metricH.latest, RequireAuth(s))
 	e.GET("/api/v1/servers/:id/metrics", metricH.range_, RequireAuth(s))
@@ -304,8 +318,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// Database server management
 	dbServerH := newDBServerHandler(s, auditRec)
-	e.GET("/api/v1/database-server", dbServerH.getDBServer, RequireAuth(s))
-	e.POST("/api/v1/database-server/import", dbServerH.importDatabases, RequireAuth(s))
+	// Server-wide MySQL management: super_admin only.
+	e.GET("/api/v1/database-server", dbServerH.getDBServer, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/database-server/import", dbServerH.importDatabases, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
 
 	// Audit log endpoint (admin only)
 	auditH := audit.NewHandler(s.AuditLogs, RequireAdmin(s))
@@ -397,6 +412,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// ─── PM2 Process Management ──
 	e.POST("/api/v1/servers/:id/pm2/manage", stackH.pm2Manage, RequireAuth(s), RequireAdmin(s))
 
+	// ─── Mail server (proxied to the agent) ──
+	e.POST("/api/v1/servers/:id/email/manage", stackH.emailManage, RequireAuth(s), RequireAdmin(s))
+
 	// ─── Redis Management ──
 	e.GET("/api/v1/servers/:id/redis/stats", stackH.redisStats, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/servers/:id/redis/flush", stackH.redisFlush, RequireAuth(s), RequireAdmin(s))
@@ -441,7 +459,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.PATCH("/api/v1/orders/:id", orderH.updateOrderStatus, RequireAuth(s), RequireAdmin(s))
 
 	// ─── Assign Plan to User ──────────────────────────────────
-	e.POST("/api/v1/users/:id/assign-plan", uh.assignPlan, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/users/:id/assign-plan", uh.assignPlan, RequireAuth(s), RequireUserSession, RequireAdmin(s))
 
 	// Example: feature-gated route (uncomment when ready to gate specific endpoints)
 	// e.GET("/api/v1/servers", sh.list, RequireAuth(s), RequireFeature(s, "multi_server"))

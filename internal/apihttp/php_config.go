@@ -56,7 +56,7 @@ func (h *siteHandler) getPHPConfig(c echo.Context) error {
 // updatePHPConfig sets the per-site PHP version and custom php.ini directives,
 // then regenerates the nginx vhost. Does NOT touch global PHP-FPM config.
 func (h *siteHandler) updatePHPConfig(c echo.Context) error {
-	site, err := h.getSiteForUser(c)
+	site, err := h.getSiteForUserPerm(c, sitePermWrite)
 	if err != nil {
 		return err
 	}

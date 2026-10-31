@@ -107,6 +107,10 @@ func (h *metricHandler) latest(c echo.Context) error {
 	})
 }
 
+// metricRangeMaxPoints is the most points a range query returns: one point
+// per 2 minutes for 24h, per 14 minutes for 7d.
+const metricRangeMaxPoints = 720
+
 func (h *metricHandler) range_(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	serverID, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -125,8 +129,10 @@ func (h *metricHandler) range_(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid range (e.g. 1h, 24h, 7d)")
 	}
 
-	since := time.Now().Add(-duration)
-	metrics, err := h.store.Metrics.GetRange(c.Request().Context(), serverID, since, 1000)
+	// Spread the points over the whole requested range (bucketed averages,
+	// at most metricRangeMaxPoints), oldest first so charts read left→right.
+	now := time.Now()
+	metrics, err := h.store.Metrics.GetRangeBucketed(c.Request().Context(), serverID, now.Add(-duration), now, metricRangeMaxPoints)
 	if err != nil {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")

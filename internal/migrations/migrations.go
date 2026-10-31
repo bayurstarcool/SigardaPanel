@@ -91,6 +91,7 @@ var AllMigrations = []Migration{
 	CloudflareConfigPerUserSchema,
 	SecurityBaselineSchema,
 	RepairBackupsSchema,
+	BackupStartedAtSchema,
 }
 
 func Down(db *sql.DB) error {

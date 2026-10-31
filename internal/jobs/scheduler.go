@@ -87,6 +87,10 @@ func runTick(ctx context.Context, s *store.Store) {
 		slog.Info("scheduler: scrubbed sensitive payloads from finished jobs", "count", n)
 	}
 
+	// Metrics retention (hourly): samples arrive every minute per server and
+	// were never deleted. The UI shows at most 7 days.
+	runMetricsRetention(ctx, s, time.Now())
+
 	// SSL auto-renewal check
 	runSSLAutoRenew(ctx, s)
 }
@@ -641,5 +645,23 @@ func runCleanup(ctx context.Context, s *store.Store) {
 		slog.Warn("scheduler: cleanup orphaned pending backups failed", "error", err)
 	} else if n > 0 {
 		slog.Info("scheduler: cleaned up orphaned pending backups", "count", n)
+	}
+}
+
+// metricsRetention is how long server metrics are kept (UI max range is 7d).
+const metricsRetention = 8 * 24 * time.Hour
+
+var lastMetricsPrune time.Time
+
+// runMetricsRetention prunes old metrics at most once an hour.
+func runMetricsRetention(ctx context.Context, s *store.Store, now time.Time) {
+	if now.Sub(lastMetricsPrune) < time.Hour {
+		return
+	}
+	lastMetricsPrune = now
+	if n, err := s.PruneMetrics(ctx, metricsRetention); err != nil {
+		slog.Warn("scheduler: prune metrics failed", "error", err)
+	} else if n > 0 {
+		slog.Info("scheduler: pruned old metrics", "rows", n)
 	}
 }

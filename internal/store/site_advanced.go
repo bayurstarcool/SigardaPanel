@@ -100,13 +100,13 @@ func (s *varnishStore) Upsert(ctx context.Context, v *SiteVarnish) error {
 // ─── Security ───────────────────────────────────────────────
 
 type SiteSecurity struct {
-	ID                 int64     `json:"id"`
-	SiteID             int64     `json:"site_id"`
-	BasicAuthEnabled   bool      `json:"basic_auth_enabled"`
-	BasicAuthUsername  string    `json:"basic_auth_username"`
-	BasicAuthPassword  string    `json:"basic_auth_password"`
-	BlockedIPs         []string  `json:"blocked_ips"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                int64     `json:"id"`
+	SiteID            int64     `json:"site_id"`
+	BasicAuthEnabled  bool      `json:"basic_auth_enabled"`
+	BasicAuthUsername string    `json:"basic_auth_username"`
+	BasicAuthPassword string    `json:"basic_auth_password"`
+	BlockedIPs        []string  `json:"blocked_ips"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type SecurityRepository interface {
@@ -182,7 +182,9 @@ type SSHRepository interface {
 	ListBySiteID(ctx context.Context, siteID int64) ([]SiteSSHUser, error)
 	ListAll(ctx context.Context) ([]SiteSSHUser, error)
 	Create(ctx context.Context, u *SiteSSHUser) error
-	Delete(ctx context.Context, id int64) error
+	// Delete removes the SSH/FTP user id of siteID; sql.ErrNoRows if the
+	// user does not belong to that site.
+	Delete(ctx context.Context, siteID, id int64) error
 }
 
 type sshStore struct{ db *sql.DB }
@@ -257,9 +259,15 @@ func (s *sshStore) Create(ctx context.Context, u *SiteSSHUser) error {
 	return nil
 }
 
-func (s *sshStore) Delete(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM site_ssh_ftp WHERE id = ?`, id)
-	return err
+func (s *sshStore) Delete(ctx context.Context, siteID, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM site_ssh_ftp WHERE id = ? AND site_id = ?`, id, siteID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // ─── Cron Jobs ──────────────────────────────────────────────
@@ -275,7 +283,9 @@ type SiteCronJob struct {
 type CronRepository interface {
 	ListBySiteID(ctx context.Context, siteID int64) ([]SiteCronJob, error)
 	Create(ctx context.Context, j *SiteCronJob) error
-	Delete(ctx context.Context, id int64) error
+	// Delete removes cron job id of siteID; sql.ErrNoRows if the job does
+	// not belong to that site.
+	Delete(ctx context.Context, siteID, id int64) error
 }
 
 type cronStore struct{ db *sql.DB }
@@ -314,7 +324,13 @@ func (s *cronStore) Create(ctx context.Context, j *SiteCronJob) error {
 	return nil
 }
 
-func (s *cronStore) Delete(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM site_cron_jobs WHERE id = ?`, id)
-	return err
+func (s *cronStore) Delete(ctx context.Context, siteID, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM site_cron_jobs WHERE id = ? AND site_id = ?`, id, siteID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }

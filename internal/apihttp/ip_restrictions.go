@@ -1,14 +1,15 @@
 package apihttp
 
 import (
-	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/labstack/echo/v4"
-	"sigardapanel/internal/auth"
 	"sigardapanel/internal/store"
 )
 
@@ -22,22 +23,19 @@ func newIPRestrictionHandler(s *store.Store) *ipRestrictionHandler {
 	return &ipRestrictionHandler{store: s}
 }
 
-func (h *ipRestrictionHandler) canAccess(ctx context.Context, sess *store.Session, site *store.Site) bool {
-	if sess == nil || site == nil {
-		return false
+// checkSite enforces the site permission model: listing needs read, creating
+// or deleting rules needs write. Returns a JSON error response (in this
+// handler's response format). ok is false when the request was refused and
+// the response has already been written.
+func (h *ipRestrictionHandler) checkSite(c echo.Context, site *store.Site, required string) (ok bool, err error) {
+	if err := requireSitePermission(c.Request().Context(), h.store, sessionFromEcho(c), site, required); err != nil {
+		code, msg := http.StatusNotFound, "site not found"
+		if he, isHTTP := err.(*echo.HTTPError); isHTTP {
+			code, msg = he.Code, fmt.Sprint(he.Message)
+		}
+		return false, c.JSON(code, map[string]string{"error": msg})
 	}
-	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
-	if user == nil {
-		return false
-	}
-	if user.Role == auth.RoleSuperAdmin {
-		return true
-	}
-	if site.OwnerID.Valid && site.OwnerID.Int64 == sess.UserID {
-		return true
-	}
-	hasAccess, _ := h.store.UserSites.HasAccess(ctx, sess.UserID, site.ID)
-	return hasAccess
+	return true, nil
 }
 
 // list returns all IP restrictions for a site.
@@ -51,9 +49,8 @@ func (h *ipRestrictionHandler) list(c echo.Context) error {
 	if err != nil || site == nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
 	}
-	sess := sessionFromEcho(c)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
+	if ok, err := h.checkSite(c, site, sitePermRead); !ok {
+		return err
 	}
 
 	restrictions, err := h.store.IPRestrictions.List(c.Request().Context(), siteID)
@@ -77,9 +74,8 @@ func (h *ipRestrictionHandler) create(c echo.Context) error {
 	if err != nil || site == nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
 	}
-	sess := sessionFromEcho(c)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
+	if ok, err := h.checkSite(c, site, sitePermWrite); !ok {
+		return err
 	}
 
 	var body struct {
@@ -140,12 +136,14 @@ func (h *ipRestrictionHandler) delete(c echo.Context) error {
 	if err != nil || site == nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
 	}
-	sess := sessionFromEcho(c)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "site not found"})
+	if ok, err := h.checkSite(c, site, sitePermWrite); !ok {
+		return err
 	}
 
-	if err := h.store.IPRestrictions.Delete(c.Request().Context(), id); err != nil {
+	if err := h.store.IPRestrictions.Delete(c.Request().Context(), siteID, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "ip restriction not found"})
+		}
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 

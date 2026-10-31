@@ -638,6 +638,32 @@ func (h *stackHandler) pm2Manage(c echo.Context) error {
 	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
 }
 
+// emailManage proxies mail-server actions (status, list, install, …) to the
+// agent's /tasks/email/manage. Admin only, like pm2 and bot-blocker.
+func (h *stackHandler) emailManage(c echo.Context) error {
+	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+	server, err := h.resolveServer(c)
+	if err != nil {
+		return err
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid JSON body")
+	}
+
+	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/email/manage"
+	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	json.Unmarshal(respBody, &result)
+	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+}
+
 // dockerContainerProxy is a generic proxy for Docker container actions.
 func (h *stackHandler) dockerContainerProxy(c echo.Context, action string) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)

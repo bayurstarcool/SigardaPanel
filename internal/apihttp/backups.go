@@ -15,7 +15,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
-	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/store"
@@ -65,8 +64,9 @@ func (h *backupHandler) create(c echo.Context) error {
 	if site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	// Creating a backup is a site mutation: needs write permission.
+	if err := requireSitePermission(c.Request().Context(), h.store, sess, site, sitePermWrite); err != nil {
+		return err
 	}
 
 	// Prevent duplicate backups — check if one is already running
@@ -148,8 +148,11 @@ func (h *backupHandler) list(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusNotFound, "site not found")
 		}
 		backups, err = h.store.Backups.ListBySite(c.Request().Context(), siteID, 100, 0)
-	} else {
+	} else if isSessionSuperAdmin(c.Request().Context(), h.store, sess) {
 		backups, err = h.store.Backups.ListAll(c.Request().Context(), 100, 0)
+	} else if sess != nil && sess.UserID != 0 {
+		// Everyone else only sees backups of sites they own or are assigned to.
+		backups, err = h.store.ListBackupsForUser(c.Request().Context(), sess.UserID, 100, 0)
 	}
 	if err != nil {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
@@ -193,8 +196,8 @@ func (h *backupHandler) restore(c echo.Context) error {
 	if site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "backup not found")
+	if err := h.requireBackupAdmin(c.Request().Context(), sess, site); err != nil {
+		return err
 	}
 
 	if backup.Status != "completed" {
@@ -254,22 +257,28 @@ func (h *backupHandler) restore(c echo.Context) error {
 	})
 }
 
+// canAccess reports whether the session can read the site (any assignment).
 func (h *backupHandler) canAccess(ctx context.Context, sess *store.Session, site *store.Site) bool {
-	if sess == nil {
-		return false
+	return hasSitePermission(ctx, h.store, sess, site, sitePermRead)
+}
+
+// canModify reports whether the session may create backups for the site
+// (owner, super_admin or a write/admin assignee).
+func (h *backupHandler) canModify(ctx context.Context, sess *store.Session, site *store.Site) bool {
+	return hasSitePermission(ctx, h.store, sess, site, sitePermWrite)
+}
+
+// requireBackupAdmin guards destructive backup operations (restore, delete):
+// only the site owner, a super_admin or an 'admin' assignee may run them.
+// Callers who cannot see the site get 404, read/write assignees get 403.
+func (h *backupHandler) requireBackupAdmin(ctx context.Context, sess *store.Session, site *store.Site) error {
+	if hasSitePermission(ctx, h.store, sess, site, sitePermAdmin) {
+		return nil
 	}
-	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
-	if user == nil {
-		return false
+	if h.canAccess(ctx, sess, site) {
+		return echo.NewHTTPError(http.StatusForbidden, "insufficient site permission")
 	}
-	if user.Role == auth.RoleSuperAdmin {
-		return true
-	}
-	if site.OwnerID.Valid && site.OwnerID.Int64 == sess.UserID {
-		return true
-	}
-	hasAccess, _ := h.store.UserSites.HasAccess(ctx, sess.UserID, site.ID)
-	return hasAccess
+	return echo.NewHTTPError(http.StatusNotFound, "backup not found")
 }
 
 // ─── Bulk Create handler ──────────────────────────────────
@@ -347,7 +356,7 @@ func (h *backupHandler) bulkCreate(c echo.Context) error {
 			failedCount++
 			continue
 		}
-		if !h.canAccess(c.Request().Context(), sess, site) {
+		if !h.canModify(c.Request().Context(), sess, site) {
 			results = append(results, bulkResult{SiteID: siteID, Error: "access denied"})
 			failedCount++
 			continue
@@ -663,8 +672,8 @@ func (h *backupHandler) delete(c echo.Context) error {
 	if site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "backup not found")
+	if err := h.requireBackupAdmin(c.Request().Context(), sess, site); err != nil {
+		return err
 	}
 
 	// Clean up S3 object if the backup was stored on S3. Use the aws CLI to
@@ -739,8 +748,9 @@ func (h *backupHandler) createDatabaseBackup(c echo.Context) error {
 	if site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	// Creating a backup is a site mutation: needs write permission.
+	if err := requireSitePermission(c.Request().Context(), h.store, sess, site, sitePermWrite); err != nil {
+		return err
 	}
 
 	var body struct {

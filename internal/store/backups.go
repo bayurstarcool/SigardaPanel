@@ -76,24 +76,39 @@ func (s *SQLiteBackupStore) Create(ctx context.Context, b *Backup) error {
 	if b.BackupType == "" {
 		b.BackupType = "files"
 	}
-	// Prevent duplicate: only insert if no pending/running backup exists for this site
+	// Prevent duplicate file backups: only insert if no pending/running file
+	// backup exists for this site. Database backups are created one per
+	// database in a loop, so a per-(site, type) guard would drop every
+	// database after the first; they are not de-duplicated here.
+	var expiresAt any
+	if b.ExpiresAt.Valid {
+		expiresAt = b.ExpiresAt.Time.UTC().Format("2006-01-02 15:04:05")
+	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO backups (site_id, status, storage_type, storage_path, backup_type, progress)
-		SELECT ?, ?, ?, ?, ?, ?
-		WHERE ? NOT IN ('pending','running','archiving') OR NOT EXISTS (
+		`INSERT INTO backups (site_id, status, storage_type, storage_path, backup_type, progress, expires_at)
+		SELECT ?, ?, ?, ?, ?, ?, ?
+		WHERE ? = 'database' OR ? NOT IN ('pending','running','archiving') OR NOT EXISTS (
 			SELECT 1 FROM backups WHERE site_id = ? AND backup_type = ? AND status IN ('pending','running','archiving')
 		)`,
-		b.SiteID, b.Status, b.StorageType, b.StoragePath, b.BackupType, "", b.Status, b.SiteID, b.BackupType,
+		b.SiteID, b.Status, b.StorageType, b.StoragePath, b.BackupType, "", expiresAt,
+		b.BackupType, b.Status, b.SiteID, b.BackupType,
 	)
 	if err != nil {
 		return fmt.Errorf("insert backup: %w", err)
 	}
+	// RowsAffected, not LastInsertId: when the guarded INSERT inserts nothing,
+	// SQLite still reports the connection's previous rowid (possibly from
+	// another table), which handed out an unrelated backup's id.
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrDuplicateBackup
+	}
 	id, err := res.LastInsertId()
 	if err != nil {
 		return fmt.Errorf("last insert id: %w", err)
-	}
-	if id == 0 {
-		return ErrDuplicateBackup
 	}
 	b.ID = id
 	return nil
@@ -173,8 +188,8 @@ func (s *SQLiteBackupStore) ListAll(ctx context.Context, limit, offset int) ([]B
 // UpdateStatus updates a backup's status.
 func (s *SQLiteBackupStore) UpdateStatus(ctx context.Context, id int64, status string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE backups SET status = ? WHERE id = ?`,
-		status, id,
+		`UPDATE backups SET status = ?, started_at = CASE WHEN ? = 'running' AND started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END WHERE id = ?`,
+		status, status, id,
 	)
 	if err != nil {
 		return fmt.Errorf("update backup status: %w", err)
@@ -424,7 +439,7 @@ func (s *SQLiteBackupStore) CleanupStuckRunning(ctx context.Context, staleAfter 
 	cutoff := time.Now().Add(-staleAfter)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE backups SET status = 'failed', error = 'cleanup: stuck in running state', progress = 'failed', completed_at = CURRENT_TIMESTAMP
-		 WHERE status = 'running' AND created_at < ?`, cutoff)
+		 WHERE status = 'running' AND COALESCE(started_at, created_at) < ?`, cutoff.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return 0, fmt.Errorf("cleanup stuck backups: %w", err)
 	}
@@ -435,7 +450,13 @@ func (s *SQLiteBackupStore) CleanupStuckRunning(ctx context.Context, staleAfter 
 func (s *SQLiteBackupStore) CleanupOrphanedPending(ctx context.Context, olderThan time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-olderThan)
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM backups WHERE status = 'pending' AND created_at < ?`, cutoff)
+		`DELETE FROM backups WHERE status = 'pending' AND created_at < ?
+		   AND NOT EXISTS (
+		     SELECT 1 FROM jobs
+		      WHERE jobs.status IN ('queued','running')
+		        AND json_valid(jobs.payload)
+		        AND json_extract(jobs.payload, '$.backup_id') = backups.id
+		   )`, cutoff.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return 0, fmt.Errorf("cleanup orphaned pending backups: %w", err)
 	}

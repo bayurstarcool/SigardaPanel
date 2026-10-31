@@ -3,6 +3,7 @@ package apihttp
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -685,6 +686,9 @@ func (h *siteHandler) getSshFtp(c echo.Context) error {
 	if err != nil || site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
+	if err := requireSitePermission(c.Request().Context(), h.store, sessionFromEcho(c), site, sitePermRead); err != nil {
+		return err
+	}
 
 	users, err := h.store.SSH.ListBySiteID(c.Request().Context(), id)
 	if err != nil {
@@ -693,6 +697,12 @@ func (h *siteHandler) getSshFtp(c echo.Context) error {
 	}
 	if users == nil {
 		users = []store.SiteSSHUser{}
+	}
+	// Private keys are only served by the dedicated (write-guarded) key
+	// endpoint, never in the listing.
+	for i := range users {
+		users[i].SSHPrivateKey = ""
+		users[i].Password = ""
 	}
 
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"users": users}, RequestID: rid})
@@ -713,6 +723,9 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
 	if err != nil || site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	}
+	if err := requireSitePermission(c.Request().Context(), h.store, sess, site, sitePermWrite); err != nil {
+		return err
 	}
 
 	var body struct {
@@ -785,21 +798,21 @@ func (h *siteHandler) deleteSshFtp(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid user id")
 	}
 
-	// Get user info before deleting
-	user, err := h.store.SSH.GetByID(c.Request().Context(), sshID)
+	// The SSH user must belong to the site in the URL, and the caller needs
+	// write permission on that site.
+	user, err := h.siteSSHUser(c, sshID, sitePermWrite)
 	if err != nil {
-		slog.Error("api: request failed", "route", c.Path(), "error", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
-	}
-	if user == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "SSH user not found")
+		return err
 	}
 
 	// Deprovision Linux user (unmount, delete user, cleanup)
 	h.deprovisionSSHUser(c, user.Username, user.HomeDir)
 
 	// Remove from database
-	if err := h.store.SSH.Delete(c.Request().Context(), sshID); err != nil {
+	if err := h.store.SSH.Delete(c.Request().Context(), user.SiteID, sshID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "SSH user not found")
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -816,6 +829,33 @@ func (h *siteHandler) deleteSshFtp(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "SSH/FTP user deleted"}, RequestID: rid})
 }
 
+// siteSSHUser loads SSH/FTP user sshID, verifying it belongs to the site in
+// the :id URL parameter and that the caller holds the required permission on
+// that site. Users of other sites are reported as not found.
+func (h *siteHandler) siteSSHUser(c echo.Context, sshID int64, required string) (*store.SiteSSHUser, error) {
+	ctx := c.Request().Context()
+	siteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || siteID <= 0 {
+		return nil, echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
+	}
+	site, err := h.store.Sites.GetByID(ctx, siteID)
+	if err != nil || site == nil {
+		return nil, echo.NewHTTPError(http.StatusNotFound, "site not found")
+	}
+	if err := requireSitePermission(ctx, h.store, sessionFromEcho(c), site, required); err != nil {
+		return nil, err
+	}
+	user, err := h.store.SSH.GetByID(ctx, sshID)
+	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
+		return nil, echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
+	if user == nil || user.SiteID != siteID {
+		return nil, echo.NewHTTPError(http.StatusNotFound, "SSH user not found")
+	}
+	return user, nil
+}
+
 // getSSHPrivateKey returns the SSH private key for a given SSH/FTP user.
 // GET /api/v1/sites/:id/ssh-ftp/:ssh_id/key
 func (h *siteHandler) getSSHPrivateKey(c echo.Context) error {
@@ -825,9 +865,11 @@ func (h *siteHandler) getSSHPrivateKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid user id")
 	}
 
-	user, err := h.store.SSH.GetByID(c.Request().Context(), sshID)
-	if err != nil || user == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "SSH user not found")
+	// Downloading a private key grants shell access to the site: needs write
+	// permission (or ownership) on the site the key belongs to.
+	user, err := h.siteSSHUser(c, sshID, sitePermWrite)
+	if err != nil {
+		return err
 	}
 
 	if user.SSHPrivateKey == "" {
@@ -947,7 +989,11 @@ func (h *siteHandler) deleteCron(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
-	if err := h.store.Cron.Delete(c.Request().Context(), cronID); err != nil {
+	// Scoped to the site in the URL: a cron job of another site is not found.
+	if err := h.store.Cron.Delete(c.Request().Context(), siteID, cronID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "cron job not found")
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 

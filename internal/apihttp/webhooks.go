@@ -98,11 +98,12 @@ func (h *webhookHandler) deploy(c echo.Context) error {
 	}
 
 	job := &jobmodel.Job{
-		ServerID: sql.NullInt64{Int64: site.ServerID, Valid: true},
-		SiteID:   sql.NullInt64{Int64: site.ID, Valid: true},
-		Type:     jobmodel.TypeSiteDeploy,
-		Status:   jobmodel.StatusQueued,
-		Payload:  fmt.Sprintf(`{"site_id":%d,"repo":%q,"branch":%q}`, site.ID, site.GitRepo.String, branch),
+		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
+		SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
+		Type:        jobmodel.TypeSiteDeploy,
+		Status:      jobmodel.StatusQueued,
+		Description: fmt.Sprintf("Deploy site %s (webhook)", site.Domain),
+		Payload:     deployPayload(site, branch),
 	}
 	if err := h.store.Jobs.Create(c.Request().Context(), job); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")

@@ -16,47 +16,50 @@ import (
 
 // Site represents a website / application deployed on a server.
 type Site struct {
-	ID            int64
-	ServerID      int64
-	Name          string
-	Domain        string
-	Runtime       string
-	RootPath      string
-	Status        string
-	OwnerID       sql.NullInt64
-	SSLStatus     sql.NullString
-	SSLIssuer     sql.NullString
-	SSLExpiresAt  sql.NullTime
-	SSLLastCheck  sql.NullTime
-	GitRepo       sql.NullString
-	GitBranch     sql.NullString
-	GitCommit     sql.NullString
-	DeployKey     sql.NullString
-	WebhookSecret sql.NullString
-	ManagedBy     sql.NullString
-	SystemUser    sql.NullString
-	ConfFile      sql.NullString
-	ProxyPassURL  sql.NullString
-	AppPort      sql.NullInt64
-	AppCommand   sql.NullString
-	AppStatus    sql.NullString
-	AppMemoryMax sql.NullInt64
-	PHPVersion      sql.NullString
-	PHPIni          sql.NullString
+	ID               int64
+	ServerID         int64
+	Name             string
+	Domain           string
+	Runtime          string
+	RootPath         string
+	Status           string
+	OwnerID          sql.NullInt64
+	SSLStatus        sql.NullString
+	SSLIssuer        sql.NullString
+	SSLExpiresAt     sql.NullTime
+	SSLLastCheck     sql.NullTime
+	GitRepo          sql.NullString
+	GitBranch        sql.NullString
+	GitCommit        sql.NullString
+	DeployKey        sql.NullString
+	WebhookSecret    sql.NullString
+	ManagedBy        sql.NullString
+	SystemUser       sql.NullString
+	ConfFile         sql.NullString
+	ProxyPassURL     sql.NullString
+	AppPort          sql.NullInt64
+	AppCommand       sql.NullString
+	AppStatus        sql.NullString
+	AppMemoryMax     sql.NullInt64
+	PHPVersion       sql.NullString
+	PHPIni           sql.NullString
 	BackupProviderID sql.NullInt64
-	CreatedAt       time.Time
-	UpdatedAt     time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // SiteListFilter provides filtering and pagination for List.
 type SiteListFilter struct {
 	ServerID int64
 	OwnerID  int64
-	Runtime  string
-	Status   string
-	Search   string
-	Limit    int
-	Offset   int
+	// AccessibleTo limits results to sites the user owns or is assigned to
+	// via user_sites (0 = no restriction).
+	AccessibleTo int64
+	Runtime      string
+	Status       string
+	Search       string
+	Limit        int
+	Offset       int
 }
 
 // SiteRepository defines site persistence operations.
@@ -166,6 +169,10 @@ func (s *SQLiteSiteStore) List(ctx context.Context, filter SiteListFilter) ([]Si
 		query += ` AND owner_id = ?`
 		args = append(args, filter.OwnerID)
 	}
+	if filter.AccessibleTo > 0 {
+		query += ` AND (owner_id = ? OR id IN (SELECT site_id FROM user_sites WHERE user_id = ?))`
+		args = append(args, filter.AccessibleTo, filter.AccessibleTo)
+	}
 	if filter.Runtime != "" {
 		query += ` AND runtime = ?`
 		args = append(args, filter.Runtime)
@@ -196,8 +203,8 @@ func (s *SQLiteSiteStore) List(ctx context.Context, filter SiteListFilter) ([]Si
 			&site.SSLStatus, &site.SSLIssuer, &site.SSLExpiresAt, &site.SSLLastCheck,
 			&site.GitRepo, &site.GitBranch, &site.GitCommit, &site.DeployKey, &site.WebhookSecret,
 			&site.ManagedBy, &site.SystemUser, &site.ConfFile, &site.ProxyPassURL, &site.AppPort, &site.AppCommand, &site.AppStatus, &site.AppMemoryMax, &site.PHPVersion, &site.PHPIni, &site.BackupProviderID,
- &site.CreatedAt, &site.UpdatedAt,
- ); err != nil {
+			&site.CreatedAt, &site.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan site: %w", err)
 		}
 		out = append(out, site)
@@ -220,6 +227,10 @@ func (s *SQLiteSiteStore) Count(ctx context.Context, filter SiteListFilter) (int
 	if filter.OwnerID > 0 {
 		query += ` AND owner_id = ?`
 		args = append(args, filter.OwnerID)
+	}
+	if filter.AccessibleTo > 0 {
+		query += ` AND (owner_id = ? OR id IN (SELECT site_id FROM user_sites WHERE user_id = ?))`
+		args = append(args, filter.AccessibleTo, filter.AccessibleTo)
 	}
 	if filter.Runtime != "" {
 		query += ` AND runtime = ?`
@@ -282,7 +293,9 @@ func (s *SQLiteSiteStore) UpdateConfFile(ctx context.Context, id int64, confFile
 func (s *SQLiteSiteStore) UpdateSSL(ctx context.Context, id int64, status, issuer string, expiresAt time.Time) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sites SET ssl_status = ?, ssl_issuer = ?, ssl_expires_at = ?, ssl_last_check = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		status, issuer, expiresAt, id,
+		// Stored as UTC text so it compares correctly with CURRENT_TIMESTAMP and
+		// the cutoffs above regardless of the host's time zone.
+		status, issuer, expiresAt.UTC().Format("2006-01-02 15:04:05"), id,
 	)
 	if err != nil {
 		return fmt.Errorf("update site ssl: %w", err)
@@ -307,7 +320,7 @@ func (s *SQLiteSiteStore) ListSSLEpiring(ctx context.Context, within time.Durati
 		   AND ssl_expires_at IS NOT NULL
 		   AND ssl_expires_at <= ?
 		 ORDER BY ssl_expires_at ASC`,
-		cutoff,
+		cutoff.UTC().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list ssl expiring: %w", err)
@@ -704,8 +717,8 @@ func scanSite(row *sql.Row) (*Site, error) {
 		&site.SSLStatus, &site.SSLIssuer, &site.SSLExpiresAt, &site.SSLLastCheck,
 		&site.GitRepo, &site.GitBranch, &site.GitCommit, &site.DeployKey, &site.WebhookSecret,
 		&site.ManagedBy, &site.SystemUser, &site.ConfFile, &site.ProxyPassURL, &site.AppPort, &site.AppCommand, &site.AppStatus, &site.AppMemoryMax, &site.PHPVersion, &site.PHPIni, &site.BackupProviderID,
- &site.CreatedAt, &site.UpdatedAt,
- )
+		&site.CreatedAt, &site.UpdatedAt,
+	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

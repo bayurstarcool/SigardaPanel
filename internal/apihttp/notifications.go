@@ -72,7 +72,8 @@ func (h *notificationHandler) markRead(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid notification id")
 	}
-	if err := h.s.Notifications.MarkRead(c.Request().Context(), id); err != nil {
+	sess := sessionFromEcho(c)
+	if err := h.s.Notifications.MarkRead(c.Request().Context(), sess.UserID, id); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	return c.JSON(http.StatusOK, httpjson.Success{
@@ -101,7 +102,8 @@ func (h *notificationHandler) delete(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid notification id")
 	}
-	if err := h.s.Notifications.Delete(c.Request().Context(), id); err != nil {
+	sess := sessionFromEcho(c)
+	if err := h.s.Notifications.Delete(c.Request().Context(), sess.UserID, id); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 	return c.JSON(http.StatusOK, httpjson.Success{

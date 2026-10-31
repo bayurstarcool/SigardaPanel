@@ -33,6 +33,9 @@ type TaskResult struct {
 	SizeBytes     int64  `json:"size_bytes,omitempty"`
 	NginxConfig   string `json:"nginx_config,omitempty"`
 	ProxyPassURL  string `json:"proxy_pass_url,omitempty"`
+	// Expires is the certificate end date reported by ssl.issue/ssl.renew,
+	// in openssl's "-enddate" format (e.g. "Jan  2 15:04:05 2027 GMT").
+	Expires string `json:"expires,omitempty"`
 }
 
 var agentErrorSecretPattern = regexp.MustCompile(`(?i)\b(password|secret|token|access[_-]?key|authorization)\s*([:=])\s*([^\s,;]+)`)

@@ -3,6 +3,7 @@ package apihttp
 import (
 	"context"
 	"log/slog"
+	"math"
 	"net/http"
 	"time"
 
@@ -111,6 +112,22 @@ func (h *dbServerHandler) importDatabases(c echo.Context) error {
 	imported := 0
 	skipped := 0
 	importedUsers := 0
+	// Databases that match no site are not imported: databases.site_id is
+	// NOT NULL with a foreign key to sites, so they are reported instead.
+	unmatched := []string{}
+
+	// Index every site by domain and name once (no page limit) for matching.
+	allSites, err := h.store.Sites.List(ctx, store.SiteListFilter{Limit: math.MaxInt32})
+	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
+	siteByName := make(map[string]int64, len(allSites))
+	for _, st := range allSites {
+		if _, dup := siteByName[st.Name]; !dup {
+			siteByName[st.Name] = st.ID
+		}
+	}
 
 	for _, dbName := range mysqlDBs {
 		// Check if already exists in SigardaPanel
@@ -120,18 +137,17 @@ func (h *dbServerHandler) importDatabases(c echo.Context) error {
 			dbID = existing.ID
 			skipped++
 		} else {
-			// Try to find site by domain matching database name
+			// Try to find site by domain matching database name, then by
+			// site name.
 			var siteID int64
-			site, _ := h.store.Sites.GetByDomain(ctx, dbName)
-			if site == nil {
-				// Also check if the DB name matches site name
-				sites, _ := h.store.Sites.List(ctx, store.SiteListFilter{})
-				for _, s := range sites {
-					if s.Name == dbName {
-						site = &s
-						break
-					}
-				}
+			if site, _ := h.store.Sites.GetByDomain(ctx, dbName); site != nil {
+				siteID = site.ID
+			} else if id, ok := siteByName[dbName]; ok {
+				siteID = id
+			}
+			if siteID == 0 {
+				unmatched = append(unmatched, dbName)
+				continue
 			}
 
 			db := &store.Database{
@@ -140,9 +156,6 @@ func (h *dbServerHandler) importDatabases(c echo.Context) error {
 				Type:      "mysql",
 				Charset:   "utf8mb4",
 				Collation: "utf8mb4_unicode_ci",
-			}
-			if site != nil {
-				db.SiteID = site.ID
 			}
 
 			if err := h.store.Databases.Create(ctx, db); err != nil {
@@ -194,7 +207,7 @@ func (h *dbServerHandler) importDatabases(c echo.Context) error {
 		userID = sess.UserID
 	}
 	h.audit.RecordAction(ctx, userID, "database_import", "database_server", svr.ID, map[string]any{
-		"imported": imported, "skipped": skipped, "users": len(users), "imported_users": importedUsers,
+		"imported": imported, "skipped": skipped, "unmatched": len(unmatched), "users": len(users), "imported_users": importedUsers,
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{
@@ -204,6 +217,7 @@ func (h *dbServerHandler) importDatabases(c echo.Context) error {
 			"total":          len(mysqlDBs),
 			"users":          len(users),
 			"imported_users": importedUsers,
+			"unmatched":      unmatched,
 		},
 		RequestID: rid,
 	})

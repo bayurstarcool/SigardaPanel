@@ -2,7 +2,10 @@ package apihttp
 
 import (
 	"archive/zip"
+	"errors"
 	"io"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -289,10 +292,27 @@ func (h *fileManagerHandler) createEntry(c echo.Context) error {
 	}
 
 	if body.IsDir {
-		os.MkdirAll(fullPath, 0755)
+		if err := os.MkdirAll(fullPath, 0755); err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to create directory")
+		}
 	} else {
-		os.MkdirAll(filepath.Dir(fullPath), 0755)
-		os.WriteFile(fullPath, []byte(""), 0644)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to create directory")
+		}
+		// O_EXCL: "create" must never truncate an existing file.
+		f, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return echo.NewHTTPError(http.StatusConflict, "already exists")
+			}
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to create file")
+		}
+		if err := f.Close(); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to create file")
+		}
 	}
 
 	sess := sessionFromEcho(c)

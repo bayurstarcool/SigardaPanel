@@ -32,8 +32,9 @@ func (h *userHandler) list(c echo.Context) error {
 	role := c.Get(roleKey).(string)
 
 	var filter store.UserListFilter
-	// Admin sees only users they created; super_admin sees all
-	if role == auth.RoleAdmin {
+	// Admin sees only users they created; super_admin sees all. Anything that
+	// is not a super_admin (including service tokens) gets the restricted view.
+	if role != auth.RoleSuperAdmin {
 		filter.CreatedBy = sess.UserID
 	}
 
@@ -108,7 +109,7 @@ func (h *userHandler) create(c echo.Context) error {
 	if body.Role == auth.RoleSuperAdmin && callerRole != auth.RoleSuperAdmin {
 		return echo.NewHTTPError(http.StatusForbidden, "cannot create super admin")
 	}
-	if callerRole == auth.RoleAdmin && body.Role != auth.RoleUser {
+	if callerRole != auth.RoleSuperAdmin && body.Role != auth.RoleUser {
 		return echo.NewHTTPError(http.StatusForbidden, "admins can only create users")
 	}
 
@@ -167,8 +168,9 @@ func (h *userHandler) delete(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "cannot delete yourself")
 	}
 
-	// Admin can only delete users they created
-	if callerRole == auth.RoleAdmin {
+	// Only super_admin may delete arbitrary users; everyone else (admins and,
+	// defensively, service tokens) may only delete users they created.
+	if callerRole != auth.RoleSuperAdmin {
 		u, err := h.store.Users.GetByID(c.Request().Context(), id)
 		if err != nil || u == nil || !u.CreatedBy.Valid || u.CreatedBy.Int64 != sess.UserID {
 			return echo.NewHTTPError(http.StatusNotFound, "user not found")
@@ -218,8 +220,9 @@ func (h *userHandler) update(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 
-	// Admin can only update users they created
-	if callerRole == auth.RoleAdmin {
+	// Only super_admin may update arbitrary users; everyone else (admins and,
+	// defensively, service tokens) may only update users they created.
+	if callerRole != auth.RoleSuperAdmin {
 		u, err := h.store.Users.GetByID(c.Request().Context(), id)
 		if err != nil || u == nil || !u.CreatedBy.Valid || u.CreatedBy.Int64 != sess.UserID {
 			return echo.NewHTTPError(http.StatusNotFound, "user not found")

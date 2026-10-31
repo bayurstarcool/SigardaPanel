@@ -51,6 +51,9 @@ func (h *backupScheduleHandler) create(c echo.Context) error {
 	if site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
+	if err := requireSitePermission(c.Request().Context(), h.store, sess, site, sitePermWrite); err != nil {
+		return err
+	}
 
 	var body struct {
 		CronExpr   string `json:"cron_expr"`
@@ -67,6 +70,9 @@ func (h *backupScheduleHandler) create(c echo.Context) error {
 
 	if body.CronExpr == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "cron_expr required")
+	}
+	if err := validateBackupCron(body.CronExpr); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	if body.BackupType == "" {
 		body.BackupType = "files"
@@ -113,6 +119,13 @@ func (h *backupScheduleHandler) listBySite(c echo.Context) error {
 	if err != nil || siteID <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
 	}
+	site, err := h.store.Sites.GetByID(c.Request().Context(), siteID)
+	if err != nil || site == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	}
+	if err := requireSitePermission(c.Request().Context(), h.store, sessionFromEcho(c), site, sitePermRead); err != nil {
+		return err
+	}
 
 	schedules, err := h.store.BackupSchedules.ListBySite(c.Request().Context(), siteID)
 	if err != nil {
@@ -154,6 +167,9 @@ func (h *backupScheduleHandler) update(c echo.Context) error {
 	if existing == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
 	}
+	if err := h.requireScheduleWrite(c, existing); err != nil {
+		return err
+	}
 
 	var body struct {
 		CronExpr   *string `json:"cron_expr"`
@@ -167,6 +183,9 @@ func (h *backupScheduleHandler) update(c echo.Context) error {
 
 	if body.CronExpr != nil {
 		existing.CronExpr = strings.TrimSpace(*body.CronExpr)
+		if err := validateBackupCron(existing.CronExpr); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 	}
 	if body.ProviderID != nil {
 		if *body.ProviderID > 0 {
@@ -223,6 +242,9 @@ func (h *backupScheduleHandler) delete(c echo.Context) error {
 	if existing == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
 	}
+	if err := h.requireScheduleWrite(c, existing); err != nil {
+		return err
+	}
 
 	if err := h.store.BackupSchedules.Delete(c.Request().Context(), id); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
@@ -234,6 +256,23 @@ func (h *backupScheduleHandler) delete(c echo.Context) error {
 		Data:      map[string]any{"deleted": true},
 		RequestID: rid,
 	})
+}
+
+// requireScheduleWrite checks the caller holds write permission on the site a
+// schedule belongs to. Schedules of sites the caller cannot see are reported
+// as not found.
+func (h *backupScheduleHandler) requireScheduleWrite(c echo.Context, sched *store.BackupSchedule) error {
+	site, err := h.store.Sites.GetByID(c.Request().Context(), sched.SiteID)
+	if err != nil || site == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
+	}
+	if err := requireSitePermission(c.Request().Context(), h.store, sessionFromEcho(c), site, sitePermWrite); err != nil {
+		if he, ok := err.(*echo.HTTPError); ok && he.Code == http.StatusNotFound {
+			return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
+		}
+		return err
+	}
+	return nil
 }
 
 func backupScheduleToMap(s store.BackupSchedule) map[string]any {

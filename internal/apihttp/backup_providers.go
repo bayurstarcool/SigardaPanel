@@ -542,8 +542,9 @@ func (h *backupHandler) createWithProvider(c echo.Context) error {
 	if site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	// Creating a backup is a site mutation: needs write permission.
+	if err := requireSitePermission(c.Request().Context(), h.store, sess, site, sitePermWrite); err != nil {
+		return err
 	}
 
 	var body struct {

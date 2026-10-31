@@ -1216,11 +1216,22 @@ func (r *Router) sslRenewTask(c echo.Context) error {
 	_, _ = r.executor.RunShell(ctx, "nginx", "-s", "reload")
 	slog.Info("agent: nginx reloaded after ssl.renew", "domain", payload.Domain)
 
+	// Report the certificate's real end date so the panel can record it;
+	// without it the panel kept the old expiry and re-queued renewals forever.
+	var expiresAt string
+	certPath := fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", payload.Domain)
+	if expiryOut, err := r.executor.RunShell(ctx, "openssl", "x509", "-enddate", "-noout", "-in", certPath); err == nil {
+		if parts := strings.SplitN(expiryOut, "=", 2); len(parts) == 2 {
+			expiresAt = strings.TrimSpace(parts[1])
+		}
+	}
+
 	return c.JSON(http.StatusOK, map[string]any{
 		"ok":      true,
 		"message": "certificate renewed",
 		"domain":  payload.Domain,
 		"output":  output,
+		"expires": expiresAt,
 	})
 }
 

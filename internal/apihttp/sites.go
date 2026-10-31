@@ -84,11 +84,12 @@ func (h *siteHandler) list(c echo.Context) error {
 		}
 	}
 
-	// Site isolation: only super_admin sees all sites.
-	// admin and user see only sites they own + sites assigned to them.
+	// Site isolation: only super_admin sees all sites. Everyone else sees the
+	// sites they own plus the ones assigned to them; both are resolved in SQL
+	// so filters, pagination and total_count apply to the combined set.
 	isSuperAdmin := h.isSuperAdmin(c)
 	if !isSuperAdmin && sess != nil {
-		filter.OwnerID = sess.UserID
+		filter.AccessibleTo = sess.UserID
 	}
 
 	sites, err := h.store.Sites.List(c.Request().Context(), filter)
@@ -96,29 +97,11 @@ func (h *siteHandler) list(c echo.Context) error {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
-
-	// Also merge sites from user_sites assignments (for all non-super_admin users)
-	if !isSuperAdmin && sess != nil {
-		assigned, assignErr := h.store.UserSites.ListByUser(c.Request().Context(), sess.UserID)
-		if assignErr == nil && len(assigned) > 0 {
-			// Build set of owned site IDs (already in sites list)
-			ownedIDs := make(map[int64]bool, len(sites))
-			for _, s := range sites {
-				ownedIDs[s.ID] = true
-			}
-			// Fetch each assigned site that isn't already owned
-			for _, us := range assigned {
-				if !ownedIDs[us.SiteID] {
-					assignedSite, err := h.store.Sites.GetByID(c.Request().Context(), us.SiteID)
-					if err == nil && assignedSite != nil {
-						sites = append(sites, *assignedSite)
-					}
-				}
-			}
-		}
+	totalCount, err := h.store.Sites.Count(c.Request().Context(), filter)
+	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
-
-	totalCount := len(sites)
 
 	out := make([]map[string]any, 0, len(sites))
 	for _, s := range sites {
@@ -501,8 +484,9 @@ func (h *siteHandler) delete(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
-	// Permission check: admin, owner, or user with admin permission on this site
-	if !h.checkSitePermission(c.Request().Context(), sess, site, "admin") {
+	// Only the owner or a super_admin may delete a site (AGENTS.md permission
+	// matrix); an assignment — even with "admin" permission — is not enough.
+	if !h.isSiteOwnerOrSuperAdmin(c.Request().Context(), sess, site) {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
@@ -628,25 +612,12 @@ func (h *siteHandler) deploy(c echo.Context) error {
 		branch = "main"
 	}
 
-	payload, _ := json.Marshal(map[string]any{
-		"site_id":        site.ID,
-		"domain":         site.Domain,
-		"root_path":      site.RootPath,
-		"repo":           site.GitRepo.String,
-		"branch":         branch,
-		"runtime":        site.Runtime,
-		"app_status":     site.AppStatus,
-		"app_port":       site.AppPort,
-		"app_command":    site.AppCommand,
-		"system_user":    site.SystemUser,
-		"app_memory_max": site.AppMemoryMax,
-	})
 	job := &jobmodel.Job{
 		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
 		SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
 		Type:        jobmodel.TypeSiteDeploy,
 		Description: fmt.Sprintf("Deploy site %s", site.Domain),
-		Payload:     string(payload),
+		Payload:     deployPayload(site, branch),
 	}
 	if err := h.store.Jobs.Create(c.Request().Context(), job); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
@@ -870,6 +841,19 @@ func (h *siteHandler) checkSitePermission(ctx context.Context, sess *store.Sessi
 		return false
 	}
 }
+
+// isSiteOwnerOrSuperAdmin reports whether the session user owns the site or is super_admin.
+func (h *siteHandler) isSiteOwnerOrSuperAdmin(ctx context.Context, sess *store.Session, site *store.Site) bool {
+	if sess == nil || sess.UserID == 0 {
+		return false
+	}
+	if site.OwnerID.Valid && site.OwnerID.Int64 == sess.UserID {
+		return true
+	}
+	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
+	return user != nil && user.Role == auth.RoleSuperAdmin
+}
+
 func (h *siteHandler) isAdmin(c echo.Context) bool {
 	sess := sessionFromEcho(c)
 	if sess == nil {
@@ -897,7 +881,16 @@ func (h *siteHandler) isSuperAdmin(c echo.Context) bool {
 func (h *siteHandler) transfer(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
-	role := c.Get(roleKey).(string)
+	if sess == nil || sess.UserID == 0 {
+		return echo.NewHTTPError(http.StatusUnauthorized, "user session required")
+	}
+	// The route has no RequireRole, so roleKey is not in the context; read the
+	// caller's role from the database (asserting it panicked the request).
+	caller, err := h.store.Users.GetByID(c.Request().Context(), sess.UserID)
+	if err != nil || caller == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "user session required")
+	}
+	role := caller.Role
 
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {

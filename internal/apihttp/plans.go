@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/labstack/echo/v4"
+	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -23,7 +24,7 @@ func (h *planHandler) listPlans(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	// Non-admin users only see active plans
-	isAdmin := hasAdminRole(c)
+	isAdmin := hasAdminRole(c, h.store)
 	activeOnly := !isAdmin
 
 	plans, err := h.store.Plans.List(c.Request().Context(), activeOnly)
@@ -223,12 +224,14 @@ func (h *userHandler) assignPlan(c echo.Context) error {
 }
 
 // hasAdminRole checks if the current user has admin or super_admin role.
-func hasAdminRole(c echo.Context) bool {
-	role, ok := c.Get(roleKey).(string)
-	if !ok {
-		return false
+// The role is only put in the context by RequireRole, so on routes guarded by
+// RequireAuth alone it is looked up from the session's user record. Service
+// tokens are never treated as admins here.
+func hasAdminRole(c echo.Context, s *store.Store) bool {
+	if role, ok := c.Get(roleKey).(string); ok && role != "" {
+		return role == auth.RoleAdmin || role == auth.RoleSuperAdmin
 	}
-	return role == "admin" || role == "super_admin"
+	return isSessionAdmin(c.Request().Context(), s, sessionFromEcho(c))
 }
 
 type planJSON struct {

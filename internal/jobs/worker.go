@@ -133,27 +133,31 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 
 	// Set initial progress for backup jobs
 	if job.Type == jobmodel.TypeBackupCreate || job.Type == jobmodel.TypeDBBackupCreate {
+		// Concurrency limit: max 1 concurrent backup job per server to save disk I/O and RAM.
+		// This job was already claimed (status 'running'), so it is part of the
+		// count; only *other* running backups should hold it back. Counting itself
+		// re-queued every backup forever without ever calling the agent.
+		const maxConcurrentBackups = 1
+		if job.ServerID.Valid && job.ServerID.Int64 > 0 {
+			running, _ := w.store.Jobs.CountRunningByServer(ctx, job.ServerID.Int64)
+			others := running - 1
+			if others >= maxConcurrentBackups {
+				delay := time.Duration(others-maxConcurrentBackups+1) * 30 * time.Second
+				retryAt := time.Now().Add(delay)
+				_ = w.store.Jobs.ScheduleRetry(ctx, job.ID, retryAt)
+				slog.Info("worker: backup concurrency limit, re-queued",
+					"job_id", job.ID, "server_id", job.ServerID.Int64,
+					"other_running", others, "limit", maxConcurrentBackups, "retry_in", delay)
+				return
+			}
+		}
+
 		var payloadData struct {
 			BackupID int64 `json:"backup_id"`
 		}
 		if err := json.Unmarshal([]byte(job.Payload), &payloadData); err == nil && payloadData.BackupID > 0 {
 			_ = w.store.Backups.UpdateProgress(ctx, payloadData.BackupID, "archiving...")
 			_ = w.store.Backups.UpdateStatus(ctx, payloadData.BackupID, "running")
-		}
-
-		// Concurrency limit: max 1 concurrent backup job per server to save disk I/O and RAM
-		const maxConcurrentBackups = 1
-		if job.ServerID.Valid && job.ServerID.Int64 > 0 {
-			running, _ := w.store.Jobs.CountRunningByServer(ctx, job.ServerID.Int64)
-			if running >= maxConcurrentBackups {
-				delay := time.Duration(running-maxConcurrentBackups+1) * 30 * time.Second
-				retryAt := time.Now().Add(delay)
-				_ = w.store.Jobs.ScheduleRetry(ctx, job.ID, retryAt)
-				slog.Info("worker: backup concurrency limit, re-queued",
-					"job_id", job.ID, "server_id", job.ServerID.Int64,
-					"running", running, "limit", maxConcurrentBackups, "retry_in", delay)
-				return
-			}
 		}
 	}
 
@@ -312,10 +316,17 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			}
 		}
 
-	case jobmodel.TypeSSLIssue:
+	case jobmodel.TypeSSLIssue, jobmodel.TypeSSLRenew:
+		// Both must record the new expiry: if a renewal left the old date in
+		// place, the scheduler would keep re-queuing it (and alerting) every minute.
 		if job.SiteID.Valid {
-			// Update ssl_status to active
-			if err := w.store.Sites.UpdateSSL(ctx, job.SiteID.Int64, "active", "Let's Encrypt", time.Now().Add(90*24*time.Hour)); err != nil {
+			expires := time.Now().Add(90 * 24 * time.Hour)
+			if result != nil {
+				if t, ok := parseCertEndDate(result.Expires); ok {
+					expires = t
+				}
+			}
+			if err := w.store.Sites.UpdateSSL(ctx, job.SiteID.Int64, "active", "Let's Encrypt", expires); err != nil {
 				slog.Error("worker: update ssl status", "id", job.SiteID.Int64, "error", err)
 			}
 		}
@@ -472,4 +483,17 @@ func (w *Worker) agentForJob(ctx context.Context, job *jobmodel.Job) (*agentclie
 		return nil, fmt.Errorf("server %d (%s) has no agent URL configured — set agent_url on the server", server.ID, server.Name)
 	}
 	return agentclient.New(server.AgentURL.String, server.AgentToken), nil
+}
+
+// parseCertEndDate parses openssl's "-enddate" value ("Jan  2 15:04:05 2027 GMT").
+func parseCertEndDate(s string) (time.Time, bool) {
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse("Jan 2 15:04:05 2006 MST", s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t.UTC(), true
 }

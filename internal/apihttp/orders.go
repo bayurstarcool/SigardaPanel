@@ -26,7 +26,7 @@ func (h *orderHandler) listOrders(c echo.Context) error {
 	var filter store.OrderListFilter
 
 	// Non-admin users can only see their own orders
-	if !hasAdminRole(c) {
+	if !hasAdminRole(c, h.store) {
 		filter.UserID = sess.UserID
 	}
 
@@ -136,7 +136,7 @@ func (h *orderHandler) getOrder(c echo.Context) error {
 	}
 
 	// Regular users can only view their own orders
-	if !hasAdminRole(c) && order.UserID != sess.UserID {
+	if !hasAdminRole(c, h.store) && order.UserID != sess.UserID {
 		return echo.NewHTTPError(http.StatusNotFound, "order not found")
 	}
 

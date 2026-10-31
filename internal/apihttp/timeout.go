@@ -2,7 +2,7 @@ package apihttp
 
 import (
 	"context"
-	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -19,13 +19,22 @@ func DefaultTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
 		Timeout: 30 * time.Second,
 		Skipper: func(c echo.Context) bool {
-			// Skip timeout for WebSocket connections
-			return c.Request().Header.Get("Upgrade") == "websocket"
+			if c.Request().Header.Get("Upgrade") == "websocket" {
+				return true
+			}
+			// Streaming transfers legitimately outlive the request budget.
+			p := c.Request().URL.Path
+			return strings.HasSuffix(p, "/download") || strings.HasSuffix(p, "/upload")
 		},
 	}
 }
 
-// TimeoutMiddleware returns an echo middleware that adds request timeout.
+// TimeoutMiddleware attaches a deadline to the request context. Handlers run
+// on the request goroutine, so a panic reaches the Recover middleware and the
+// response is never written by two goroutines at once (the previous version
+// raced the handler and could append a 504 body to a half-written download).
+// Work that honours the context (agent calls, DB queries) is cancelled at the
+// deadline.
 func TimeoutMiddleware(config ...TimeoutConfig) echo.MiddlewareFunc {
 	cfg := DefaultTimeoutConfig()
 	if len(config) > 0 {
@@ -37,25 +46,10 @@ func TimeoutMiddleware(config ...TimeoutConfig) echo.MiddlewareFunc {
 			if cfg.Skipper != nil && cfg.Skipper(c) {
 				return next(c)
 			}
-
 			ctx, cancel := context.WithTimeout(c.Request().Context(), cfg.Timeout)
 			defer cancel()
-
 			c.SetRequest(c.Request().WithContext(ctx))
-
-			done := make(chan error, 1)
-			go func() {
-				done <- next(c)
-			}()
-
-			select {
-			case err := <-done:
-				return err
-			case <-ctx.Done():
-				return c.JSON(http.StatusGatewayTimeout, map[string]string{
-					"error": "Request timeout",
-				})
-			}
+			return next(c)
 		}
 	}
 }

@@ -75,8 +75,8 @@ func (h *dbHandler) createDatabase(c echo.Context) error {
 	if site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "site not found")
 	}
 
 	var body struct {
@@ -241,6 +241,10 @@ func (h *dbHandler) listAllDatabases(c echo.Context) error {
 				continue
 			}
 			domain = site.Domain
+		} else if !isSessionSuperAdmin(c.Request().Context(), h.store, sess) {
+			// Databases not linked to a site (e.g. unmatched imports) are
+			// only visible to super_admin.
+			continue
 		}
 		out = append(out, map[string]any{
 			"id":          db.ID,
@@ -280,8 +284,8 @@ func (h *dbHandler) rotateDBUserPassword(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "database not found")
 	}
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "database not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "database not found")
 	}
 
 	dbUser, _ := h.store.DBUsers.GetByID(c.Request().Context(), uID)
@@ -412,8 +416,8 @@ func (h *dbHandler) deleteDatabase(c echo.Context) error {
 	if site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "database not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "database not found")
 	}
 
 	// Drop from MySQL directly first
@@ -477,8 +481,8 @@ func (h *dbHandler) createDBUser(c echo.Context) error {
 	}
 
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "database not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "database not found")
 	}
 
 	var body struct {
@@ -646,8 +650,8 @@ func (h *dbHandler) deleteDBUser(c echo.Context) error {
 
 	database, _ := h.store.Databases.GetByID(c.Request().Context(), dbID)
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "user not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "user not found")
 	}
 
 	// Delete from MySQL directly first
@@ -689,20 +693,25 @@ func (h *dbHandler) deleteDBUser(c echo.Context) error {
 }
 
 func (h *dbHandler) canAccess(ctx context.Context, sess *store.Session, site *store.Site) bool {
-	if sess == nil {
-		return false
+	// Viewing a site's databases needs read permission on the site (owner,
+	// super_admin or any assignment). Being a (non super) admin alone does not
+	// grant access to other tenants' databases.
+	return hasSitePermission(ctx, h.store, sess, site, sitePermRead)
+}
+
+// canManage reports whether the session may change a site's databases or see
+// their credentials: owner, super_admin or a write/admin assignee.
+func (h *dbHandler) canManage(ctx context.Context, sess *store.Session, site *store.Site) bool {
+	return hasSitePermission(ctx, h.store, sess, site, sitePermWrite)
+}
+
+// denyDB builds the error for a caller lacking write on a site: 403 when they
+// can at least read it, otherwise the given 404 message.
+func (h *dbHandler) denyDB(ctx context.Context, sess *store.Session, site *store.Site, notFound string) error {
+	if h.canAccess(ctx, sess, site) {
+		return echo.NewHTTPError(http.StatusForbidden, "insufficient site permission")
 	}
-	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
-	if user == nil {
-		return false
-	}
-	if auth.HasRole(user.Role, auth.RoleAdmin) {
-		return true
-	}
-	if site.OwnerID.Valid && site.OwnerID.Int64 == sess.UserID {
-		return true
-	}
-	return false
+	return echo.NewHTTPError(http.StatusNotFound, notFound)
 }
 
 // execMySQL connects to the default database server and runs a function.
@@ -954,8 +963,8 @@ func (h *dbHandler) updateDBUser(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "database not found")
 	}
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "user not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "user not found")
 	}
 
 	var body struct {
@@ -1058,8 +1067,8 @@ func (h *dbHandler) updateDatabase(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "database not found")
 	}
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "database not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "database not found")
 	}
 
 	var body struct {
@@ -1127,8 +1136,8 @@ func (h *dbHandler) grantExistingUser(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "database not found")
 	}
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "database not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "database not found")
 	}
 
 	var body struct {
@@ -1246,8 +1255,8 @@ func (h *dbHandler) listAvailableMySQLUsers(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "database not found")
 	}
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "database not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "database not found")
 	}
 
 	// Get already-assigned users. Treat localhost, 127.0.0.1, and ::1 as one local host.
@@ -1311,8 +1320,8 @@ func (h *dbHandler) pmaCredentials(c echo.Context) error {
 
 	// Check access
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "database not found")
+	if !h.canManage(c.Request().Context(), sess, site) {
+		return h.denyDB(c.Request().Context(), sess, site, "database not found")
 	}
 
 	// Find the MySQL user for this database from db_users

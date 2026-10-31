@@ -26,6 +26,13 @@ func (h *jobLogHandler) append(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
 	}
 
+	// Only the worker side (admin-scoped service tokens) and admins may append
+	// log lines (the route also requires RequireAdmin); admins additionally
+	// need access to the job's site.
+	if err := h.requireJob(c, jobID, sitePermWrite); err != nil {
+		return err
+	}
+
 	var body struct {
 		LineNumber int    `json:"line_number"`
 		Message    string `json:"message"`
@@ -55,6 +62,26 @@ func (h *jobLogHandler) append(c echo.Context) error {
 	})
 }
 
+// requireJob verifies the job exists and the caller may access it at the
+// given site permission level; inaccessible jobs are reported as not found.
+func (h *jobLogHandler) requireJob(c echo.Context, jobID int64, required string) error {
+	job, err := h.store.Jobs.GetByID(c.Request().Context(), jobID)
+	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
+	if job == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "job not found")
+	}
+	if isAdminServiceToken(c) {
+		return nil
+	}
+	if !canSeeJob(c, h.store, job, required) {
+		return echo.NewHTTPError(http.StatusNotFound, "job not found")
+	}
+	return nil
+}
+
 func (h *jobLogHandler) getSince(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
@@ -70,6 +97,9 @@ func (h *jobLogHandler) getSince(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid since")
 		}
 		since = n
+	}
+	if err := h.requireJob(c, jobID, sitePermRead); err != nil {
+		return err
 	}
 
 	logs, err := h.store.JobLogs.GetSince(c.Request().Context(), jobID, since, 1000)

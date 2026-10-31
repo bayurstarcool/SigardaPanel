@@ -4,13 +4,16 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
+	"sigardapanel/internal/secrets"
 	"sigardapanel/internal/store"
 )
 
@@ -53,7 +56,15 @@ func (h *jobHandler) list(c echo.Context) error {
 		filter.SiteID = n
 	}
 
-	list, err := h.store.Jobs.List(c.Request().Context(), filter)
+	var list []jobmodel.Job
+	var err error
+	if v := jobVisibilityFor(c, h.store); v.all {
+		list, err = h.store.Jobs.List(c.Request().Context(), filter)
+	} else {
+		// Non super_admins only see jobs of sites they can access, plus
+		// server-level jobs when they are admins.
+		list, err = h.store.ListJobsScoped(c.Request().Context(), filter, v.scope)
+	}
 	if err != nil {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
@@ -82,7 +93,7 @@ func (h *jobHandler) get(c echo.Context) error {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
-	if job == nil {
+	if job == nil || !canSeeJob(c, h.store, job, sitePermRead) {
 		return echo.NewHTTPError(http.StatusNotFound, "job not found")
 	}
 
@@ -110,8 +121,13 @@ func (h *jobHandler) cancel(c echo.Context) error {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
-	if job == nil {
+	if job == nil || !canSeeJob(c, h.store, job, sitePermRead) {
 		return echo.NewHTTPError(http.StatusNotFound, "job not found")
+	}
+	// Canceling changes the site's pending work: needs write on the site
+	// (server-level jobs: admin).
+	if !canSeeJob(c, h.store, job, sitePermWrite) {
+		return echo.NewHTTPError(http.StatusForbidden, "insufficient site permission")
 	}
 
 	if job.Status != jobmodel.StatusQueued {
@@ -167,21 +183,11 @@ func jobToMap(j jobmodel.Job) map[string]any {
 	return m
 }
 
-// sensitivePayloadKeys are JSON payload fields that must never be exposed via
-// the API. Job payloads can carry S3 credentials and database passwords for
-// agent dispatch; those are redacted before being returned to clients.
-var sensitivePayloadKeys = map[string]bool{
-	"access_key":  true,
-	"secret_key":  true,
-	"db_password": true,
-	"password":    true,
-	"secret":      true,
-	"token":       true,
-}
-
 // redactSensitivePayload parses a JSON job payload and replaces the values of
-// sensitive keys (recursively) with "[REDACTED]". If the payload is not valid
-// JSON it is returned as-is (payloads are always JSON-encoded internally).
+// credential-looking keys (recursively) with "[REDACTED]", and strips
+// credentials embedded in URLs (https://user:token@host/...). If the payload
+// is not valid JSON it is returned as-is (payloads are always JSON-encoded
+// internally).
 func redactSensitivePayload(payload string) string {
 	var v any
 	if err := json.Unmarshal([]byte(payload), &v); err != nil {
@@ -195,11 +201,35 @@ func redactSensitivePayload(payload string) string {
 	return string(out)
 }
 
+// sensitiveKeyFragments mark a payload key as credential-bearing when they
+// appear anywhere in it (git_token, api_key, smtp_password, private_key, ...).
+var sensitiveKeyFragments = []string{"password", "passwd", "secret", "token", "private_key", "access_key", "api_key", "credential"}
+
+// isSensitivePayloadKey reports whether a JSON key names a credential. The
+// exact keys come from the secrets package (the ones encrypted at rest).
+func isSensitivePayloadKey(k string) bool {
+	if secrets.SensitiveKeys[k] {
+		return true
+	}
+	lk := strings.ToLower(k)
+	for _, f := range sensitiveKeyFragments {
+		if strings.Contains(lk, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// urlUserinfoRe matches the userinfo part of a URL ("scheme://user:pass@").
+var urlUserinfoRe = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^/@\s]+@`)
+
 func redactValue(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, val := range t {
-			if sensitivePayloadKeys[k] {
+			if secrets.SensitiveKeys[k] {
+				t[k] = "[REDACTED]"
+			} else if _, isStr := val.(string); isStr && isSensitivePayloadKey(k) {
 				t[k] = "[REDACTED]"
 			} else {
 				t[k] = redactValue(val)
@@ -211,6 +241,8 @@ func redactValue(v any) any {
 			t[i] = redactValue(val)
 		}
 		return t
+	case string:
+		return urlUserinfoRe.ReplaceAllString(t, "${1}[REDACTED]@")
 	default:
 		return v
 	}

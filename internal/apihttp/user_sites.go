@@ -105,15 +105,8 @@ func (h *userHandler) listSiteUsers(c echo.Context) error {
 	if err != nil || site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-	if sess != nil {
-		user, _ := h.store.Users.GetByID(c.Request().Context(), sess.UserID)
-		if user != nil && user.Role != auth.RoleSuperAdmin {
-			isOwner := site.OwnerID.Valid && site.OwnerID.Int64 == sess.UserID
-			hasAccess, _ := h.store.UserSites.HasAccess(c.Request().Context(), sess.UserID, siteID)
-			if !isOwner && !hasAccess {
-				return echo.NewHTTPError(http.StatusNotFound, "site not found")
-			}
-		}
+	if !hasSitePermission(c.Request().Context(), h.store, sess, site, sitePermRead) {
+		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
 	users, err := h.store.UserSites.ListBySite(c.Request().Context(), siteID)
@@ -126,6 +119,26 @@ func (h *userHandler) listSiteUsers(c echo.Context) error {
 		Data:      map[string]any{"users": users, "count": len(users)},
 		RequestID: rid,
 	})
+}
+
+// requireSiteAssignmentManager loads the site and verifies the caller may
+// manage its user assignments: only the site's owner or a super_admin may
+// (AGENTS.md permission matrix, "Manage users"). Callers who cannot see the
+// site at all get 404; callers who can see it but are not owner get 403.
+func (h *userHandler) requireSiteAssignmentManager(c echo.Context, siteID int64) error {
+	ctx := c.Request().Context()
+	sess := sessionFromEcho(c)
+	site, err := h.store.Sites.GetByID(ctx, siteID)
+	if err != nil || site == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	}
+	if isSiteOwnerOrSuperAdmin(ctx, h.store, sess, site) {
+		return nil
+	}
+	if hasSitePermission(ctx, h.store, sess, site, sitePermRead) {
+		return echo.NewHTTPError(http.StatusForbidden, "only the site owner or a super admin can manage site users")
+	}
+	return echo.NewHTTPError(http.StatusNotFound, "site not found")
 }
 
 // assignUserSite grants a user access to a site.
@@ -153,6 +166,13 @@ func (h *userHandler) assignUserSite(c echo.Context) error {
 	}
 	if body.Permission != "read" && body.Permission != "write" && body.Permission != "admin" {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid permission (read|write|admin)")
+	}
+
+	if err := h.requireSiteAssignmentManager(c, body.SiteID); err != nil {
+		return err
+	}
+	if target, err := h.store.Users.GetByID(c.Request().Context(), userID); err != nil || target == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "user not found")
 	}
 
 	if err := h.store.UserSites.Assign(c.Request().Context(), userID, body.SiteID, body.Permission); err != nil {
@@ -188,6 +208,10 @@ func (h *userHandler) unassignUserSite(c echo.Context) error {
 	siteID, err := strconv.ParseInt(c.Param("siteId"), 10, 64)
 	if err != nil || siteID <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
+	}
+
+	if err := h.requireSiteAssignmentManager(c, siteID); err != nil {
+		return err
 	}
 
 	if err := h.store.UserSites.Unassign(c.Request().Context(), userID, siteID); err != nil {
@@ -234,6 +258,10 @@ func (h *userHandler) updateSitePermission(c echo.Context) error {
 	}
 	if body.Permission != "read" && body.Permission != "write" && body.Permission != "admin" {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid permission (read|write|admin)")
+	}
+
+	if err := h.requireSiteAssignmentManager(c, siteID); err != nil {
+		return err
 	}
 
 	if err := h.store.UserSites.UpdatePermission(c.Request().Context(), userID, siteID, body.Permission); err != nil {

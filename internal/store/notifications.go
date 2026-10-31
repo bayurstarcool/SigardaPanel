@@ -9,17 +9,17 @@ import (
 
 // Notification represents an in-app notification for a user.
 type Notification struct {
-	ID         int64          `json:"id"`
-	UserID     int64          `json:"user_id"`
-	Type       string         `json:"type"`
-	Title      string         `json:"title"`
-	Message    string         `json:"message"`
-	Severity   string         `json:"severity"`
-	Read       bool           `json:"read"`
-	EntityType string         `json:"entity_type"`
-	EntityID   int64          `json:"entity_id"`
-	CreatedAt  time.Time      `json:"created_at"`
-	ReadAt     sql.NullTime   `json:"read_at,omitempty"`
+	ID         int64        `json:"id"`
+	UserID     int64        `json:"user_id"`
+	Type       string       `json:"type"`
+	Title      string       `json:"title"`
+	Message    string       `json:"message"`
+	Severity   string       `json:"severity"`
+	Read       bool         `json:"read"`
+	EntityType string       `json:"entity_type"`
+	EntityID   int64        `json:"entity_id"`
+	CreatedAt  time.Time    `json:"created_at"`
+	ReadAt     sql.NullTime `json:"read_at,omitempty"`
 }
 
 // NotificationRepository defines notification operations.
@@ -28,9 +28,9 @@ type NotificationRepository interface {
 	GetByID(ctx context.Context, id int64) (*Notification, error)
 	ListByUser(ctx context.Context, userID int64, limit, offset int) ([]Notification, int, error)
 	CountUnread(ctx context.Context, userID int64) (int, error)
-	MarkRead(ctx context.Context, id int64) error
+	MarkRead(ctx context.Context, userID, id int64) error
 	MarkAllRead(ctx context.Context, userID int64) error
-	Delete(ctx context.Context, id int64) error
+	Delete(ctx context.Context, userID, id int64) error
 	DeleteAllRead(ctx context.Context, userID int64) error
 }
 
@@ -119,10 +119,11 @@ func (s *SQLiteNotificationStore) CountUnread(ctx context.Context, userID int64)
 	return count, nil
 }
 
-// MarkRead marks a single notification as read.
-func (s *SQLiteNotificationStore) MarkRead(ctx context.Context, id int64) error {
+// MarkRead marks a single notification of userID as read. Notifications of
+// other users are never touched.
+func (s *SQLiteNotificationStore) MarkRead(ctx context.Context, userID, id int64) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE notifications SET read = 1, read_at = CURRENT_TIMESTAMP WHERE id = ? AND read = 0`, id)
+		`UPDATE notifications SET read = 1, read_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND read = 0`, id, userID)
 	return err
 }
 
@@ -133,9 +134,10 @@ func (s *SQLiteNotificationStore) MarkAllRead(ctx context.Context, userID int64)
 	return err
 }
 
-// Delete removes a single notification.
-func (s *SQLiteNotificationStore) Delete(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM notifications WHERE id = ?`, id)
+// Delete removes a single notification of userID. Notifications of other
+// users are never touched.
+func (s *SQLiteNotificationStore) Delete(ctx context.Context, userID, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM notifications WHERE id = ? AND user_id = ?`, id, userID)
 	return err
 }
 
