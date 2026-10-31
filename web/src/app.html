@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <title>SigardaPanel</title>
+    <!-- Apply the saved (or system) theme before first paint to avoid a flash. -->
+    <script nonce="%sveltekit.nonce%">
+      (function () {
+        var t;
+        try { t = localStorage.getItem('sigarda_theme'); } catch (e) {}
+        if (t !== 'light' && t !== 'dark') {
+          t = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        document.documentElement.classList.add(t);
+      })();
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

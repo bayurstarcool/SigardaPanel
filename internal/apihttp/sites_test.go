@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/auth"
@@ -93,6 +94,46 @@ func TestList_Admin_SeesAll(t *testing.T) {
 	json.NewDecoder(rec.Body).Decode(&result)
 	if result.Data.Count != 2 {
 		t.Fatalf("expected count 2, got %d", result.Data.Count)
+	}
+}
+
+// The SSL dashboard reads certificate state from the sites list; it must be present.
+func TestList_IncludesSSLFields(t *testing.T) {
+	e, s, ctx := newTestAppWithAllMigrations(t)
+	token := newAdminToken(t, s, ctx)
+	srvID := createServer(t, s, ctx)
+	admin, _ := s.Users.GetByUsername(ctx, "admin")
+
+	site := &store.Site{ServerID: srvID, Name: "S", Domain: "ssl.example.com", Runtime: "static", OwnerID: nullInt(admin.ID)}
+	if err := s.Sites.Create(ctx, site); err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	expires := time.Now().Add(30 * 24 * time.Hour).UTC().Truncate(time.Second)
+	if err := s.Sites.UpdateSSL(ctx, site.ID, "active", "Let's Encrypt", expires); err != nil {
+		t.Fatalf("update ssl: %v", err)
+	}
+
+	rec := doRequest(t, e, "GET", "/api/v1/sites", nil, token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var result struct {
+		Data struct {
+			Sites []map[string]any `json:"sites"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.Data.Sites) != 1 {
+		t.Fatalf("expected 1 site, got %d", len(result.Data.Sites))
+	}
+	got := result.Data.Sites[0]
+	if got["ssl_status"] != "active" || got["ssl_issuer"] != "Let's Encrypt" {
+		t.Fatalf("missing ssl status/issuer: %v", got)
+	}
+	if ts, _ := got["ssl_expires_at"].(string); ts == "" {
+		t.Fatalf("missing ssl_expires_at: %v", got)
 	}
 }
 

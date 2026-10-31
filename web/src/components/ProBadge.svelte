@@ -2,35 +2,10 @@
   let { tier = 'pro', small = false }: { tier?: string; small?: boolean } = $props();
 </script>
 
-<span class="badge {tier}" class:small>
-  {#if tier === 'enterprise'}
-    ⚡ Enterprise
-  {:else}
-    ⭐ Pro
-  {/if}
+<span
+  class="inline-flex items-center rounded font-semibold tracking-wide uppercase
+    {small ? 'px-1 py-px text-[9px]' : 'px-1.5 py-0.5 text-[10px]'}
+    {tier === 'enterprise' ? 'bg-accent/15 text-accent' : 'bg-warning/15 text-warning'}"
+>
+  {tier === 'enterprise' ? 'Enterprise' : 'Pro'}
 </span>
-
-<style>
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-  .badge.small {
-    padding: 1px 6px;
-    font-size: 10px;
-  }
-  .pro {
-    background: linear-gradient(135deg, #f59e0b, #f97316);
-    color: #000;
-  }
-  .enterprise {
-    background: linear-gradient(135deg, #8b5cf6, #6366f1);
-    color: #fff;
-  }
-</style>

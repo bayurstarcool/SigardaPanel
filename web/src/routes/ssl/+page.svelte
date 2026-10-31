@@ -1,17 +1,28 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
-  import { ShieldCheck, Plus, RefreshCw, AlertTriangle, ShieldAlert, ShieldOff, Calendar } from 'lucide-svelte';
+  import PageHeader from '$components/PageHeader.svelte';
+  import StatCard from '$components/StatCard.svelte';
+  import EmptyState from '$components/EmptyState.svelte';
+  import Modal from '$components/Modal.svelte';
+  import { ShieldCheck, Plus, RefreshCw, ShieldAlert, ShieldOff, ShieldQuestion, Search } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
+
+  type Health = 'valid' | 'expiring_soon' | 'expired' | 'none';
 
   let allSites = $state<any[]>([]);
   let loading = $state(true);
   let showIssue = $state(false);
-  let issueDomain = $state('');
+  let issueSiteId = $state<number | ''>('');
   let issuing = $state(false);
-  let renewing = $state<string | null>(null);
+  let renewing = $state<number | null>(null);
+  let renewingAll = $state(false);
+  let query = $state('');
+  let filter = $state<'all' | Health>('all');
+
+  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
@@ -21,188 +32,177 @@
   async function loadData() {
     loading = true;
     try {
-      const d = await apiFetch(auth.token, 'GET', 'sites?limit=100');
+      const d = await apiFetch(auth.token, 'GET', 'sites?limit=500');
       allSites = d?.sites || [];
     } catch (e: any) {
       if (e.message === 'session expired') return;
       toasts.error(e.message);
-    } finally { loading = false; }
+    } finally {
+      loading = false;
+    }
   }
 
   async function issueCert() {
-    if (!issueDomain) return;
+    if (!issueSiteId) return;
+    const site = allSites.find((s) => s.id === issueSiteId);
     issuing = true;
     try {
-      await apiFetch(auth.token, 'POST', 'ssl/issue', { domain: issueDomain });
-      toasts.success(`SSL certificate issued for ${issueDomain}`);
-      showIssue = false; issueDomain = '';
+      await apiFetch(auth.token, 'POST', `sites/${issueSiteId}/ssl/issue`, {});
+      toasts.success(`Certificate requested for ${site?.domain ?? 'site'} — it will appear once the job finishes.`);
+      showIssue = false;
+      issueSiteId = '';
       await loadData();
-    } catch (e: any) { toasts.error(e.message); }
-    finally { issuing = false; }
+    } catch (e: any) {
+      toasts.error(e.message);
+    } finally {
+      issuing = false;
+    }
   }
 
-  async function renewCert(domain: string) {
-    renewing = domain;
+  async function renewCert(site: any) {
+    renewing = site.id;
     try {
-      await apiFetch(auth.token, 'POST', 'ssl/renew', { domain });
-      toasts.success(`Certificate renewal started for ${domain}`);
+      await apiFetch(auth.token, 'POST', `sites/${site.id}/ssl/renew`, {});
+      toasts.success(`Renewal started for ${site.domain}`);
       await loadData();
-    } catch (e: any) { toasts.error(e.message); }
-    finally { renewing = null; }
+    } catch (e: any) {
+      toasts.error(e.message);
+    } finally {
+      renewing = null;
+    }
   }
 
-  function sslStatus(expiresAt: string | null, status: string): string {
-    if (!status || status === 'none') return 'none';
-    if (!expiresAt) return 'valid';
-    const ms = Date.now() - new Date(expiresAt).getTime();
-    if (ms > 0) return 'expired';
-    if (ms > -14 * 24 * 3600 * 1000) return 'expiring_soon';
+  async function renewAll() {
+    renewingAll = true;
+    try {
+      const d = await apiFetch(auth.token, 'POST', 'ssl/renew-all', {});
+      toasts.success(d?.message || 'Renewal queued for expiring certificates');
+      await loadData();
+    } catch (e: any) {
+      toasts.error(e.message);
+    } finally {
+      renewingAll = false;
+    }
+  }
+
+  function health(s: any): Health {
+    if (!s.ssl_status || s.ssl_status === 'none') return 'none';
+    if (!s.ssl_expires_at) return 'valid';
+    const ms = new Date(s.ssl_expires_at).getTime() - Date.now();
+    if (ms <= 0) return 'expired';
+    if (ms < 14 * 864e5) return 'expiring_soon';
     return 'valid';
   }
 
-  function daysLeftText(expiresAt: string | null): string {
-    if (!expiresAt) return '—';
-    const days = Math.ceil((new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  function daysLeft(expiresAt: string | null): string {
+    if (!expiresAt) return '';
+    const days = Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 864e5);
     if (days < 0) return `${Math.abs(days)}d overdue`;
-    if (days === 0) return 'Expires today';
-    if (days === 1) return 'Expires tomorrow';
+    if (days === 0) return 'today';
     return `${days}d left`;
   }
 
-  function healthIcon(st: string) {
-    if (st === 'expired') return ShieldOff;
-    if (st === 'expiring_soon') return ShieldAlert;
-    if (st === 'valid') return ShieldCheck;
-    return ShieldCheck;
-  }
-  function healthColor(st: string) {
-    if (st === 'expired') return 'text-red-400';
-    if (st === 'expiring_soon') return 'text-amber-400';
-    if (st === 'valid') return 'text-emerald-400';
-    return 'text-slate-500';
-  }
-  function healthBg(st: string) {
-    if (st === 'expired') return 'bg-red-500/10';
-    if (st === 'expiring_soon') return 'bg-amber-500/10';
-    if (st === 'valid') return 'bg-emerald-500/10';
-    return 'bg-white/[0.03]';
-  }
+  const meta: Record<Health, { label: string; badge: string; icon: any }> = {
+    valid: { label: 'Active', badge: 'badge-success', icon: ShieldCheck },
+    expiring_soon: { label: 'Expiring', badge: 'badge-warning', icon: ShieldAlert },
+    expired: { label: 'Expired', badge: 'badge-danger', icon: ShieldOff },
+    none: { label: 'No SSL', badge: '', icon: ShieldQuestion },
+  };
 
-  let certSites = $derived(allSites.filter((s: any) => s.ssl_status && s.ssl_status !== 'none'));
-  let validCount = $derived(allSites.filter((s: any) => sslStatus(s.ssl_expires_at, s.ssl_status) === 'valid').length);
-  let expiringCount = $derived(allSites.filter((s: any) => sslStatus(s.ssl_expires_at, s.ssl_status) === 'expiring_soon').length);
-  let expiredCount = $derived(allSites.filter((s: any) => sslStatus(s.ssl_expires_at, s.ssl_status) === 'expired').length);
-  let noSSLCount = $derived(allSites.filter((s: any) => sslStatus(s.ssl_expires_at, s.ssl_status) === 'none').length);
-  let expiringList = $derived(allSites.filter((s: any) => sslStatus(s.ssl_expires_at, s.ssl_status) === 'expiring_soon'));
-  let expiredList = $derived(allSites.filter((s: any) => sslStatus(s.ssl_expires_at, s.ssl_status) === 'expired'));
+  const rows = $derived(allSites.map((s) => ({ ...s, health: health(s) })));
+  const counts = $derived({
+    valid: rows.filter((r) => r.health === 'valid').length,
+    expiring_soon: rows.filter((r) => r.health === 'expiring_soon').length,
+    expired: rows.filter((r) => r.health === 'expired').length,
+    none: rows.filter((r) => r.health === 'none').length,
+  });
+  const visible = $derived(
+    rows
+      .filter((r) => filter === 'all' || r.health === filter)
+      .filter((r) => !query || r.domain.toLowerCase().includes(query.toLowerCase()))
+      // Most urgent first: expired, expiring, none, valid.
+      .sort((a, b) => ['expired', 'expiring_soon', 'none', 'valid'].indexOf(a.health) - ['expired', 'expiring_soon', 'none', 'valid'].indexOf(b.health)),
+  );
 </script>
 
 <DashboardLayout active="SSL">
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-    <div>
-      <h1 class="text-2xl font-bold bg-gradient-to-r from-white to-sky-100 bg-clip-text text-transparent">SSL Certificates</h1>
-      <p class="text-sm text-slate-500 mt-1">{loading ? 'Loading...' : `${allSites.length} site(s) tracked`}</p>
-    </div>
-    <div class="flex items-center gap-3">
-      <button onclick={loadData}
-        class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium text-slate-400 hover:bg-white/[0.05] hover:text-slate-200 transition cursor-pointer border border-white/[0.07]">
-        <RefreshCw size={14} /> Refresh
+  <PageHeader title="SSL certificates" description={loading ? 'Loading…' : `${allSites.length} sites tracked`}>
+    {#snippet actions()}
+      <button onclick={loadData} class="btn btn-secondary btn-sm" disabled={loading}>
+        <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
-      <button onclick={() => showIssue = !showIssue}
-        class="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-sky-400 to-indigo-400 text-[#0a1628] shadow-[0_4px_15px_rgba(56,189,248,0.2)] hover:-translate-y-0.5 hover:shadow-[0_6px_20px_rgba(56,189,248,0.3)] transition-all duration-150 cursor-pointer border-0 whitespace-nowrap">
-        <Plus size={14} /> Issue Certificate
+      {#if isAdmin}
+        <button onclick={renewAll} class="btn btn-secondary btn-sm" disabled={renewingAll || counts.expiring_soon + counts.expired === 0}>
+          <RefreshCw size={14} class={renewingAll ? 'animate-spin' : ''} /> Renew expiring
+        </button>
+      {/if}
+      <button onclick={() => (showIssue = true)} class="btn btn-primary btn-sm">
+        <Plus size={14} /> Issue certificate
       </button>
-    </div>
+    {/snippet}
+  </PageHeader>
+
+  <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <StatCard label="Active" value={loading ? '–' : counts.valid} icon={ShieldCheck} tone="success" />
+    <StatCard label="Expiring in 14 days" value={loading ? '–' : counts.expiring_soon} icon={ShieldAlert} tone="warning" />
+    <StatCard label="Expired" value={loading ? '–' : counts.expired} icon={ShieldOff} tone="danger" />
+    <StatCard label="Without SSL" value={loading ? '–' : counts.none} icon={ShieldQuestion} />
   </div>
 
-  {#if showIssue}
-    <div class="mb-6 bg-white/[0.03] border border-white/[0.07] rounded-xl p-6">
-      <h3 class="text-sm font-semibold text-slate-200 mb-4">Issue New SSL Certificate</h3>
-      <div class="flex flex-col sm:flex-row gap-4">
-        <div class="flex-1">
-          <label class="block text-xs text-slate-500 mb-1.5">Domain</label>
-          <select bind:value={issueDomain}
-            class="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-sky-400/40">
-            <option value="">Select domain...</option>
-            {#each allSites as s}<option value={s.domain}>{s.domain}</option>{/each}
-          </select>
-        </div>
-        <div class="flex items-end gap-3">
-          <button onclick={issueCert} disabled={issuing || !issueDomain}
-            class="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium bg-sky-500 text-white hover:bg-sky-400 transition disabled:opacity-40 cursor-pointer border-0">
-            {issuing ? 'Issuing...' : 'Issue'}
-          </button>
-          <button onclick={() => { showIssue = false; issueDomain = ''; }}
-            class="px-4 py-2.5 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] transition cursor-pointer border-0">Cancel</button>
-        </div>
+  <div class="card">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+      <div class="segmented">
+        {#each [['all', 'All'], ['expired', 'Expired'], ['expiring_soon', 'Expiring'], ['none', 'No SSL'], ['valid', 'Active']] as [key, label] (key)}
+          <button class="segment {filter === key ? 'segment-active' : ''}" onclick={() => (filter = key as any)}>{label}</button>
+        {/each}
+      </div>
+      <div class="relative w-full sm:w-64">
+        <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
+        <input bind:value={query} class="input h-8 pl-8" placeholder="Filter domains…" />
       </div>
     </div>
-  {/if}
 
-  {#if loading}
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-6 text-center py-20">
-      <div class="animate-pulse text-slate-500">Loading certificates...</div>
-    </div>
-  {:else}
-    <!-- ═══ Summary cards ═══ -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-4"><div class="flex items-center gap-2 mb-2"><ShieldCheck size={15} class="text-emerald-400" /><span class="text-xs text-slate-500">Valid</span></div><div class="text-2xl font-bold text-emerald-400">{validCount}</div></div>
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-4"><div class="flex items-center gap-2 mb-2"><AlertTriangle size={15} class="text-amber-400" /><span class="text-xs text-slate-500">Expiring Soon</span></div><div class="text-2xl font-bold text-amber-400">{expiringCount}</div></div>
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-4"><div class="flex items-center gap-2 mb-2"><AlertTriangle size={15} class="text-red-400" /><span class="text-xs text-slate-500">Expired</span></div><div class="text-2xl font-bold text-red-400">{expiredCount}</div></div>
-      <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl p-4"><div class="flex items-center gap-2 mb-2"><ShieldCheck size={15} class="text-slate-500" /><span class="text-xs text-slate-500">No SSL</span></div><div class="text-2xl font-bold text-slate-400">{noSSLCount}</div></div>
-    </div>
-
-    <!-- ═══ Expiring/Expired alerts ═══ -->
-    {#if expiringList.length > 0 || expiredList.length > 0}
-      <div class="bg-amber-500/5 border border-amber-500/20 rounded-xl p-5 mb-6">
-        <div class="flex items-center gap-2 mb-3"><AlertTriangle size={18} class="text-amber-400" /><h3 class="text-sm font-semibold text-amber-300">Attention Required</h3></div>
-        <div class="space-y-2">
-          {#each expiredList as cert}<div class="flex items-center justify-between py-2 border-b border-amber-500/10 last:border-0"><div class="flex items-center gap-2"><ShieldOff size={14} class="text-red-400" /><span class="text-sm text-white font-medium">{cert.domain}</span></div><span class="text-xs text-red-400 font-medium">{daysLeftText(cert.ssl_expires_at)}</span></div>{/each}
-          {#each expiringList as cert}<div class="flex items-center justify-between py-2 border-b border-amber-500/10 last:border-0"><div class="flex items-center gap-2"><ShieldAlert size={14} class="text-amber-400" /><span class="text-sm text-white font-medium">{cert.domain}</span></div><span class="text-xs text-amber-400 font-medium">{daysLeftText(cert.ssl_expires_at)}</span></div>{/each}
-        </div>
+    {#if loading}
+      <div class="space-y-3 p-4">
+        {#each Array(5) as _, i (i)}<div class="skeleton h-9"></div>{/each}
       </div>
-    {/if}
-
-    <!-- ═══ All certificates table ═══ -->
-    <div class="bg-white/[0.03] border border-white/[0.07] rounded-xl overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full border-separate border-spacing-0">
-          <thead><tr class="text-left">
-            <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Domain</th>
-            <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] hidden sm:table-cell">Issuer</th>
-            <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Status</th>
-            <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07]">Expires</th>
-            <th class="px-5 py-3.5 font-medium text-[0.72rem] uppercase tracking-wider text-slate-500 bg-white/[0.02] border-b border-white/[0.07] text-right">Actions</th>
-          </tr></thead>
+    {:else if visible.length === 0}
+      <EmptyState compact icon={ShieldCheck} title="No certificates match" description="Try another filter, or issue a certificate for one of your sites." />
+    {:else}
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Domain</th>
+              <th class="max-sm:hidden">Issuer</th>
+              <th>Status</th>
+              <th>Expires</th>
+              <th class="text-right">Actions</th>
+            </tr>
+          </thead>
           <tbody>
-            {#each allSites as s}
-              {@const st = sslStatus(s.ssl_expires_at, s.ssl_status)}
-              {@const Icon = healthIcon(st)}
-              <tr class="hover:bg-white/[0.02] transition">
-                <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                  <a href="/sites/{s.id}" class="text-sm font-medium text-white hover:text-sky-400 transition">{s.domain}</a>
-                </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] text-xs text-slate-400 align-middle hidden sm:table-cell">{s.ssl_issuer || '—'}</td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
-                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium {healthBg(st)} {healthColor(st)}"><Icon size={12} />{st === 'valid' ? 'Active' : st === 'expiring_soon' ? 'Expiring' : st === 'expired' ? 'Expired' : 'None'}</span>
-                </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] align-middle">
+            {#each visible as s (s.id)}
+              {@const m = meta[s.health as Health]}
+              <tr>
+                <td><a href="/sites/{s.id}" class="font-medium text-fg hover:text-accent">{s.domain}</a></td>
+                <td class="text-muted max-sm:hidden">{s.ssl_issuer || '—'}</td>
+                <td><span class="badge {m.badge}"><m.icon size={12} />{m.label}</span></td>
+                <td class="whitespace-nowrap">
                   {#if s.ssl_expires_at}
-                    <div class="flex items-center gap-1.5"><Calendar size={11} class="text-slate-500" /><span class="text-xs text-slate-500">{new Date(s.ssl_expires_at).toLocaleDateString('id-ID')}</span><span class="text-[0.6rem] font-medium {healthColor(st)}">({daysLeftText(s.ssl_expires_at)})</span></div>
+                    <span class="text-muted tabular-nums">{new Date(s.ssl_expires_at).toLocaleDateString('id-ID')}</span>
+                    <span class="ml-1 text-xs {s.health === 'expired' ? 'text-danger' : s.health === 'expiring_soon' ? 'text-warning' : 'text-subtle'}">{daysLeft(s.ssl_expires_at)}</span>
                   {:else}
-                    <span class="text-xs text-slate-600">—</span>
+                    <span class="text-subtle">—</span>
                   {/if}
                 </td>
-                <td class="px-5 py-3.5 border-b border-white/[0.03] text-right align-middle">
-                  {#if st !== 'none'}
-                    <button onclick={() => renewCert(s.domain)} disabled={renewing === s.domain}
-                      class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:bg-white/[0.05] hover:text-slate-200 transition-all duration-150 cursor-pointer border-0 whitespace-nowrap disabled:opacity-40">
-                      <RefreshCw size={12} class={renewing === s.domain ? 'animate-spin' : ''} />
-                      {renewing === s.domain ? 'Renewing...' : 'Renew'}
-                    </button>
+                <td class="text-right">
+                  {#if s.health === 'none'}
+                    <button onclick={() => { issueSiteId = s.id; showIssue = true; }} class="btn btn-ghost btn-xs text-accent">Issue</button>
                   {:else}
-                    <button onclick={() => { issueDomain = s.domain; showIssue = true; }}
-                      class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-sky-400 hover:bg-sky-400/10 transition-all cursor-pointer border-0 whitespace-nowrap">Issue</button>
+                    <button onclick={() => renewCert(s)} disabled={renewing === s.id} class="btn btn-ghost btn-xs">
+                      <RefreshCw size={12} class={renewing === s.id ? 'animate-spin' : ''} />
+                      {renewing === s.id ? 'Renewing…' : 'Renew'}
+                    </button>
                   {/if}
                 </td>
               </tr>
@@ -210,6 +210,23 @@
           </tbody>
         </table>
       </div>
-    </div>
-  {/if}
+    {/if}
+  </div>
+
+  <Modal bind:open={showIssue} title="Issue SSL certificate" maxWidth="md" onclose={() => (issueSiteId = '')}>
+    <label class="label" for="issue-site">Site</label>
+    <select id="issue-site" bind:value={issueSiteId} class="input">
+      <option value="">Select a site…</option>
+      {#each rows as s (s.id)}
+        <option value={s.id}>{s.domain}{s.health !== 'none' ? ` — ${meta[s.health as Health].label.toLowerCase()}` : ''}</option>
+      {/each}
+    </select>
+    <p class="hint">A Let's Encrypt certificate is requested in the background. The domain must already point to this server.</p>
+    {#snippet footer()}
+      <button class="btn btn-secondary btn-sm" onclick={() => (showIssue = false)}>Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick={issueCert} disabled={issuing || !issueSiteId}>
+        {issuing ? 'Requesting…' : 'Issue certificate'}
+      </button>
+    {/snippet}
+  </Modal>
 </DashboardLayout>

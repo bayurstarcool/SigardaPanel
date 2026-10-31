@@ -1016,6 +1016,18 @@ func siteToMap(s store.Site) map[string]any {
 	if s.PHPVersion.Valid {
 		m["php_version"] = s.PHPVersion.String
 	}
+	if s.SSLStatus.Valid {
+		m["ssl_status"] = s.SSLStatus.String
+	}
+	if s.SSLIssuer.Valid {
+		m["ssl_issuer"] = s.SSLIssuer.String
+	}
+	if s.SSLExpiresAt.Valid {
+		m["ssl_expires_at"] = s.SSLExpiresAt.Time
+	}
+	if s.SSLLastCheck.Valid {
+		m["ssl_last_check"] = s.SSLLastCheck.Time
+	}
 	if s.PHPIni.Valid {
 		m["php_ini"] = s.PHPIni.String
 	}

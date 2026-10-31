@@ -34,22 +34,11 @@
 
 <Modal bind:open {title} maxWidth="sm" onclose={cancel}>
   {#if message}
-    <p class="text-sm text-gray-300 leading-relaxed">{message}</p>
+    <p class="text-sm leading-relaxed text-muted">{message}</p>
   {/if}
 
   {#snippet footer()}
-    <button
-      onclick={cancel}
-      class="px-4 py-2 rounded-xl text-sm font-medium text-gray-300 bg-gray-700/50 hover:bg-gray-700 transition cursor-pointer border-0"
-    >
-      {cancelLabel}
-    </button>
-    <button
-      onclick={confirm}
-      class="px-4 py-2 rounded-xl text-sm font-medium text-white transition cursor-pointer border-0
-        {destructive ? 'bg-red-600 hover:bg-red-500' : 'bg-indigo-600 hover:bg-indigo-500'}"
-    >
-      {confirmLabel}
-    </button>
+    <button onclick={cancel} class="btn btn-secondary btn-sm">{cancelLabel}</button>
+    <button onclick={confirm} class="btn btn-sm {destructive ? 'btn-danger' : 'btn-primary'}">{confirmLabel}</button>
   {/snippet}
 </Modal>

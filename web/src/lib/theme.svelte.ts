@@ -1,36 +1,37 @@
 type Theme = "dark" | "light";
 
-function createThemeStore() {
-  let theme = $state<Theme>(
-    (typeof window !== "undefined" &&
-      (localStorage.getItem("sigarda_theme") as Theme)) ||
-      "dark",
-  );
+// app.html applies the saved (or system) theme before first paint; the store
+// starts from whatever class is already on <html> so the two never disagree.
+function initialTheme(): Theme {
+  if (typeof document === "undefined") return "dark";
+  return document.documentElement.classList.contains("light") ? "light" : "dark";
+}
 
-  function toggle() {
-    theme = theme === "dark" ? "light" : "dark";
-    localStorage.setItem("sigarda_theme", theme);
-    applyTheme(theme);
+function createThemeStore() {
+  let theme = $state<Theme>(initialTheme());
+
+  function applyTheme(t: Theme) {
+    const html = document.documentElement;
+    html.classList.toggle("light", t === "light");
+    html.classList.toggle("dark", t === "dark");
   }
 
   function set(t: Theme) {
     theme = t;
-    localStorage.setItem("sigarda_theme", theme);
-    applyTheme(theme);
+    try {
+      localStorage.setItem("sigarda_theme", t);
+    } catch {
+      // storage unavailable (private mode) — theme still applies for this visit
+    }
+    applyTheme(t);
   }
 
-  function applyTheme(t: Theme) {
-    const html = document.documentElement;
-    if (t === "light") {
-      html.classList.add("light");
-      html.classList.remove("dark");
-    } else {
-      html.classList.add("dark");
-      html.classList.remove("light");
-    }
+  function toggle() {
+    set(theme === "dark" ? "light" : "dark");
   }
 
   function init() {
+    theme = initialTheme();
     applyTheme(theme);
   }
 

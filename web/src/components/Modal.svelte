@@ -40,7 +40,7 @@
 {#if open}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+    class="overlay animate-fade-in flex items-end justify-center p-0 sm:items-center sm:p-4"
     onclick={close}
     role="dialog"
     aria-modal="true"
@@ -48,31 +48,27 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="w-full {maxWidths[maxWidth]} bg-gray-900 border border-gray-700/50 rounded-2xl shadow-2xl shadow-black/40"
+      class="popover animate-pop-in flex max-h-[90dvh] w-full flex-col {maxWidths[maxWidth]} max-sm:rounded-b-none"
       onclick={(e) => e.stopPropagation()}
       role="document"
     >
       {#if title}
-        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-700/50">
-          <h2 class="text-lg font-semibold text-white">{title}</h2>
-          <button
-            onclick={close}
-            class="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700/50 transition cursor-pointer bg-transparent border-0"
-            aria-label="Close"
-          >
-            <X size={18} />
+        <div class="flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 py-3.5">
+          <h2 class="text-[15px] font-semibold text-fg">{title}</h2>
+          <button onclick={close} class="btn btn-ghost btn-icon btn-xs" aria-label="Close">
+            <X size={16} />
           </button>
         </div>
       {/if}
 
       {#if children}
-        <div class="px-6 py-4">
+        <div class="overflow-y-auto px-5 py-4">
           {@render children()}
         </div>
       {/if}
 
       {#if footer}
-        <div class="px-6 py-4 border-t border-gray-700/50 flex items-center justify-end gap-3">
+        <div class="flex shrink-0 items-center justify-end gap-2 border-t border-line px-5 py-3">
           {@render footer()}
         </div>
       {/if}

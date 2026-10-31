@@ -1,107 +1,50 @@
 <script lang="ts">
-  let { 
-    totalItems = 0, 
-    pageSize = 20, 
-    currentPage = 1, 
-    onPageChange = (page: number) => {} 
-  } = $props();
+  import { ChevronLeft, ChevronRight } from 'lucide-svelte';
 
-  let totalPages = $derived(Math.ceil(totalItems / pageSize));
-  let pages = $derived(generatePages(currentPage, totalPages));
+  let {
+    totalItems = 0,
+    pageSize = 20,
+    currentPage = 1,
+    onPageChange = (_page: number) => {},
+  }: { totalItems?: number; pageSize?: number; currentPage?: number; onPageChange?: (page: number) => void } = $props();
 
-  function generatePages(current: number, total: number): (number | string)[] {
-    if (total <= 7) {
-      return Array.from({ length: total }, (_, i) => i + 1);
-    }
+  const totalPages = $derived(Math.max(1, Math.ceil(totalItems / pageSize)));
+  const pages = $derived(generatePages(currentPage, totalPages));
+  const from = $derived(totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1);
+  const to = $derived(Math.min(currentPage * pageSize, totalItems));
 
-    const pages: (number | string)[] = [];
-    
-    if (current <= 3) {
-      pages.push(1, 2, 3, 4, '...', total);
-    } else if (current >= total - 2) {
-      pages.push(1, '...', total - 3, total - 2, total - 1, total);
-    } else {
-      pages.push(1, '...', current - 1, current, current + 1, '...', total);
-    }
-
-    return pages;
+  function generatePages(current: number, total: number): (number | '…')[] {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+    if (current <= 3) return [1, 2, 3, 4, '…', total];
+    if (current >= total - 2) return [1, '…', total - 3, total - 2, total - 1, total];
+    return [1, '…', current - 1, current, current + 1, '…', total];
   }
 
-  function goToPage(page: number | string) {
-    if (typeof page === 'number' && page >= 1 && page <= totalPages) {
-      onPageChange(page);
-    }
+  function go(p: number) {
+    if (p >= 1 && p <= totalPages && p !== currentPage) onPageChange(p);
   }
 </script>
 
 {#if totalPages > 1}
-  <div class="pagination">
-    <button 
-      class="page-btn"
-      disabled={currentPage === 1}
-      onclick={() => goToPage(currentPage - 1)}
-    >
-      ←
-    </button>
-
-    {#each pages as page}
-      {#if page === '...'}
-        <span class="ellipsis">...</span>
-      {:else}
-        <button 
-          class="page-btn"
-          class:active={page === currentPage}
-          onclick={() => goToPage(page)}
-        >
-          {page}
-        </button>
-      {/if}
-    {/each}
-
-    <button 
-      class="page-btn"
-      disabled={currentPage === totalPages}
-      onclick={() => goToPage(currentPage + 1)}
-    >
-      →
-    </button>
+  <div class="flex flex-wrap items-center justify-between gap-3 pt-4 text-[13px]">
+    <span class="text-subtle tabular-nums">{from}–{to} of {totalItems}</span>
+    <div class="flex items-center gap-1">
+      <button class="btn btn-ghost btn-icon btn-xs" disabled={currentPage === 1} onclick={() => go(currentPage - 1)} aria-label="Previous page">
+        <ChevronLeft size={15} />
+      </button>
+      {#each pages as p, i (i)}
+        {#if p === '…'}
+          <span class="px-1 text-subtle">…</span>
+        {:else}
+          <button
+            class="btn btn-xs min-w-7 tabular-nums {p === currentPage ? 'bg-surface-2 text-fg' : 'btn-ghost'}"
+            aria-current={p === currentPage ? 'page' : undefined}
+            onclick={() => go(p)}>{p}</button>
+        {/if}
+      {/each}
+      <button class="btn btn-ghost btn-icon btn-xs" disabled={currentPage === totalPages} onclick={() => go(currentPage + 1)} aria-label="Next page">
+        <ChevronRight size={15} />
+      </button>
+    </div>
   </div>
 {/if}
-
-<style>
-  .pagination {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 1rem 0;
-  }
-  .page-btn {
-    min-width: 32px;
-    height: 32px;
-    padding: 0 8px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    background: white;
-    color: #374151;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .page-btn:hover:not(:disabled) {
-    background: #f3f4f6;
-    border-color: #9ca3af;
-  }
-  .page-btn.active {
-    background: #3b82f6;
-    color: white;
-    border-color: #3b82f6;
-  }
-  .page-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .ellipsis {
-    padding: 0 4px;
-    color: #6b7280;
-  }
-</style>
