@@ -97,6 +97,10 @@ func runTick(ctx context.Context, s *store.Store) {
 
 // runSSLAutoRenew checks for SSL certificates expiring within 30 days
 // and enqueues ssl.renew jobs for them.
+// sslRenewRetryBackoff is how long to wait after a failed auto-renewal
+// before queuing another one for the same site.
+const sslRenewRetryBackoff = 6 * time.Hour
+
 func runSSLAutoRenew(ctx context.Context, s *store.Store) {
 	const renewWindow = 30 * 24 * time.Hour // 30 days
 
@@ -130,6 +134,12 @@ func runSSLAutoRenew(ctx context.Context, s *store.Store) {
 		})
 		if len(queued) > 0 || len(running) > 0 {
 			slog.Info("scheduler: ssl renew already queued", "site_id", site.ID, "domain", site.Domain)
+			continue
+		}
+
+		// A renewal that just failed (DNS moved, rate limit, port 80 closed…)
+		// would otherwise be re-queued — and alerted — every minute. Back off.
+		if failed, _ := s.Jobs.HasRecentFailedJob(ctx, jobmodel.TypeSSLRenew, site.ID, sslRenewRetryBackoff); failed {
 			continue
 		}
 

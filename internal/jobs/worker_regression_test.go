@@ -113,3 +113,41 @@ func TestParseCertEndDate(t *testing.T) {
 		}
 	}
 }
+
+// A failed auto-renewal must not be re-queued (and re-alerted) every minute.
+func TestSSLAutoRenew_BacksOffAfterFailure(t *testing.T) {
+	s, ctx := fullWorkerDB(t)
+	srvID, _ := agentServer(t, s, ctx, agentclient.TaskResult{OK: true})
+	site := &store.Site{ServerID: srvID, Name: "s", Domain: "s.example.com", Runtime: "static", Status: "active"}
+	if err := s.Sites.Create(ctx, site); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Sites.UpdateSSL(ctx, site.ID, "active", "Let's Encrypt", time.Now().Add(5*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	queuedRenewals := func() int {
+		jobs, _ := s.Jobs.List(ctx, store.JobListFilter{Type: jobmodel.TypeSSLRenew, SiteID: site.ID, Status: jobmodel.StatusQueued})
+		return len(jobs)
+	}
+
+	failed := &jobmodel.Job{Type: jobmodel.TypeSSLRenew, Payload: `{}`, SiteID: sql.NullInt64{Int64: site.ID, Valid: true}}
+	if err := s.Jobs.Create(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Jobs.MarkCompleted(ctx, failed.ID, false, "", "certbot failed"); err != nil {
+		t.Fatal(err)
+	}
+	runSSLAutoRenew(ctx, s)
+	if n := queuedRenewals(); n != 0 {
+		t.Fatalf("renewal re-queued right after a failure (%d queued)", n)
+	}
+
+	// Without a recent failure the renewal is queued as before.
+	if _, err := s.DB().ExecContext(ctx, `UPDATE jobs SET updated_at = datetime('now','-7 hours') WHERE id = ?`, failed.ID); err != nil {
+		t.Fatal(err)
+	}
+	runSSLAutoRenew(ctx, s)
+	if n := queuedRenewals(); n != 1 {
+		t.Fatalf("expected one queued renewal after the back-off, got %d", n)
+	}
+}

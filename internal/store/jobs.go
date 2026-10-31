@@ -24,6 +24,7 @@ type JobRepository interface {
 	MarkCompleted(ctx context.Context, id int64, success bool, result, errMsg string) error
 	Cancel(ctx context.Context, id int64) error
 	HasActiveJob(ctx context.Context, jobType string, siteID int64) (bool, error)
+	HasRecentFailedJob(ctx context.Context, jobType string, siteID int64, within time.Duration) (bool, error)
 	CountRunningByServer(ctx context.Context, serverID int64) (int, error)
 	CleanupStuckRunning(ctx context.Context, staleAfter time.Duration) (int64, error)
 	ScrubTerminalPayloads(ctx context.Context, olderThan time.Duration) (int64, error)
@@ -285,6 +286,20 @@ func scanJob(row *sql.Row) (*jobmodel.Job, error) {
 		return nil, fmt.Errorf("scan job: %w", err)
 	}
 	return &j, nil
+}
+
+// HasRecentFailedJob returns true if a job of the given type for the site
+// failed within the given window.
+func (s *SQLiteJobStore) HasRecentFailedJob(ctx context.Context, jobType string, siteID int64, within time.Duration) (bool, error) {
+	cutoff := time.Now().Add(-within).UTC().Format("2006-01-02 15:04:05")
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM jobs WHERE type = ? AND site_id = ? AND status = 'failed' AND updated_at >= ?`,
+		jobType, siteID, cutoff).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("has recent failed job: %w", err)
+	}
+	return count > 0, nil
 }
 
 // HasActiveJob returns true if there is a queued or running job of the given type for the site.
