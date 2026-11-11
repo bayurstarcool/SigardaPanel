@@ -148,7 +148,7 @@ func (a *App) serverGet(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, 0, "server")
+	id, ok := a.idArg(flags, pos, 0, "server")
 	if !ok {
 		return exitUsage
 	}
@@ -190,7 +190,7 @@ func (a *App) serverHealth(args []string) int {
 	path := "/api/v1/servers/health"
 	single := len(pos) > 0
 	if single {
-		id, ok := a.idArg(pos, 0, "server")
+		id, ok := a.idArg(flags, pos, 0, "server")
 		if !ok {
 			return exitUsage
 		}
@@ -257,7 +257,7 @@ func (a *App) serverRemove(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, 0, "server")
+	id, ok := a.idArg(flags, pos, 0, "server")
 	if !ok {
 		return exitUsage
 	}
@@ -306,7 +306,7 @@ func (a *App) serverUpdate(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, *idFlag, "server")
+	id, ok := a.idArg(flags, pos, *idFlag, "server")
 	if !ok {
 		return exitUsage
 	}
@@ -372,7 +372,7 @@ func (a *App) serverToken(args []string) int {
 	}
 	id := int64(1)
 	if len(pos) > 0 || *idFlag > 0 {
-		if id, ok = a.idArg(pos, *idFlag, "server"); !ok {
+		if id, ok = a.idArg(flags, pos, *idFlag, "server"); !ok {
 			return exitUsage
 		}
 	}

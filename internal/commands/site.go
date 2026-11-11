@@ -135,7 +135,7 @@ func (a *App) siteGet(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, 0, "site")
+	id, ok := a.idArg(flags, pos, 0, "site")
 	if !ok {
 		return exitUsage
 	}
@@ -254,7 +254,7 @@ func (a *App) siteUpdate(verb string, args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, *idFlag, "site")
+	id, ok := a.idArg(flags, pos, *idFlag, "site")
 	if !ok {
 		return exitUsage
 	}
@@ -311,7 +311,7 @@ func (a *App) siteDelete(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, 0, "site")
+	id, ok := a.idArg(flags, pos, 0, "site")
 	if !ok {
 		return exitUsage
 	}
@@ -339,7 +339,7 @@ func (a *App) siteAction(args []string, name, endpoint, done string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, *idFlag, "site")
+	id, ok := a.idArg(flags, pos, *idFlag, "site")
 	if !ok {
 		return exitUsage
 	}
@@ -366,7 +366,7 @@ func (a *App) siteSetupLogrotate(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, *idFlag, "site")
+	id, ok := a.idArg(flags, pos, *idFlag, "site")
 	if !ok {
 		return exitUsage
 	}

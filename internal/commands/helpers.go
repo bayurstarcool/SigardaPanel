@@ -28,7 +28,7 @@ func (a *App) newFlags(name, synopsis string) *flag.FlagSet {
 	fs.SetOutput(a.stderr)
 	fs.Usage = func() {
 		out := fs.Output()
-		fmt.Fprintf(out, "Usage: sigardapanel %s %s\n", name, synopsis)
+		fmt.Fprintf(out, "usage: sigardapanel %s %s\n", name, synopsis)
 		hasFlags := false
 		fs.VisitAll(func(*flag.Flag) { hasFlags = true })
 		if hasFlags {
@@ -91,7 +91,15 @@ func isHelpArg(args []string) bool {
 // idArg returns the single numeric ID a command operates on: the positional
 // argument if present, otherwise the value of an --id style flag. what is
 // used in error messages ("site", "job", ...).
-func (a *App) idArg(pos []string, flagVal int64, what string) (int64, bool) {
+func (a *App) idArg(fs *flag.FlagSet, pos []string, flagVal int64, what string) (int64, bool) {
+	id, ok := a.parseIDArg(pos, flagVal, what)
+	if !ok && fs != nil {
+		fs.Usage()
+	}
+	return id, ok
+}
+
+func (a *App) parseIDArg(pos []string, flagVal int64, what string) (int64, bool) {
 	if len(pos) > 1 {
 		fmt.Fprintf(a.stderr, "too many arguments: expected one %s ID, got %q\n", what, strings.Join(pos, " "))
 		return 0, false

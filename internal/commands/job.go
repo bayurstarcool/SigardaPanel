@@ -124,7 +124,7 @@ func (a *App) jobGet(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, 0, "job")
+	id, ok := a.idArg(flags, pos, 0, "job")
 	if !ok {
 		return exitUsage
 	}
@@ -158,7 +158,7 @@ func (a *App) jobWatch(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, *idFlag, "job")
+	id, ok := a.idArg(flags, pos, *idFlag, "job")
 	if !ok {
 		return exitUsage
 	}
@@ -218,7 +218,7 @@ func (a *App) jobLogs(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, *idFlag, "job")
+	id, ok := a.idArg(flags, pos, *idFlag, "job")
 	if !ok {
 		return exitUsage
 	}
@@ -292,7 +292,7 @@ func (a *App) jobCancel(args []string) int {
 	if !ok {
 		return code
 	}
-	id, ok := a.idArg(pos, *idFlag, "job")
+	id, ok := a.idArg(flags, pos, *idFlag, "job")
 	if !ok {
 		return exitUsage
 	}

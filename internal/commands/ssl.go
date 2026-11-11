@@ -39,7 +39,7 @@ func (a *App) sslStatus(args []string) int {
 	if !ok {
 		return code
 	}
-	siteID, ok := a.idArg(pos, *siteFlag, "site")
+	siteID, ok := a.idArg(flags, pos, *siteFlag, "site")
 	if !ok {
 		return exitUsage
 	}
@@ -81,7 +81,7 @@ func (a *App) sslJob(args []string, action string) int {
 	if !ok {
 		return code
 	}
-	siteID, ok := a.idArg(pos, *siteFlag, "site")
+	siteID, ok := a.idArg(flags, pos, *siteFlag, "site")
 	if !ok {
 		return exitUsage
 	}

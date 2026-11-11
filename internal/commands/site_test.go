@@ -276,7 +276,7 @@ func TestSiteSubcommandHelp(t *testing.T) {
 	if code := app.Run([]string{"site", "create", "--help"}); code != 0 {
 		t.Fatalf("expected 0 for --help, got %d", code)
 	}
-	if !strings.Contains(stdout.String(), "Usage: sigardapanel site create") || !strings.Contains(stdout.String(), "-domain") {
+	if !strings.Contains(stdout.String(), "usage: sigardapanel site create") || !strings.Contains(stdout.String(), "-domain") {
 		t.Errorf("help output: %s", stdout.String())
 	}
 }
