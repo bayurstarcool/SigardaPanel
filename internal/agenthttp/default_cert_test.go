@@ -79,3 +79,21 @@ func TestSiteCreateTask_RemovesVhostWhenNginxTestFails(t *testing.T) {
 		t.Fatalf("placeholder certificate not created: %v", err)
 	}
 }
+
+func TestAcmeContactUsable(t *testing.T) {
+	for email, want := range map[string]bool{
+		"ops@company.co.id":  true,
+		"admin@localhost":    false,
+		"alice@panel.local":  false,
+		"bob@srv.test":       false,
+		"x@example.com":      false,
+		"":                   false,
+		"no-at-sign":         false,
+		"a@b":                false,
+		"me@sub.example.org": true,
+	} {
+		if got := acmeContactUsable(email); got != want {
+			t.Errorf("acmeContactUsable(%q) = %v, want %v", email, got, want)
+		}
+	}
+}

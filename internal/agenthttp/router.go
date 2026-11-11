@@ -1140,6 +1140,30 @@ func (r *Router) nginxReloadTask(c echo.Context) error {
 	})
 }
 
+// acmeContactUsable reports whether Let's Encrypt would accept email as the
+// account contact: it needs a public-looking domain (localhost, .local,
+// .test and similar are refused by the ACME server).
+func acmeContactUsable(email string) bool {
+	at := strings.LastIndex(email, "@")
+	if at <= 0 || at == len(email)-1 || strings.ContainsAny(email, " \t\r\n") {
+		return false
+	}
+	domain := strings.ToLower(strings.TrimSuffix(email[at+1:], "."))
+	if !strings.Contains(domain, ".") {
+		return false
+	}
+	for _, suffix := range []string{".localhost", ".local", ".localdomain", ".test", ".invalid", ".example", ".internal", ".lan"} {
+		if strings.HasSuffix(domain, suffix) {
+			return false
+		}
+	}
+	switch domain {
+	case "example.com", "example.org", "example.net":
+		return false
+	}
+	return true
+}
+
 func (r *Router) sslIssueTask(c echo.Context) error {
 	var payload struct {
 		SiteID int64  `json:"site_id"`
@@ -1175,16 +1199,17 @@ func (r *Router) sslIssueTask(c echo.Context) error {
 	r.executor.Mkdir(ctx, webrootPath)
 
 	// Use webroot mode (does NOT modify nginx config — prevents redirect loop)
-	output, err := r.executor.RunShell(ctx, "certbot",
-		"certonly",
-		"--webroot",
-		"-w", webrootPath,
-		"-d", payload.Domain,
-		"--email", payload.Email,
-		"--agree-tos",
-		"--no-eff-email",
-		"--non-interactive",
-	)
+	args := []string{"certonly", "--webroot", "-w", webrootPath, "-d", payload.Domain}
+	if acmeContactUsable(payload.Email) {
+		args = append(args, "--email", payload.Email, "--no-eff-email")
+	} else {
+		// Let's Encrypt rejects addresses such as admin@localhost (the
+		// installer's default), which failed every site certificate.
+		slog.Warn("agent: ssl.issue without contact e-mail", "domain", payload.Domain, "email", payload.Email)
+		args = append(args, "--register-unsafely-without-email")
+	}
+	args = append(args, "--agree-tos", "--non-interactive")
+	output, err := r.executor.RunShell(ctx, "certbot", args...)
 
 	if err != nil {
 		// webroot failed — likely Cloudflare proxy blocking. Return error, don't fallback to --nginx

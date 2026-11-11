@@ -367,7 +367,10 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			site, err := w.store.Sites.GetByID(ctx, siteID)
 			if err == nil && site != nil && site.Domain != "" {
 				// Get owner email for Let's Encrypt
-				email := "admin@sigarda.com" // fallback
+				// No owner e-mail: the agent registers without a contact
+				// address (it used to register every install's Let's
+				// Encrypt account with a Sigarda address).
+				email := ""
 				if site.OwnerID.Valid {
 					owner, err := w.store.Users.GetByID(ctx, site.OwnerID.Int64)
 					if err == nil && owner != nil && owner.Email != "" {
