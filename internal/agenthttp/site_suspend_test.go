@@ -36,8 +36,9 @@ func TestSiteSuspendResume_MovesVhostAndRenewal(t *testing.T) {
 	if code := call("/tasks/site/suspend"); code != http.StatusOK {
 		t.Fatalf("suspend: %d", code)
 	}
-	if _, err := os.Stat(vhost); !os.IsNotExist(err) {
-		t.Fatal("vhost still enabled after suspend")
+	// The original vhost is replaced by the 503 placeholder.
+	if data, err := os.ReadFile(vhost); err != nil || !isSuspendedPlaceholder(data) {
+		t.Fatalf("expected the suspended placeholder in sites-enabled: %v %q", err, data)
 	}
 	if _, err := os.Stat(filepath.Join(base, "nginx", "sites-disabled", "sus.example.com.conf")); err != nil {
 		t.Fatalf("vhost not in sites-disabled: %v", err)
@@ -58,6 +59,9 @@ func TestSiteSuspendResume_MovesVhostAndRenewal(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("%s not restored: %v", p, err)
 		}
+	}
+	if data, _ := os.ReadFile(vhost); string(data) != "server {}" {
+		t.Fatalf("original vhost not restored: %q", data)
 	}
 }
 

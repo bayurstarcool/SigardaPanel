@@ -243,7 +243,12 @@ sigardapanel site setup-logrotate <id>                # admin
 - `delete` removes the site, its files and databases (cleanup job).
 - `suspend` takes an *active* site offline (vhost and certificate renewal disabled,
   data kept); `resume` reverses it. Both answer `409` when the site is in the wrong
-  state or a suspend/resume job is already queued.
+  state or a suspend/resume job is already queued. While suspended, the agent keeps
+  the site's vhost in `sites-disabled/` and serves a generated placeholder
+  (`sites-enabled/<domain>.conf`, first line `# sigardapanel: suspended placeholder`)
+  that answers `503` with a "temporarily suspended" page on port 80 and, if the
+  domain has a Let's Encrypt certificate, on 443. `resume` deletes that file only if
+  it still carries the marker; a failing `nginx -t` rolls either step back.
 
 ```console
 $ sigardapanel site suspend 12
