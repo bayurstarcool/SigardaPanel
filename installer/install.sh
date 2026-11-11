@@ -346,6 +346,7 @@ NGINX
   if [ -n "${DOMAIN:-}" ] && [ -n "${LETSENCRYPT_EMAIL:-}" ] && command -v certbot >/dev/null; then
     log "Requesting a Let's Encrypt certificate for ${DOMAIN}..."
     if certbot --nginx -d "$DOMAIN" -m "$LETSENCRYPT_EMAIL" --agree-tos -n >/dev/null 2>&1; then
+      LE_OK=1
       ok "Let's Encrypt certificate installed"
     else
       warn "Let's Encrypt failed (DNS must point here and port 80 be reachable); keeping the self-signed certificate"
@@ -440,8 +441,9 @@ do_install() {
   echo "  Username:  ${ADMIN_USER}"
   echo "  Password:  ${ADMIN_PASS}     (also saved to /root/.sigardapanel_admin_cred)"
   echo
-  if [ -z "${DOMAIN:-}" ]; then
-    warn "The certificate is self-signed (browser warning). Use DOMAIN=panel.example.com (+ LETSENCRYPT_EMAIL) for a trusted one."
+  if [ -z "${LE_OK:-}" ]; then
+    warn "The certificate is self-signed (browser warning). Use DOMAIN=panel.example.com + LETSENCRYPT_EMAIL for a trusted one."
+    warn "New servers added with the one-line install command must then be given the panel certificate (docs/INSTALL.md, SIGARDAPANEL_PANEL_CA)."
   fi
   if [ "${INSTALL_FIREWALL:-no}" != "yes" ]; then
     warn "No firewall was configured. Recommended: allow only SSH, 80 and 443 - e.g. ufw allow OpenSSH && ufw allow 80,443/tcp && ufw enable"
