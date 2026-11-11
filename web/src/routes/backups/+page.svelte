@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtRelative, fmtDateTime } from '$lib/format';
   import { toasts } from '$lib/toast.svelte';
@@ -23,6 +23,7 @@
   let configs = $state<any[]>([]);
   let loading = $state(true);
   let view = $state<'history' | 'settings'>('history');
+  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
   let activeTab = $state<'all' | 'files' | 'database'>('all');
   let allSites = $state<any[]>([]);
   let allDatabases = $state<any[]>([]);
@@ -47,7 +48,8 @@
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
     await load();
-    await Promise.all([loadProviders(), loadConfigs(), loadSites(), loadDatabases()]);
+    // Providers and schedules are admin-only endpoints.
+    await Promise.all([isAdmin ? loadProviders() : null, isAdmin ? loadConfigs() : null, loadSites(), loadDatabases()]);
   });
 
   async function load() {
@@ -132,7 +134,7 @@
   function openManualBackup() {
     showManualBackup = true;
     loadSites();
-    loadProviders();
+    if (isAdmin) loadProviders();
   }
 
   async function triggerManualBackup() {
@@ -198,10 +200,12 @@
     {/snippet}
   </PageHeader>
 
-  <div class="tabs mb-6" role="tablist">
-    <button role="tab" aria-selected={view === 'history'} class="tab {view === 'history' ? 'tab-active' : ''}" onclick={() => (view = 'history')}>History</button>
-    <button role="tab" aria-selected={view === 'settings'} class="tab {view === 'settings' ? 'tab-active' : ''}" onclick={() => (view = 'settings')}>Settings</button>
-  </div>
+  {#if isAdmin}
+    <div class="tabs mb-6" role="tablist">
+      <button role="tab" aria-selected={view === 'history'} class="tab {view === 'history' ? 'tab-active' : ''}" onclick={() => (view = 'history')}>History</button>
+      <button role="tab" aria-selected={view === 'settings'} class="tab {view === 'settings' ? 'tab-active' : ''}" onclick={() => (view = 'settings')}>Settings</button>
+    </div>
+  {/if}
 
   {#if view === 'history'}
     <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -303,7 +307,7 @@
         </div>
       {/if}
     </div>
-  {:else}
+  {:else if isAdmin}
     <SettingsPanel {providers} {providerUsage} {configs} {allSites} {loadProviders} {loadConfigs} />
   {/if}
 
