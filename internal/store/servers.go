@@ -23,6 +23,7 @@ type Server struct {
 	LastHealthCheck  sql.NullTime
 	HealthStatus     string
 	HealthLatencyMs  int64
+	AgentVersion     sql.NullString // reported by the agent's /health
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -35,6 +36,8 @@ type ServerRepository interface {
 	Update(ctx context.Context, s *Server) error
 	UpdateStatus(ctx context.Context, id int64, status string) error
 	UpdateHealth(ctx context.Context, id int64, status string, latencyMs int64) error
+	UpdateAgentToken(ctx context.Context, id int64, token string) error
+	UpdateAgentVersion(ctx context.Context, id int64, version string) error
 	Delete(ctx context.Context, id int64) error
 }
 
@@ -77,7 +80,7 @@ func (s *SQLiteServerStore) Create(ctx context.Context, srv *Server) error {
 func (s *SQLiteServerStore) GetByID(ctx context.Context, id int64) (*Server, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, name, hostname, agent_url, ip_address, ipv6, ssh_port, description, status, provider, agent_token,
-		 last_health_check, health_status, health_latency_ms, created_at, updated_at
+		 last_health_check, health_status, health_latency_ms, agent_version, created_at, updated_at
 		 FROM servers WHERE id = ?`, id)
 	return scanServer(row)
 }
@@ -86,7 +89,7 @@ func (s *SQLiteServerStore) GetByID(ctx context.Context, id int64) (*Server, err
 func (s *SQLiteServerStore) List(ctx context.Context) ([]Server, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, hostname, agent_url, ip_address, ipv6, ssh_port, description, status, provider, agent_token,
-		 last_health_check, health_status, health_latency_ms, created_at, updated_at
+		 last_health_check, health_status, health_latency_ms, agent_version, created_at, updated_at
 		 FROM servers ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query servers: %w", err)
@@ -96,7 +99,7 @@ func (s *SQLiteServerStore) List(ctx context.Context) ([]Server, error) {
 	var servers []Server
 	for rows.Next() {
 		var srv Server
-		if err := rows.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.AgentURL, &srv.IPAddress, &srv.IPv6, &srv.SSHPort, &srv.Description, &srv.Status, &srv.Provider, &srv.AgentToken, &srv.LastHealthCheck, &srv.HealthStatus, &srv.HealthLatencyMs, &srv.CreatedAt, &srv.UpdatedAt); err != nil {
+		if err := rows.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.AgentURL, &srv.IPAddress, &srv.IPv6, &srv.SSHPort, &srv.Description, &srv.Status, &srv.Provider, &srv.AgentToken, &srv.LastHealthCheck, &srv.HealthStatus, &srv.HealthLatencyMs, &srv.AgentVersion, &srv.CreatedAt, &srv.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan server: %w", err)
 		}
 		servers = append(servers, srv)
@@ -130,6 +133,33 @@ func (s *SQLiteServerStore) UpdateHealth(ctx context.Context, id int64, status s
 	return nil
 }
 
+// UpdateAgentToken stores a new agent token (Update deliberately leaves the
+// token alone so ordinary edits cannot clear it).
+func (s *SQLiteServerStore) UpdateAgentToken(ctx context.Context, id int64, token string) error {
+	if token == "" {
+		return fmt.Errorf("update agent token: empty token")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE servers SET agent_token = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, token, id)
+	if err != nil {
+		return fmt.Errorf("update agent token: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("update agent token: server %d not found", id)
+	}
+	return nil
+}
+
+// UpdateAgentVersion records the version the agent reported.
+func (s *SQLiteServerStore) UpdateAgentVersion(ctx context.Context, id int64, version string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE servers SET agent_version = ? WHERE id = ?`, sql.NullString{String: version, Valid: version != ""}, id)
+	if err != nil {
+		return fmt.Errorf("update agent version: %w", err)
+	}
+	return nil
+}
+
 // UpdateStatus updates only the status field of a server.
 func (s *SQLiteServerStore) UpdateStatus(ctx context.Context, id int64, status string) error {
 	_, err := s.db.ExecContext(ctx,
@@ -152,7 +182,7 @@ func (s *SQLiteServerStore) Delete(ctx context.Context, id int64) error {
 
 func scanServer(row *sql.Row) (*Server, error) {
 	var srv Server
-	err := row.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.AgentURL, &srv.IPAddress, &srv.IPv6, &srv.SSHPort, &srv.Description, &srv.Status, &srv.Provider, &srv.AgentToken, &srv.LastHealthCheck, &srv.HealthStatus, &srv.HealthLatencyMs, &srv.CreatedAt, &srv.UpdatedAt)
+	err := row.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.AgentURL, &srv.IPAddress, &srv.IPv6, &srv.SSHPort, &srv.Description, &srv.Status, &srv.Provider, &srv.AgentToken, &srv.LastHealthCheck, &srv.HealthStatus, &srv.HealthLatencyMs, &srv.AgentVersion, &srv.CreatedAt, &srv.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

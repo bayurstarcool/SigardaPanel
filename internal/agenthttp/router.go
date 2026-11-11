@@ -138,6 +138,8 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	// /metrics forks several processes per call, so it requires the agent token.
 	e.GET("/metrics", r.metricsHandler, r.requireAgentAuth)
 	e.GET("/capabilities", capabilitiesHandler)
+	// /auth/check lets the panel tell "agent up" from "agent accepts our token".
+	e.GET("/auth/check", authCheckHandler, r.requireAgentAuth)
 
 	// WebSocket terminal endpoint (auth via query param or header)
 	e.GET("/ws/terminal", r.terminalWebSocket, r.requireAgentAuth)
@@ -273,6 +275,13 @@ func (r *Router) requireAgentAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 		return next(c)
 	}
+}
+
+func authCheckHandler(c echo.Context) error {
+	return c.JSON(http.StatusOK, httpjson.Success{
+		Data:      map[string]any{"ok": true, "version": buildinfo.Version},
+		RequestID: "",
+	})
 }
 
 func healthHandler(c echo.Context) error {
