@@ -547,6 +547,16 @@ func errorCodeFromStatus(status int) string {
 		return "bad_request"
 	case http.StatusNotFound:
 		return "not_found"
+	case http.StatusMethodNotAllowed:
+		return "method_not_allowed"
+	case http.StatusConflict:
+		return "conflict"
+	case http.StatusRequestEntityTooLarge:
+		return "payload_too_large"
+	case http.StatusBadGateway:
+		return "bad_gateway"
+	case http.StatusServiceUnavailable:
+		return "unavailable"
 	case http.StatusTooManyRequests:
 		return "rate_limited"
 	case http.StatusNotImplemented:
