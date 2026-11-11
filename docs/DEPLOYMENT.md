@@ -1,5 +1,8 @@
 # Deployment Guide
 
+This guide is about deploying applications *with* the panel. To install the
+panel itself, see [INSTALL.md](INSTALL.md).
+
 SigardaPanel deploys external applications through **Sites**. This guide covers
 FastAPI applications with static HTML/JavaScript frontends, including the
 `pdf-editor` repository pattern.

@@ -1,7 +1,10 @@
 package apihttp
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -37,10 +40,30 @@ func TestGeneratedAgentInstallerDoesNotUseMissingDownloadEndpoint(t *testing.T) 
 }
 
 func TestGeneratedAgentInstallerShellQuotesDynamicValues(t *testing.T) {
-	malicious := `x"; touch /tmp/pwned; #`
-	script := fmt.Sprintf(installScriptTemplate, fmt.Sprintf("%q", malicious), fmt.Sprintf("%q", malicious))
-	if strings.Contains(script, `PANEL_URL="x"; touch`) || strings.Contains(script, `REG_TOKEN="x"; touch`) {
-		t.Fatal("dynamic installer values escaped their assignment and became shell code")
+	for _, bad := range []string{`x"; touch /tmp/pwned; #`, `$(touch /tmp/pwned)`, "`touch /tmp/pwned`", `x'; touch /tmp/pwned; #`} {
+		script := fmt.Sprintf(installScriptTemplate, shellQuote(bad), shellQuote(bad), shellQuote("v1.5.0"), shellQuote(releasePublicKey))
+		out, err := exec.Command("bash", "-c", script[:strings.Index(script, "INSTALL_DIR=")]+`printf '%s\n%s' "$PANEL_URL" "$REG_TOKEN"`).CombinedOutput()
+		if err != nil || string(out) != bad+"\n"+bad {
+			t.Fatalf("value %q did not survive as a literal: %q (%v)", bad, out, err)
+		}
+	}
+}
+
+func TestGeneratedInstallerVerifiesSignedRelease(t *testing.T) {
+	for _, want := range []string{"SHA256SUMS.minisig", `minisign -Vm "$SUMS_DIR/SHA256SUMS" -P "$PUBKEY"`, `.data.server_id`, "sigardapanel-linux-$ARCH"} {
+		if !strings.Contains(installScriptTemplate, want) {
+			t.Errorf("installer missing %q", want)
+		}
+	}
+	if strings.Contains(installScriptTemplate, "v1.3.1") {
+		t.Error("installer still pins an old release")
+	}
+}
+
+func TestGeneratedInstallerDashboardHashMatches(t *testing.T) {
+	sum := sha256.Sum256([]byte(statusDashboardScript))
+	if !strings.Contains(installScriptTemplate, hex.EncodeToString(sum[:])) {
+		t.Fatalf("installer pins a dashboard hash that does not match statusDashboardScript (%x)", sum)
 	}
 }
 

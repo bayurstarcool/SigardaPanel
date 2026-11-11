@@ -241,10 +241,11 @@ func MySQLRootPassword() string {
 	return env("SIGARDAPANEL_MYSQL_ROOT_PASSWORD", "")
 }
 
-// AllowRegistration reports whether public sign-up is open. Self-hosted
-// instances can close it with SIGARDAPANEL_ALLOW_REGISTRATION=false.
+// AllowRegistration reports whether public sign-up is open. It is closed by
+// default; panels that sell hosting open it with
+// SIGARDAPANEL_ALLOW_REGISTRATION=true.
 func AllowRegistration() bool {
-	return boolEnv("SIGARDAPANEL_ALLOW_REGISTRATION", true)
+	return boolEnv("SIGARDAPANEL_ALLOW_REGISTRATION", false)
 }
 
 func env(key string, fallback string) string {

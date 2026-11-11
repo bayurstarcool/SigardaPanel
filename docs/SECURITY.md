@@ -1,6 +1,6 @@
 # Security
 
-SigardaPanel v1.0.0 has been audited. This document describes the threat model, controls, and known limitations.
+SigardaPanel was audited at v1.0.0 and reviewed again at v1.2.0. This document describes the threat model, controls, and known limitations. Where a control depends on how the server was set up, the behaviour of the official installer (`install.sh`, see [INSTALL.md](INSTALL.md)) is noted.
 
 ## Threat Model
 
@@ -45,7 +45,7 @@ SigardaPanel v1.0.0 has been audited. This document describes the threat model, 
 ### Transport
 
 - **TLS 1.2/1.3** only (no TLS 1.0/1.1)
-- **HSTS** `max-age=31536000; includeSubDomains`
+- **HSTS** `max-age=31536000` (installer nginx site)
 - **Let's Encrypt** via DNS-01 (Cloudflare) or HTTP-01
 - **Self-signed** as fallback (browsers warn, but functional)
 
@@ -54,17 +54,17 @@ SigardaPanel v1.0.0 has been audited. This document describes the threat model, 
 ```
 X-Frame-Options: DENY
 X-Content-Type-Options: nosniff
-Referrer-Policy: no-referrer-when-downgrade
-Strict-Transport-Security: max-age=31536000; includeSubDomains
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=31536000
 ```
 
 ### Network & Anti-DDoS
 
 - **All backend services bind 127.0.0.1** — only nginx exposes 80/443
-- **UFW** default deny, allows 22/80/443
-- **fail2ban** with 3 jails: sshd, nginx-http-auth, nginx-botsearch
-- **Anti-DDoS & Slowloris:** SYN-cookies enabled (`net.ipv4.tcp_syncookies=1`), Nginx client timeouts (15s), per-IP connection limits (50 max), and request rate limiting
-- **Anti-loop:** HTTP → HTTPS redirect skipped when `CF-Ray` header present
+- **Rate limiting** in nginx (installer): 15 req/s per IP on the API, 5 req/min on the login endpoint; the API adds its own login limiter
+- **UFW** default deny, allows SSH/80/443 - the installer configures it only with `INSTALL_FIREWALL=yes`
+- **fail2ban** (sshd, nginx jails), SYN cookies and connection limits are recommended host hardening; the installer does not configure them (the panel's Security Shield / Fail2ban pages can)
+- **Cloudflare:** use SSL mode Full (strict); "Flexible" loops on the installer's HTTP → HTTPS redirect
 
 ### System Hardening
 
@@ -117,7 +117,7 @@ Actions tracked: `site_create`, `site_delete`, `site_update`, `user_create`, `us
 |---|---|---|
 | ~~Token stored in `localStorage`~~ | — | **Resolved in v1.2.0**: HttpOnly + Secure + SameSite=Strict cookie |
 | No CSP header | Low | Recommended: `default-src 'self'` |
-| Public registration | Low | Open by design; close with `SIGARDAPANEL_ALLOW_REGISTRATION=false` |
+| Public registration | Low | Closed by default since v1.6.0; open with `SIGARDAPANEL_ALLOW_REGISTRATION=true` |
 | `test_db.php` may exist on web server (172.104.62.193) | High (out of scope) | Remove from that host |
 | Self-signed cert warning in browsers | Low | Use Let's Encrypt with `DOMAIN` + `CF_TOKEN` |
 | HTTP still works for direct IP (anti-loop only checks CF-Ray) | Low | `iptables` block if not needed |

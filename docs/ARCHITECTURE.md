@@ -1,6 +1,6 @@
 # Architecture
 
-SigardaPanel v1.2.0 — Self-hosted VPS management panel built with Go.
+Self-hosted VPS management panel built with Go. For installation see [INSTALL.md](INSTALL.md).
 
 ## Overview
 

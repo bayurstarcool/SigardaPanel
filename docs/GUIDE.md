@@ -1,135 +1,60 @@
-# Installation Guide
+# Development Setup
 
-SigardaPanel v1.2.0 — Installation and setup guide.
+This page is for working on SigardaPanel itself. To install a panel on a server,
+use the signed releases and `install.sh` as described in [INSTALL.md](INSTALL.md) -
+nothing on this page is needed for that.
 
-## Quick Start
+## Requirements
 
-### 1. Download Binary
+- Go 1.25 or newer (see `go.mod`)
+- Node.js 20+ and npm (only for the web app; releases ship it prebuilt)
+- Linux; some agent features (nginx, ufw, systemd) only work on Ubuntu/Debian
 
-```bash
-curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel -o sigardapanel
-chmod +x sigardapanel
-```
-
-### 2. Run Setup Wizard
-
-```bash
-./sigardapanel install
-```
-
-This will:
-- Create database and run migrations
-- Create admin user
-- Configure default settings
-
-### 3. Start Services
+## Backend (API + agent)
 
 ```bash
-# Development (API + Agent)
-./sigardapanel dev
+git clone https://github.com/bayurstarcool/SigardaPanel.git
+cd SigardaPanel
+go build -o sigardapanel ./cmd/sigardapanel
 
-# Production (separate)
-./sigardapanel api &
-./sigardapanel agent &
+export SIGARDAPANEL_DEV=true                 # plain-HTTP cookies, no rate limits - development only
+export SIGARDAPANEL_DB_PATH=$PWD/dev.db
+./sigardapanel init --user admin --email admin@localhost   # prompts for a password (min. 8 chars)
+./sigardapanel dev                            # API on :7700 + agent on :7710
 ```
 
-## Environment Variables
+No account is created automatically; `init` creates the first one (role `admin`).
+`./sigardapanel install` is an interactive variant of the same for a dev checkout.
+Without `SIGARDAPANEL_ENCRYPTION_KEY`, the API creates `encryption.key` next to
+the dev database on first start.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| SIGARDAPANEL_API_ADDR | :7700 | API listen address |
-| SIGARDAPANEL_AGENT_ADDR | :7710 | Agent listen address |
-| SIGARDAPANEL_DB_PATH | sigardapanel.db | Database path |
-| SIGARDAPANEL_AGENT_TOKEN | - | Agent auth token |
-
-## Default Credentials
-
-- Username: `admin`
-- Password: `admin123`
-
-**Important:** Change the default password after first login!
-
-## Frontend Setup
+## Web app
 
 ```bash
 cd web
-npm install
-npm run dev
+npm ci
+npx vite dev --host 127.0.0.1 --port 7720     # talks to the API at http://127.0.0.1:7700
 ```
 
-Frontend runs on port 7720.
+Set `SIGARDAPANEL_API_URL` if the API runs elsewhere. Checks: `npm run check`.
 
-## Agent Installation on VPS
+## Tests
 
 ```bash
-# Download agent binary
-curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel -o /usr/local/bin/sigardapanel
-chmod +x /usr/local/bin/sigardapanel
-
-# Start agent with token from panel
-SIGARDAPANEL_AGENT_TOKEN=<token> sigardapanel agent
+go vet ./internal/... ./cmd/...
+go test ./internal/...
+bash -n installer/install.sh && shellcheck -S error installer/install.sh
 ```
 
-## Systemd Service
+## Releases
 
-```bash
-cat > /etc/systemd/system/sigardapanel.service << 'EOF'
-[Unit]
-Description=SigardaPanel
-After=network.target
+`scripts/release.sh <version>` runs the tests, builds the web bundle and the
+`linux-amd64`/`linux-arm64` binaries, writes `SHA256SUMS` and signs it with the
+release key (`--publish` creates the GitHub release). The installer only accepts
+releases signed with that key.
 
-[Service]
-Type=simple
-User=root
-ExecStart=/usr/local/bin/sigardapanel dev
-Restart=always
-RestartSec=5
+`installer/install.sh` and the top-level `install.sh` must stay identical: the
+README tells users to download the top-level copy.
 
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable --now sigardapanel
-```
-
-## Nginx Configuration
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name panel.example.com;
-
-    ssl_certificate /etc/letsencrypt/live/panel.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;
-
-    location /api/v1/ {
-        proxy_pass http://127.0.0.1:7700;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    location / {
-        proxy_pass http://127.0.0.1:7720;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
-## Troubleshooting
-
-### Agent not connecting
-- Check port 7710 is open
-- Verify SIGARDAPANEL_AGENT_TOKEN matches
-- Check agent logs
-
-### Frontend blank page
-- Hard refresh (Ctrl+Shift+R)
-- Check browser console for errors
-- Verify API is running on port 7700
-
-### Database locked
-- Stop all services
-- Delete sigardapanel.db
-- Restart services
+See [AGENTS.md](../AGENTS.md) for the architecture, roles and CLI overview, and
+[CLI.md](CLI.md) / [API.md](API.md) for the references.

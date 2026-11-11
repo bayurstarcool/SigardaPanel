@@ -1,61 +1,14 @@
-# SigardaPanel Deployment
+# deploy/
 
-## Quick Install — Agent
+Supporting files for operators. **To install or update SigardaPanel, use
+`install.sh` - see [docs/INSTALL.md](../docs/INSTALL.md).**
 
-On target VPS (Ubuntu/Debian/CentOS):
+| File | Purpose |
+|---|---|
+| `sigardapanel-info.sh` | SSH status dashboard (`sigardapanel-info`, `--watch`). A copy is embedded in the binary and served at `/api/v1/agents/status-dashboard`. To use it on a server, install it as `/etc/profile.d/sigardapanel-info.sh` (mode 755) and link it to `/usr/local/bin/sigardapanel-info`. |
+| `nginx/pma-per-database.conf` | Example nginx snippet for the per-database phpMyAdmin bridge. |
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/bayurstarcool/SigardaPanel/main/deploy/install-agent.sh | \
-  sudo bash -s -- --panel-url https://panel.example.com --token YOUR_AGENT_TOKEN
-```
-
-Agent task endpoints require `SIGARDAPANEL_AGENT_TOKEN` when installed with this script. Keep port `7710` behind firewall/VPN and allow only the panel server.
-
-## Quick Install — Panel
-
-On panel server:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/bayurstarcool/SigardaPanel/main/deploy/install-panel.sh | \
-  sudo PANEL_DOMAIN=panel.example.com SIGARDAPANEL_ADMIN_USER=admin SIGARDAPANEL_ADMIN_EMAIL=admin@example.com SIGARDAPANEL_ADMIN_PASSWORD='CHANGE_ME_STRONG' SIGARDAPANEL_AGENT_TOKEN=YOUR_AGENT_TOKEN bash
-```
-
-Set `SIGARDAPANEL_AGENT_URL` when the worker talks to a remote agent instead of `http://127.0.0.1:7710`.
-
-## Trial Production Guardrails
-
-- Use HTTPS or private network between panel and agent.
-- Set same `SIGARDAPANEL_AGENT_TOKEN` on panel and agent.
-- Set `SIGARDAPANEL_AGENT_SITE_ROOT=/var/www` or another controlled root.
-- Keep `SIGARDAPANEL_AGENT_ALLOW_STUB_SSL=false` outside dev/test.
-- Do not expose agent port `7710` publicly.
-
-## Agent Task Support
-
-- Site create/delete writes/removes generated Nginx config and validates `nginx -t` before reload.
-- Backup create/restore uses `.tar.gz` archives under the configured backup directory.
-- Database create/delete and user create/delete call local `mysql` or `psql`; install and configure DB admin access on the agent host first.
-- Database names and users are restricted to alphanumeric plus underscore.
-
-## Dashboard Live Data
-
-The production installer deploys the SvelteKit adapter-node bundle on port `7720`. For a custom deployment, set:
-
-```bash
-SIGARDAPANEL_API_URL=https://panel.example.com
-SIGARDAPANEL_TOKEN=YOUR_API_TOKEN
-```
-
-Without them, dashboard renders empty states instead of mock data.
-
-## Manual Install
-
-Download binary, init, run:
-
-```bash
-curl -fsSL -o /usr/local/bin/sigardapanel \
-  https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel
-chmod +x /usr/local/bin/sigardapanel
-sigardapanel api   # panel mode
-sigardapanel agent # agent mode
-```
+The former `install-panel.sh` and `install-agent.sh` were removed: they
+downloaded release assets (v0.5.5) that no longer exist. Panels are installed
+with `install.sh`; remote agents as described in
+[Adding remote servers](../docs/INSTALL.md#adding-remote-servers).

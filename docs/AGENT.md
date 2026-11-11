@@ -1,5 +1,11 @@
 # Agent SigardaPanel
 
+> **Obsolete - historical design draft (Indonesian), kept for reference only.**
+> It predates the implementation and differs from the current product in many
+> details (storage, roles, installers, agent registration).
+> Current documentation: [INSTALL.md](INSTALL.md), [ARCHITECTURE.md](ARCHITECTURE.md),
+> [SYSTEMD.md](SYSTEMD.md), [API.md](API.md), [CLI.md](CLI.md).
+
 Dokumen ini mendefinisikan rancangan awal agent VPS.
 
 ## Tujuan

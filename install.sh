@@ -9,7 +9,7 @@
 # SHA-256 checksums before anything is installed. There is no option to skip it.
 #
 # Environment (all optional):
-#   SIGARDA_VERSION       release tag to install, e.g. v1.1.0 (default: latest)
+#   SIGARDA_VERSION       release tag to install, e.g. v1.5.0 (default: latest)
 #   DOMAIN                public hostname; enables a matching TLS name and ORIGIN
 #   LETSENCRYPT_EMAIL     with DOMAIN: request a Let's Encrypt certificate via nginx
 #   ADMIN_USER            admin username          (default: admin)
@@ -17,6 +17,7 @@
 #   ADMIN_PASS            admin password          (default: random, printed once)
 #   INSTALL_FIREWALL=yes  allow SSH/80/443 in ufw and enable it (never resets rules)
 #   SIGARDA_ASSET_BASE    alternative download directory (testing; verification still applies)
+#   FORCE=1               with "update": reinstall even if already on the target version
 set -euo pipefail
 umask 022
 
@@ -39,7 +40,8 @@ warn() { echo -e "${YELLOW}[ WARN ]${NC} $*"; }
 die()  { echo -e "${RED}[ FAIL ]${NC} $*" >&2; exit 1; }
 
 TMP=""
-cleanup() { [ -n "$TMP" ] && rm -rf "$TMP"; }
+# An if (not "&&") so the EXIT trap does not turn a successful run into exit status 1.
+cleanup() { if [ -n "$TMP" ]; then rm -rf "$TMP"; fi; }
 trap cleanup EXIT
 
 require_root() { [ "$(id -u)" -eq 0 ] || die "Run as root (sudo bash install.sh)"; }
@@ -133,6 +135,8 @@ SIGARDAPANEL_LOG_DIR=${LOG_DIR}
 SIGARDAPANEL_AGENT_URL=http://127.0.0.1:7710
 SIGARDAPANEL_AGENT_TOKEN=${agent_token}
 SIGARDAPANEL_ENCRYPTION_KEY=${enc_key}
+# Public sign-up is closed on self-hosted installs; create users in the panel instead.
+SIGARDAPANEL_ALLOW_REGISTRATION=false
 # Optional member area (PostgreSQL). Leave commented out to keep it disabled.
 # MEMBER_DB_HOST=127.0.0.1
 # MEMBER_DB_PORT=5432
@@ -391,11 +395,19 @@ do_install() {
   chown -R root:root "$WEB_DIR"; chmod -R go-w "$WEB_DIR"
   write_env_files
   write_units
-  ok "Binary: $("$INSTALL_BIN" version)"
+  ok "Binary: $("$INSTALL_BIN" version --client)"
 
   log "Creating the admin account..."
-  runuser -u sigardapanel -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin SIGARDAPANEL_DB_PATH="${DATA_DIR}/sigardapanel.db" SIGARDAPANEL_ADMIN_PASSWORD="$ADMIN_PASS" \
+  local enc_key
+  enc_key="$(grep -E '^SIGARDAPANEL_ENCRYPTION_KEY=' "$CONF_DIR/panel.env" | cut -d= -f2-)"
+  runuser -u sigardapanel -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin SIGARDAPANEL_DB_PATH="${DATA_DIR}/sigardapanel.db" \
+    SIGARDAPANEL_ENCRYPTION_KEY="$enc_key" SIGARDAPANEL_ADMIN_PASSWORD="$ADMIN_PASS" \
     sh -c 'umask 027; exec "$0" "$@"' "$INSTALL_BIN" init --user "$ADMIN_USER" --email "$ADMIN_EMAIL" >/dev/null || die "Could not create the admin user"
+  # "init" creates an "admin"; the installing owner must be the super_admin
+  # (user management across accounts, database server settings, audit purge).
+  runuser -u sigardapanel -- sqlite3 "${DATA_DIR}/sigardapanel.db" \
+    "UPDATE users SET role='super_admin' WHERE username='${ADMIN_USER}' AND NOT EXISTS (SELECT 1 FROM users WHERE role='super_admin');" \
+    || die "Could not grant super_admin to ${ADMIN_USER}"
   chmod 640 "${DATA_DIR}"/sigardapanel.db* 2>/dev/null || true
 
   log "Starting services..."
@@ -431,7 +443,7 @@ do_install() {
     warn "The certificate is self-signed (browser warning). Use DOMAIN=panel.example.com (+ LETSENCRYPT_EMAIL) for a trusted one."
   fi
   if [ "${INSTALL_FIREWALL:-no}" != "yes" ]; then
-    warn "No firewall was configured. Recommended: allow only SSH, 80 and 443 (re-run with INSTALL_FIREWALL=yes)."
+    warn "No firewall was configured. Recommended: allow only SSH, 80 and 443 - e.g. ufw allow OpenSSH && ufw allow 80,443/tcp && ufw enable"
   fi
   warn "Change the admin password after the first login."
   echo "  Update later:  sudo bash install.sh update"
@@ -441,7 +453,7 @@ do_update() {
   require_root; check_os; detect_arch
   [ -x "$INSTALL_BIN" ] && [ -f "$CONF_DIR/panel.env" ] || die "SigardaPanel is not installed here. Run: bash install.sh"
   command -v minisign >/dev/null || { apt-get update -qq; apt-get install -y -qq minisign >/dev/null; }
-  local current; current="$("$INSTALL_BIN" version 2>/dev/null || echo unknown)"
+  local current; current="$("$INSTALL_BIN" version --client 2>/dev/null || echo unknown)"
   resolve_tag
   if [ "${current#v}" = "${TAG#v}" ] && [ -z "${FORCE:-}" ]; then
     ok "Already on ${TAG}. (FORCE=1 to reinstall)"; return 0
@@ -457,31 +469,46 @@ do_update() {
   cp -a "$WEB_DIR" "$bk/web"
   local dbfile; dbfile="$(grep -E '^SIGARDAPANEL_DB_PATH=' "$CONF_DIR/panel.env" | cut -d= -f2-)"
   if [ -f "$dbfile" ]; then sqlite3 "$dbfile" ".backup '${bk}/sigardapanel.db'"; fi
+  # Secrets needed to decrypt the database (never modified by the update, saved for disaster recovery).
+  cp -a "$CONF_DIR/panel.env" "$CONF_DIR/agent.env" "$bk/" 2>/dev/null || true
+  local keyfile; keyfile="$(dirname "${dbfile:-$DATA_DIR/x}")/encryption.key"
+  if [ -f "$keyfile" ]; then cp -a "$keyfile" "$bk/"; fi
   ok "Backup saved to ${bk}"
 
   rollback() {
     warn "Update failed - rolling back"
-    install -m 755 "$bk/sigardapanel.bin" "${INSTALL_BIN}.rb" && mv -f "${INSTALL_BIN}.rb" "$INSTALL_BIN"
-    rm -rf "$WEB_DIR"; cp -a "$bk/web" "$WEB_DIR"
+    # Stop first: the database must not be replaced under a running API.
+    systemctl stop sigardapanel-web sigardapanel-api sigardapanel-agent || true
+    { install -m 755 "$bk/sigardapanel.bin" "${INSTALL_BIN}.rb" && mv -f "${INSTALL_BIN}.rb" "$INSTALL_BIN"; } || warn "could not restore the binary"
+    rm -rf "$WEB_DIR"; cp -a "$bk/web" "$WEB_DIR" || warn "could not restore the web bundle"
     if [ -f "$bk/sigardapanel.db" ] && [ -n "$dbfile" ]; then
-      cp -a "$bk/sigardapanel.db" "$dbfile"; chown sigardapanel:sigardapanel "$dbfile"; rm -f "${dbfile}-wal" "${dbfile}-shm"
+      rm -f "${dbfile}-wal" "${dbfile}-shm"
+      cp -a "$bk/sigardapanel.db" "$dbfile" && chown sigardapanel:sigardapanel "$dbfile" && chmod 640 "$dbfile" \
+        || warn "could not restore the database"
     fi
-    systemctl restart sigardapanel-agent sigardapanel-api sigardapanel-web || true
+    systemctl start sigardapanel-agent sigardapanel-api sigardapanel-web || true
     if healthy; then
       die "Update to ${TAG} failed; rolled back to ${current} and the panel is healthy again. Backup kept in ${bk}"
     fi
     die "Update to ${TAG} failed and the rolled-back panel is NOT healthy. Backup: ${bk}. Check: journalctl -u sigardapanel-api -u sigardapanel-web"
   }
 
-  install -m 755 "$TMP/sigardapanel-linux-${ARCH}" "${INSTALL_BIN}.new" && mv -f "${INSTALL_BIN}.new" "$INSTALL_BIN"
-  rm -rf "${WEB_DIR}.new"; cp -a "$TMP/web" "${WEB_DIR}.new"
-  chown -R root:root "${WEB_DIR}.new"; chmod -R go-w "${WEB_DIR}.new"
-  rm -rf "$WEB_DIR"; mv "${WEB_DIR}.new" "$WEB_DIR"
-  systemctl restart sigardapanel-agent; sleep 2
-  systemctl restart sigardapanel-api; sleep 2
-  systemctl restart sigardapanel-web
+  # Any failure from here on (copying files, a unit that refuses to start, a
+  # failed health check) must end in a rollback, never in a half-updated panel.
+  if ! { install -m 755 "$TMP/sigardapanel-linux-${ARCH}" "${INSTALL_BIN}.new" && mv -f "${INSTALL_BIN}.new" "$INSTALL_BIN" \
+      && rm -rf "${WEB_DIR}.new" && cp -a "$TMP/web" "${WEB_DIR}.new" \
+      && chown -R root:root "${WEB_DIR}.new" && chmod -R go-w "${WEB_DIR}.new" \
+      && rm -rf "$WEB_DIR" && mv "${WEB_DIR}.new" "$WEB_DIR"; }; then
+    rollback
+  fi
+  systemctl restart sigardapanel-agent || true; sleep 2
+  systemctl restart sigardapanel-api || true; sleep 2
+  systemctl restart sigardapanel-web || true
   healthy || rollback
-  ok "Updated to $("$INSTALL_BIN" version)"
+  ok "Updated to $("$INSTALL_BIN" version --client)"
+  if grep -qE '^SIGARDAPANEL_ALLOW_REGISTRATION=true' "$CONF_DIR/panel.env"; then
+    warn "Public sign-up is OPEN on this panel (SIGARDAPANEL_ALLOW_REGISTRATION=true in ${CONF_DIR}/panel.env)."
+  fi
 }
 
 case "${1:-install}" in

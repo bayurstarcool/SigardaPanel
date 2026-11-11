@@ -1,6 +1,8 @@
 # CLI Reference
 
-SigardaPanel CLI v1.2.0 — 55+ subcommands.
+SigardaPanel CLI — 55+ subcommands. The same `sigardapanel` binary runs the API,
+the agent and the CLI. Most commands talk to the API: run `sigardapanel login`
+first (on the panel host: `--api-url http://127.0.0.1:7700`).
 
 ## Usage
 
@@ -15,8 +17,8 @@ sigardapanel <command> [subcommand] [flags]
 | `api` | Run API server |
 | `agent` | Run agent service |
 | `dev` | Run API + agent locally |
-| `install` | Setup wizard (interactive) |
-| `init` | Create admin user (direct DB) |
+| `install` | Interactive setup wizard for development checkouts (production: use `install.sh`, see [INSTALL.md](INSTALL.md)) |
+| `init` | Create the first admin user (direct DB access; `--user`, `--email`, password from `--password`, `SIGARDAPANEL_ADMIN_PASSWORD` or a prompt) |
 | `login` | Authenticate CLI |
 | `logout` | Revoke current token |
 | `doctor` | Diagnose CLI configuration |

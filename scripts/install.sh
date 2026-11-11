@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
-# SigardaPanel v1.0.0 — One-shot Installer
-# Tested on: Ubuntu 24.04 LTS (fresh install)
-# Result:   fully working panel on http://SERVER_IP in ~5 min
+# LEGACY - NOT SUPPORTED. Build-from-source installer from v1.0.0.
+#
+# Production installs use the signed releases and the top-level install.sh
+# (see docs/INSTALL.md). This script builds from a source checkout, installs a
+# different package set and layout and does not verify anything. It is kept
+# only for reference and refuses to run unless SIGARDA_LEGACY_INSTALL=yes.
 set -euo pipefail
+
+if [ "${SIGARDA_LEGACY_INSTALL:-}" != "yes" ]; then
+  echo "scripts/install.sh is a legacy build-from-source installer and is not supported." >&2
+  echo "Install with the signed releases instead: see docs/INSTALL.md" >&2
+  echo "  curl -fsSLO https://raw.githubusercontent.com/bayurstarcool/SigardaPanel/main/install.sh && sudo bash install.sh" >&2
+  exit 1
+fi
 
 VERSION="1.0.0"
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
