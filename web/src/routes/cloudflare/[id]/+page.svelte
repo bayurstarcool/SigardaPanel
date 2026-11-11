@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fmtDate } from '$lib/format';
   import { page } from '$app/stores';
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
@@ -55,9 +56,7 @@
   }
 
   function formatDate(d: string): string {
-    if (!d) return '—';
-    try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
-    catch { return d; }
+    return fmtDate(d);
   }
 
   async function loadData() {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtRelative } from '$lib/format';
+  import { fmtRelative, fmtDateTime } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import EmptyState from '$components/EmptyState.svelte';
@@ -229,7 +229,7 @@
                 {@const sum = summary(e)}
                 {@const ip = ipOf(e)}
                 <tr>
-                  <td class="whitespace-nowrap text-muted tabular-nums" title={new Date(e.created_at).toLocaleString('id-ID')}>
+                  <td class="whitespace-nowrap text-muted tabular-nums" title={fmtDateTime(e.created_at)}>
                     {fmtRelative(e.created_at)}
                   </td>
                   <td class="whitespace-nowrap max-sm:hidden">

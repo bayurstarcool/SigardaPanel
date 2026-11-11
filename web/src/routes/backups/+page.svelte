@@ -1,7 +1,7 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtRelative } from '$lib/format';
+  import { fmtRelative, fmtDateTime } from '$lib/format';
   import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
@@ -274,7 +274,7 @@
                     </span>
                   </td>
                   <td class="text-muted tabular-nums max-sm:hidden">{b.size_bytes ? fmtBytes(b.size_bytes) : '—'}</td>
-                  <td class="whitespace-nowrap text-muted max-sm:hidden" title={b.created_at ? new Date(b.created_at).toLocaleString('id-ID') : ''}>{fmtRelative(b.created_at)}</td>
+                  <td class="whitespace-nowrap text-muted max-sm:hidden" title={fmtDateTime(b.created_at)}>{fmtRelative(b.created_at)}</td>
                   <td class="text-right">
                     <div class="flex items-center justify-end gap-0.5">
                       <a href="/api/proxy/backups/{b.id}/download" download data-sveltekit-reload class="btn btn-ghost btn-icon btn-xs" title="Download" aria-label="Download backup #{b.id}">

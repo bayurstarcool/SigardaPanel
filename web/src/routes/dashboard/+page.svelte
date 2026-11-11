@@ -1,7 +1,7 @@
 <script lang="ts">
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtRelative, fmtBytesFull } from '$lib/format';
+  import { fmtRelative, fmtBytesFull, expiryTone } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
@@ -115,9 +115,9 @@
     let expired = 0;
     for (const s of sites) {
       if (!s.ssl_status || s.ssl_status === 'none' || !s.ssl_expires_at) continue;
-      const ms = new Date(s.ssl_expires_at).getTime() - Date.now();
-      if (ms <= 0) expired++;
-      else if (ms < 14 * 864e5) expiring++;
+      const tone = expiryTone(s.ssl_expires_at);
+      if (tone === 'expired') expired++;
+      else if (tone === 'danger' || tone === 'warn') expiring++;
     }
     return { expiring, expired, total: expiring + expired };
   });

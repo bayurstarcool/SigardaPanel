@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fmtDate } from '$lib/format';
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -472,7 +473,7 @@
                   </div>
                 </td>
                 <td class="whitespace-nowrap text-muted tabular-nums max-md:hidden">
-                  {new Date(s.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  {fmtDate(s.created_at)}
                 </td>
                 <td class="text-right">
                   <a href="/sites/{s.id}" class="btn btn-ghost btn-xs">Manage <ChevronRight size={12} /></a>

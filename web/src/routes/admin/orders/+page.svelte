@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fmtDate, fmtDateTime } from '$lib/format';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
@@ -133,9 +134,6 @@
     }
   }
 
-  function fmtDate(d: string) {
-    return d ? new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
-  }
 
   function openDetail(o: Order) {
     detailOrder = o;
@@ -267,7 +265,7 @@
           </div>
           <div>
             <dt class="stat-label">Created</dt>
-            <dd class="mt-1 text-sm text-fg">{detailOrder.created_at ? new Date(detailOrder.created_at).toLocaleString('id-ID') : '—'}</dd>
+            <dd class="mt-1 text-sm text-fg">{fmtDateTime(detailOrder.created_at)}</dd>
           </div>
         </dl>
         {#if detailOrder.notes}

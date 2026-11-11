@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fmtDateTime } from '$lib/format';
   import { auth, bearerHeaders } from '$lib/auth.svelte';
   import { page } from '$app/stores';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -269,7 +270,7 @@
         <section class="card">
           <div class="card-header">
             <h2 class="card-title flex items-center gap-2"><Zap size={16} class="text-subtle" /> Benchmark results</h2>
-            <span class="text-xs text-subtle">Run at {new Date(benchmark.run_at).toLocaleString()}</span>
+            <span class="text-xs text-subtle">Run at {fmtDateTime(benchmark.run_at)}</span>
           </div>
           <div class="card-body grid gap-4 md:grid-cols-3">
             <div class="rounded-lg border border-line p-4">

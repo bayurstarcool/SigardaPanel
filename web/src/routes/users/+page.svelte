@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fmtDate } from '$lib/format';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -123,9 +124,6 @@
     return role === 'super_admin' ? 'Super Admin' : role === 'admin' ? 'Admin' : 'User';
   }
 
-  function fmtDate(d: string | null | undefined) {
-    return d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
-  }
 
   const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
 </script>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { parseDate } from '$lib/format';
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -144,7 +145,8 @@
   const series = $derived.by(() => {
     const GB = 1024 ** 3;
     const labels = history.map((m: any) => {
-      const d = new Date(m.collected_at);
+      const d = parseDate(m.collected_at);
+      if (!d) return '';
       return range === '7d' ? d.toLocaleDateString('id', { day: '2-digit', month: 'short' })
         : d.toLocaleTimeString('id', { hour: '2-digit', minute: '2-digit' });
     });
