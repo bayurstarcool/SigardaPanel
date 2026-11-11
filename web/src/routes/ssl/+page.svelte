@@ -9,6 +9,7 @@
   import { ShieldCheck, Plus, RefreshCw, ShieldAlert, ShieldOff, ShieldQuestion, Search } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
+  import { fmtDate, fmtDaysLeft, expiryTone, parseDate, type ExpiryTone } from '$lib/format';
 
   type Health = 'valid' | 'expiring_soon' | 'expired' | 'none';
 
@@ -87,20 +88,19 @@
 
   function health(s: any): Health {
     if (!s.ssl_status || s.ssl_status === 'none') return 'none';
-    if (!s.ssl_expires_at) return 'valid';
-    const ms = new Date(s.ssl_expires_at).getTime() - Date.now();
-    if (ms <= 0) return 'expired';
-    if (ms < 14 * 864e5) return 'expiring_soon';
+    const tone = expiryTone(s.ssl_expires_at);
+    if (tone === 'expired') return 'expired';
+    if (tone === 'danger' || tone === 'warn') return 'expiring_soon';
     return 'valid';
   }
 
-  function daysLeft(expiresAt: string | null): string {
-    if (!expiresAt) return '';
-    const days = Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 864e5);
-    if (days < 0) return `${Math.abs(days)}d overdue`;
-    if (days === 0) return 'today';
-    return `${days}d left`;
-  }
+  // Days-left pill: ok ≥30d, warn <30d, danger <7d, expired.
+  const toneBadge: Record<ExpiryTone, string> = {
+    ok: 'badge-success',
+    warn: 'badge-warning',
+    danger: 'badge-danger',
+    expired: 'badge-danger',
+  };
 
   const meta: Record<Health, { label: string; badge: string; icon: any }> = {
     valid: { label: 'Active', badge: 'badge-success', icon: ShieldCheck },
@@ -109,19 +109,27 @@
     none: { label: 'No SSL', badge: '', icon: ShieldQuestion },
   };
 
-  const rows = $derived(allSites.map((s) => ({ ...s, health: health(s) })));
+  const rows = $derived(
+    allSites.map((s) => ({
+      ...s,
+      health: health(s),
+      tone: s.ssl_status && s.ssl_status !== 'none' ? expiryTone(s.ssl_expires_at) : null,
+      expiresMs: parseDate(s.ssl_expires_at)?.getTime() ?? Infinity,
+    })),
+  );
   const counts = $derived({
     valid: rows.filter((r) => r.health === 'valid').length,
     expiring_soon: rows.filter((r) => r.health === 'expiring_soon').length,
     expired: rows.filter((r) => r.health === 'expired').length,
     none: rows.filter((r) => r.health === 'none').length,
   });
+  const order: Health[] = ['expired', 'expiring_soon', 'none', 'valid'];
   const visible = $derived(
     rows
       .filter((r) => filter === 'all' || r.health === filter)
       .filter((r) => !query || r.domain.toLowerCase().includes(query.toLowerCase()))
-      // Most urgent first: expired, expiring, none, valid.
-      .sort((a, b) => ['expired', 'expiring_soon', 'none', 'valid'].indexOf(a.health) - ['expired', 'expiring_soon', 'none', 'valid'].indexOf(b.health)),
+      // Most urgent first: expired, expiring, none, valid; soonest expiry first within a group.
+      .sort((a, b) => order.indexOf(a.health) - order.indexOf(b.health) || a.expiresMs - b.expiresMs),
   );
 </script>
 
@@ -144,7 +152,7 @@
 
   <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
     <StatCard label="Active" value={loading ? '–' : counts.valid} icon={ShieldCheck} tone="success" />
-    <StatCard label="Expiring in 14 days" value={loading ? '–' : counts.expiring_soon} icon={ShieldAlert} tone="warning" />
+    <StatCard label="Expiring in 30 days" value={loading ? '–' : counts.expiring_soon} icon={ShieldAlert} tone="warning" />
     <StatCard label="Expired" value={loading ? '–' : counts.expired} icon={ShieldOff} tone="danger" />
     <StatCard label="Without SSL" value={loading ? '–' : counts.none} icon={ShieldQuestion} />
   </div>
@@ -188,9 +196,11 @@
                 <td class="text-muted max-sm:hidden">{s.ssl_issuer || '—'}</td>
                 <td><span class="badge {m.badge}"><m.icon size={12} />{m.label}</span></td>
                 <td class="whitespace-nowrap">
-                  {#if s.ssl_expires_at}
-                    <span class="text-muted tabular-nums">{new Date(s.ssl_expires_at).toLocaleDateString('id-ID')}</span>
-                    <span class="ml-1 text-xs {s.health === 'expired' ? 'text-danger' : s.health === 'expiring_soon' ? 'text-warning' : 'text-subtle'}">{daysLeft(s.ssl_expires_at)}</span>
+                  {#if s.tone}
+                    <span class="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:gap-2">
+                      <span class="badge {toneBadge[s.tone as ExpiryTone]} tabular-nums">{fmtDaysLeft(s.ssl_expires_at)}</span>
+                      <span class="text-xs text-subtle tabular-nums">{fmtDate(s.ssl_expires_at)}</span>
+                    </span>
                   {:else}
                     <span class="text-subtle">—</span>
                   {/if}

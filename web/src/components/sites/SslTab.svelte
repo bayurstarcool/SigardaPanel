@@ -1,7 +1,7 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtDate } from '$lib/format';
+  import { fmtDate, fmtDaysLeft, expiryTone } from '$lib/format';
   import StatusPill from '$components/StatusPill.svelte';
   import EmptyState from '$components/EmptyState.svelte';
   import { ShieldCheck, Lock, RefreshCw, LoaderCircle, Globe } from 'lucide-svelte';
@@ -116,7 +116,7 @@
       <dl class="divide-y divide-line px-5">
         <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Status</dt><dd><StatusPill status={sslStatus.ssl_status || 'none'} /></dd></div>
         <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Issuer</dt><dd class="truncate text-sm text-fg">{sslStatus.ssl_issuer || '—'}</dd></div>
-        <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Expires</dt><dd class="text-sm text-fg tabular-nums">{sslStatus.ssl_expires_at ? fmtDate(sslStatus.ssl_expires_at) : '—'}</dd></div>
+        <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Expires</dt><dd class="flex items-center gap-2 text-sm text-fg tabular-nums">{#if sslStatus.ssl_expires_at && expiryTone(sslStatus.ssl_expires_at)}{@const tone = expiryTone(sslStatus.ssl_expires_at)}<span class="badge {tone === 'ok' ? 'badge-success' : tone === 'warn' ? 'badge-warning' : 'badge-danger'}">{fmtDaysLeft(sslStatus.ssl_expires_at)}</span>{fmtDate(sslStatus.ssl_expires_at)}{:else}—{/if}</dd></div>
       </dl>
     {:else}
       <EmptyState compact icon={ShieldCheck} title="No SSL status available" description="Issue a certificate below." />

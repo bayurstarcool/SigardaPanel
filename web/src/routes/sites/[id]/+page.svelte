@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtDate } from '$lib/format';
+  import { fmtDate, fmtDaysLeft } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
@@ -260,7 +260,7 @@
                   <dd><StatusPill status={site.ssl_status} /></dd>
                 </div>
                 {@render row('Issuer', site.ssl_issuer || '—')}
-                {@render row('Expires', site.ssl_expires_at ? fmtDate(site.ssl_expires_at) : '—')}
+                {@render row('Expires', site.ssl_expires_at ? `${fmtDate(site.ssl_expires_at)} · ${fmtDaysLeft(site.ssl_expires_at)}` : '—')}
               </dl>
             {:else}
               <EmptyState compact icon={ShieldCheck} title="No SSL configured" description="Issue a certificate from the SSL tab." actionLabel="Open SSL tab" onaction={() => (activeTab = 'ssl')} />
