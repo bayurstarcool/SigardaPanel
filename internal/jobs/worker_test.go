@@ -263,3 +263,38 @@ func TestProcessOne_RetryRespectsMaxAttempts(t *testing.T) {
 		t.Fatalf("expected next_retry_at to be NULL after max attempts, got %v", got.NextRetryAt.Time)
 	}
 }
+
+func TestProcessOne_SiteCreateFailureMarksSiteFailed(t *testing.T) {
+	s, ctx := fullWorkerDB(t)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(agentclient.TaskResult{OK: false, Error: "nginx test failed"})
+	}))
+	defer ts.Close()
+	w := NewWorker(s, agentclient.New(ts.URL, "token"))
+
+	srv := &store.Server{Name: "srv", Hostname: "srv.example.com", Status: "active", AgentToken: "tok"}
+	if err := s.Servers.Create(ctx, srv); err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+	site := &store.Site{ServerID: srv.ID, Name: "a", Domain: "a.example.com", Runtime: "static", Status: "pending"}
+	if err := s.Sites.Create(ctx, site); err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	j := &jobmodel.Job{Type: jobmodel.TypeSiteCreate, MaxAttempts: 1, Payload: `{}`}
+	j.SiteID.Int64, j.SiteID.Valid = site.ID, true
+	if err := s.Jobs.Create(ctx, j); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	w.processOne(ctx)
+
+	got, err := s.Sites.GetByID(ctx, site.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get site: %v", err)
+	}
+	if got.Status != "failed" {
+		t.Fatalf("site status = %q, want failed", got.Status)
+	}
+}
