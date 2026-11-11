@@ -1,16 +1,19 @@
 package license
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"bytes"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 )
+
+// httpClient bounds calls to the member portal; a hung portal must not hang
+// the request that triggered validation.
+var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 // Info holds license information.
 type Info struct {
@@ -52,13 +55,14 @@ func (v *Validator) Validate(licenseKey string) (*Info, error) {
 	v.mu.RUnlock()
 
 	url := fmt.Sprintf("%s/api/license/validate", v.memberPortalURL)
-	body := fmt.Sprintf(`{"license_key":"%s"}`, licenseKey)
+	// json.Marshal (not Sprintf) so a key containing quotes cannot break or
+	// inject into the request document.
+	body, err := json.Marshal(map[string]string{"license_key": licenseKey})
+	if err != nil {
+		return &Info{Valid: false}, nil
+	}
 
-	resp, err := http.Post(url, "application/json", 
-		io.NopCloser(
-			bytes.NewReader([]byte(body)),
-		),
-	)
+	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		slog.Warn("license validation failed", "error", err)
 		return &Info{Valid: false}, nil

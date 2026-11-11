@@ -40,7 +40,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, channel *Channel, alert *Al
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		// *url.Error embeds the request URL, which contains the bot token;
 		// keep it out of stored alert errors.
@@ -50,7 +50,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, channel *Channel, alert *Al
 		}
 		return fmt.Errorf("telegram request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp)
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("telegram returned %d", resp.StatusCode)

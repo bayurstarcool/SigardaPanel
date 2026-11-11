@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
+
+	"sigardapanel/internal/secrets"
 )
 
 // TwoFactorRepository defines 2FA persistence operations.
 type TwoFactorRepository interface {
 	GetTOTPSecret(ctx context.Context, userID int64) (string, error)
 	SetTOTPSecret(ctx context.Context, userID int64, secret string) error
+	EncryptLegacyTOTPSecrets(ctx context.Context) (int, error)
 	EnableTOTP(ctx context.Context, userID int64) error
 	DisableTOTP(ctx context.Context, userID int64) error
 	IsTOTPEnabled(ctx context.Context, userID int64) (bool, error)
@@ -28,26 +32,136 @@ func NewSQLiteTwoFactorStore(db *sql.DB) *SQLiteTwoFactorStore {
 	return &SQLiteTwoFactorStore{db: db}
 }
 
-// GetTOTPSecret retrieves the TOTP secret for a user.
+// TOTP secrets are encrypted at rest with the panel encryption key
+// (secrets.Encrypt, "enc:v1:" prefix). Rows written by older builds hold the
+// base32 secret in plaintext; they are still accepted, re-encrypted on the
+// next read, and in bulk at start-up by EncryptLegacyTOTPSecrets.
+
+// decodeTOTPSecret returns the plaintext secret for a stored value, plus
+// whether the stored value is legacy plaintext.
+func decodeTOTPSecret(stored string) (secret string, legacy bool, err error) {
+	if stored == "" {
+		return "", false, nil
+	}
+	if !secrets.IsEncrypted(stored) {
+		return stored, true, nil
+	}
+	pt, err := secrets.Decrypt(stored)
+	if err != nil {
+		return "", false, fmt.Errorf("decrypt totp secret: %w", err)
+	}
+	return pt, false, nil
+}
+
+// totpSecretForUser decodes a stored secret for a scanned user. On a decrypt
+// failure it returns "" — login then fails closed because totp_enabled stays
+// set and no secret can validate a code.
+func totpSecretForUser(userID int64, stored string) string {
+	secret, _, err := decodeTOTPSecret(stored)
+	if err != nil {
+		slog.Error("users: cannot decrypt TOTP secret (encryption key changed?)", "user_id", userID, "error", err)
+		return ""
+	}
+	return secret
+}
+
+// GetTOTPSecret retrieves the (decrypted) TOTP secret for a user. A legacy
+// plaintext secret is transparently re-encrypted.
 func (s *SQLiteTwoFactorStore) GetTOTPSecret(ctx context.Context, userID int64) (string, error) {
-	var secret string
+	var stored string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(totp_secret, '') FROM users WHERE id = ?`, userID).Scan(&secret)
+		`SELECT COALESCE(totp_secret, '') FROM users WHERE id = ?`, userID).Scan(&stored)
 	if err != nil {
 		return "", fmt.Errorf("get totp secret: %w", err)
+	}
+	secret, legacy, err := decodeTOTPSecret(stored)
+	if err != nil {
+		return "", err
+	}
+	if legacy {
+		s.reencrypt(ctx, userID, stored)
 	}
 	return secret, nil
 }
 
-// SetTOTPSecret sets the TOTP secret for a user.
+// reencrypt replaces a legacy plaintext secret with its ciphertext, only if
+// the row still holds that exact plaintext (no lost update).
+func (s *SQLiteTwoFactorStore) reencrypt(ctx context.Context, userID int64, plaintext string) {
+	enc, err := secrets.Encrypt(plaintext)
+	if err != nil {
+		slog.Warn("2fa: encrypt legacy totp secret", "user_id", userID, "error", err)
+		return
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE users SET totp_secret = ? WHERE id = ? AND totp_secret = ?`, enc, userID, plaintext); err != nil {
+		slog.Warn("2fa: store re-encrypted totp secret", "user_id", userID, "error", err)
+	}
+}
+
+// SetTOTPSecret encrypts and stores the TOTP secret for a user.
 func (s *SQLiteTwoFactorStore) SetTOTPSecret(ctx context.Context, userID int64, secret string) error {
+	stored := secret
+	if secret != "" {
+		enc, err := secrets.Encrypt(secret)
+		if err != nil {
+			return fmt.Errorf("encrypt totp secret: %w", err)
+		}
+		stored = enc
+	}
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE users SET totp_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		secret, userID)
+		stored, userID)
 	if err != nil {
 		return fmt.Errorf("set totp secret: %w", err)
 	}
 	return nil
+}
+
+// EncryptLegacyTOTPSecrets encrypts every plaintext TOTP secret in place. Run
+// at start-up after the encryption key is settled. Returns how many rows were
+// converted.
+func (s *SQLiteTwoFactorStore) EncryptLegacyTOTPSecrets(ctx context.Context) (int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, totp_secret FROM users WHERE COALESCE(totp_secret, '') != '' AND totp_secret NOT LIKE 'enc:v1:%'`)
+	if err != nil {
+		return 0, fmt.Errorf("list legacy totp secrets: %w", err)
+	}
+	type row struct {
+		id     int64
+		secret string
+	}
+	var legacy []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.secret); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan legacy totp secret: %w", err)
+		}
+		legacy = append(legacy, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range legacy {
+		if secrets.IsEncrypted(r.secret) {
+			continue
+		}
+		enc, err := secrets.Encrypt(r.secret)
+		if err != nil {
+			return n, fmt.Errorf("encrypt totp secret for user %d: %w", r.id, err)
+		}
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE users SET totp_secret = ? WHERE id = ? AND totp_secret = ?`, enc, r.id, r.secret)
+		if err != nil {
+			return n, fmt.Errorf("store encrypted totp secret for user %d: %w", r.id, err)
+		}
+		if c, _ := res.RowsAffected(); c == 1 {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // EnableTOTP enables TOTP 2FA for a user.

@@ -27,6 +27,7 @@ type JobRepository interface {
 	HasRecentFailedJob(ctx context.Context, jobType string, siteID int64, within time.Duration) (bool, error)
 	CountRunningByServer(ctx context.Context, serverID int64) (int, error)
 	CleanupStuckRunning(ctx context.Context, staleAfter time.Duration) (int64, error)
+	FailOrphanedRunning(ctx context.Context, reason string) (int64, error)
 	ScrubTerminalPayloads(ctx context.Context, olderThan time.Duration) (int64, error)
 }
 
@@ -139,48 +140,70 @@ func (s *SQLiteJobStore) List(ctx context.Context, filter JobListFilter) ([]jobm
 	return out, nil
 }
 
-// ClaimNext atomically picks the oldest queued job, marks it running,
-// increments attempts, and sets started_at.
-func (s *SQLiteJobStore) ClaimNext(ctx context.Context, jobType string) (*jobmodel.Job, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
+// claimableJobsCond selects queued jobs (alias j) that may start now:
+//   - due (no pending retry back-off),
+//   - their site has no job running (jobs for one site never run concurrently),
+//   - for backup jobs, their server has no backup running (max 1 per server).
+const claimableJobsCond = `j.status = 'queued'
+	AND (j.next_retry_at IS NULL OR j.next_retry_at <= CURRENT_TIMESTAMP)
+	AND (j.site_id IS NULL OR NOT EXISTS (
+		SELECT 1 FROM jobs r WHERE r.status = 'running' AND r.site_id = j.site_id))
+	AND (j.type NOT IN ('backup.create', 'db_backup.create') OR j.server_id IS NULL OR NOT EXISTS (
+		SELECT 1 FROM jobs r WHERE r.status = 'running' AND r.server_id = j.server_id
+		AND r.type IN ('backup.create', 'db_backup.create')))`
 
-	var query string
+// ClaimNext atomically picks the oldest claimable queued job, marks it
+// running, increments attempts, and sets started_at.
+//
+// The pick and the claim are one UPDATE statement, so several workers (or
+// processes) calling ClaimNext concurrently can never claim the same job, nor
+// two jobs of the same site: SQLite serialises writers and the eligibility
+// sub-queries are evaluated inside that write.
+func (s *SQLiteJobStore) ClaimNext(ctx context.Context, jobType string) (*jobmodel.Job, error) {
+	query := `UPDATE jobs SET status = 'running', started_at = CURRENT_TIMESTAMP,
+		attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP
+		WHERE status = 'queued' AND id = (
+			SELECT j.id FROM jobs j WHERE ` + claimableJobsCond
 	var args []any
 	if jobType != "" {
-		query = `SELECT ` + jobColumns + ` FROM jobs WHERE status = ? AND type = ? AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP) ORDER BY id ASC LIMIT 1`
-		args = []any{jobmodel.StatusQueued, jobType}
-	} else {
-		query = `SELECT ` + jobColumns + ` FROM jobs WHERE status = ? AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP) ORDER BY id ASC LIMIT 1`
-		args = []any{jobmodel.StatusQueued}
+		query += ` AND j.type = ?`
+		args = append(args, jobType)
 	}
+	query += ` ORDER BY j.id ASC LIMIT 1)
+		RETURNING id`
 
-	row := tx.QueryRowContext(ctx, query, args...)
-	job, err := scanJob(row)
-	if err != nil {
-		return nil, fmt.Errorf("select next job: %w", err)
-	}
-	if job == nil {
+	var id int64
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&id)
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-
-	_, err = tx.ExecContext(ctx,
-		`UPDATE jobs SET status = ?, started_at = CURRENT_TIMESTAMP, attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		jobmodel.StatusRunning, job.ID)
 	if err != nil {
-		return nil, fmt.Errorf("claim job: %w", err)
+		return nil, fmt.Errorf("claim next job: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit: %w", err)
+	job, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("load claimed job: %w", err)
 	}
-
-	job.Status = jobmodel.StatusRunning
-	job.Attempts++
+	if job == nil {
+		return nil, fmt.Errorf("claimed job %d vanished", id)
+	}
 	return job, nil
+}
+
+// FailOrphanedRunning marks every job still in 'running' as failed. It is
+// meant for worker start-up: the worker runs in-process, so a 'running' row
+// left over from a previous process can never finish, and with per-site
+// serialisation it would otherwise block that site's queue until the 30-minute
+// stuck-job cleanup.
+func (s *SQLiteJobStore) FailOrphanedRunning(ctx context.Context, reason string) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE jobs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		 WHERE status = 'running'`, reason)
+	if err != nil {
+		return 0, fmt.Errorf("fail orphaned jobs: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 // UpdateStatus updates a job's status.

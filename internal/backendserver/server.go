@@ -20,6 +20,7 @@ import (
 	"sigardapanel/internal/dbserver"
 	sjobs "sigardapanel/internal/jobs"
 	"sigardapanel/internal/migrations"
+	"sigardapanel/internal/secrets"
 	"sigardapanel/internal/store"
 )
 
@@ -42,8 +43,20 @@ func Run(ctx context.Context) error {
 	}
 	slog.Info("migrations applied")
 
+	// Pick the encryption key before anything is encrypted: generates a key
+	// file on new installs, warns loudly when the weak fallback is in use.
+	secrets.InitEncryptionKey(ctx, database)
+
 	// Initialize store
 	s := store.New(database)
+
+	// TOTP secrets written by older builds are plaintext; encrypt them now
+	// that the encryption key is settled.
+	if n, err := s.TwoFactor.EncryptLegacyTOTPSecrets(ctx); err != nil {
+		slog.Warn("2fa: encrypt legacy TOTP secrets", "error", err)
+	} else if n > 0 {
+		slog.Info("2fa: encrypted legacy plaintext TOTP secrets", "count", n)
+	}
 
 	// Register panel host as local managed server on first start.
 	if err := ensureLocalServer(ctx, s); err != nil {

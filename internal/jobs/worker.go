@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,14 +50,23 @@ func (b backoffConfig) delay(attempts int) time.Duration {
 	return delay + jitter
 }
 
-// Worker polls the job store and dispatches jobs to the agent.
+// defaultWorkerConcurrency is how many jobs may run at once. Jobs of the same
+// site never overlap and at most one backup runs per server (both enforced
+// atomically by store.ClaimNext), so a slow certbot or backup only occupies one
+// slot instead of blocking the whole queue.
+const defaultWorkerConcurrency = 3
+
+// Worker polls the job store and dispatches jobs to the agent using a small
+// bounded pool of goroutines.
 type Worker struct {
 	store        *store.Store
 	agent        *agentclient.Client
 	pollInterval time.Duration
+	concurrency  int
 	wg           sync.WaitGroup
 	stopCh       chan struct{}
 	stopped      chan struct{}
+	stopOnce     sync.Once
 }
 
 // NewWorker creates a new worker.
@@ -65,24 +75,55 @@ func NewWorker(s *store.Store, agent *agentclient.Client) *Worker {
 		store:        s,
 		agent:        agent,
 		pollInterval: 2 * time.Second,
+		concurrency:  workerConcurrencyFromEnv(),
 		stopCh:       make(chan struct{}),
 		stopped:      make(chan struct{}),
 	}
 }
 
-// Start begins the worker loop in a goroutine.
-func (w *Worker) Start(ctx context.Context) {
-	w.wg.Add(1)
-	go func() {
-		defer w.wg.Done()
-		defer close(w.stopped)
-		w.loop(ctx)
-	}()
+// workerConcurrencyFromEnv reads SIGARDAPANEL_WORKER_CONCURRENCY (1-16).
+func workerConcurrencyFromEnv() int {
+	if v := strings.TrimSpace(os.Getenv("SIGARDAPANEL_WORKER_CONCURRENCY")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 16 {
+			return n
+		}
+		slog.Warn("worker: ignoring invalid SIGARDAPANEL_WORKER_CONCURRENCY", "value", v)
+	}
+	return defaultWorkerConcurrency
 }
 
-// Stop signals the worker to stop and waits for it to finish.
+// Start begins the worker pool.
+func (w *Worker) Start(ctx context.Context) {
+	// The worker runs in-process, so any job still 'running' was orphaned by a
+	// previous process. Fail it now: with per-site serialisation it would
+	// otherwise block that site's queue until the stuck-job cleanup.
+	if n, err := w.store.Jobs.FailOrphanedRunning(ctx, "interrupted: panel restarted while the job was running"); err != nil {
+		slog.Warn("worker: fail orphaned running jobs", "error", err)
+	} else if n > 0 {
+		slog.Warn("worker: marked orphaned running jobs as failed", "count", n)
+	}
+
+	n := w.concurrency
+	if n < 1 {
+		n = 1
+	}
+	for i := 0; i < n; i++ {
+		w.wg.Add(1)
+		go func() {
+			defer w.wg.Done()
+			w.loop(ctx)
+		}()
+	}
+	go func() {
+		w.wg.Wait()
+		close(w.stopped)
+	}()
+	slog.Info("worker: started", "concurrency", n)
+}
+
+// Stop signals the worker to stop and waits for in-flight jobs to finish.
 func (w *Worker) Stop() {
-	close(w.stopCh)
+	w.stopOnce.Do(func() { close(w.stopCh) })
 	<-w.stopped
 }
 
@@ -97,21 +138,32 @@ func (w *Worker) loop(ctx context.Context) {
 		case <-w.stopCh:
 			return
 		case <-ticker.C:
-			w.processOne(ctx)
+			// Drain whatever is claimable before sleeping again.
+			for w.processOne(ctx) {
+				select {
+				case <-ctx.Done():
+					return
+				case <-w.stopCh:
+					return
+				default:
+				}
+			}
 		}
 	}
 }
 
-func (w *Worker) processOne(ctx context.Context) {
+// processOne claims and runs at most one job. It reports whether a job was run.
+func (w *Worker) processOne(ctx context.Context) bool {
 	job, err := w.store.Jobs.ClaimNext(ctx, "")
 	if err != nil {
 		slog.Error("worker: claim next job", "error", err)
-		return
+		return false
 	}
 	if job == nil {
-		return
+		return false
 	}
 	w.runClaimedJob(ctx, job)
+	return true
 }
 
 // runClaimedJob executes a claimed job. A panic inside any task handler must
@@ -196,7 +248,11 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	result, execErr := agent.Execute(ctx, job.Type, dispatchPayload)
 
 	if execErr != nil {
-		if job.Attempts < job.MaxAttempts {
+		permanent := isPermanentJobError(job.Type, execErr, result)
+		if permanent && job.Attempts < job.MaxAttempts {
+			slog.Warn("worker: deterministic failure, not retrying", "id", job.ID, "type", job.Type, "error", execErr)
+		}
+		if job.Attempts < job.MaxAttempts && !permanent {
 			delay := defaultBackoff.delay(job.Attempts)
 			retryAt := time.Now().Add(delay)
 			if err := w.store.Jobs.ScheduleRetry(ctx, job.ID, retryAt); err != nil {

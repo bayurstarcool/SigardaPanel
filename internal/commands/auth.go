@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/cli"
@@ -171,7 +172,7 @@ func (a *App) Login(args []string) int {
 		"username": *username,
 		"password": *password,
 	})
-	resp, err := http.Post(*apiURL+"/api/v1/auth/login", "application/json", bytes.NewReader(body))
+	resp, err := cliHTTPClient.Post(*apiURL+"/api/v1/auth/login", "application/json", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(a.stderr, "login request: %v\n", err)
 		return 1
@@ -219,6 +220,10 @@ func (a *App) Login(args []string) int {
 	return 0
 }
 
+// cliHTTPClient is used for login/logout calls so an unreachable API cannot
+// hang the CLI forever.
+var cliHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // Logout revokes the token server-side (best-effort) and always deletes the local token.
 func (a *App) Logout(args []string) int {
 	flags := flag.NewFlagSet("logout", flag.ContinueOnError)
@@ -244,10 +249,11 @@ func (a *App) Logout(args []string) int {
 	}
 
 	// Best-effort server-side revoke.
-	req, _ := http.NewRequest("POST", cfg.APIURL+"/api/v1/auth/logout", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	if resp, err := http.DefaultClient.Do(req); err == nil {
-		resp.Body.Close()
+	if req, err := http.NewRequest("POST", cfg.APIURL+"/api/v1/auth/logout", nil); err == nil {
+		req.Header.Set("Authorization", "Bearer "+token)
+		if resp, err := cliHTTPClient.Do(req); err == nil {
+			resp.Body.Close()
+		}
 	}
 
 	// Always delete local token regardless of API result.

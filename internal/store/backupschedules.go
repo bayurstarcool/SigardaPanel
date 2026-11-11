@@ -152,7 +152,9 @@ func (s *SQLiteBackupScheduleStore) MarkRun(ctx context.Context, id int64) error
 	nextRun := NextCronRun(cronExpr, now)
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE backup_schedules SET last_run_at = ?, next_run_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		now, nextRun, id,
+		// Canonical UTC text so ListDue's "next_run_at <= CURRENT_TIMESTAMP"
+		// compares correctly (a raw time.Time is stored as time.String()).
+		sqliteUTC(now), sqliteUTC(nextRun), id,
 	)
 	if err != nil {
 		return fmt.Errorf("mark run: %w", err)
