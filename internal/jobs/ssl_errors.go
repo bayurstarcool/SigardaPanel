@@ -30,10 +30,23 @@ var permanentSSLErrorMarkers = []string{
 	"policy forbids issuing",
 }
 
+// permanentSiteCreateErrorMarkers are site.create preconditions the agent
+// checks before touching anything (e.g. the requested PHP-FPM is missing on
+// the server); a retry fails the same way until the operator acts.
+var permanentSiteCreateErrorMarkers = []string{
+	"is not installed on this server",
+}
+
 // isPermanentJobError reports whether a failed job should be marked failed
-// immediately instead of being retried. Only SSL jobs are classified.
+// immediately instead of being retried. SSL jobs and site.create
+// preconditions are classified.
 func isPermanentJobError(jobType string, execErr error, result *agentclient.TaskResult) bool {
-	if jobType != jobmodel.TypeSSLRenew && jobType != jobmodel.TypeSSLIssue {
+	markers := permanentSSLErrorMarkers
+	switch jobType {
+	case jobmodel.TypeSSLRenew, jobmodel.TypeSSLIssue:
+	case jobmodel.TypeSiteCreate:
+		markers = permanentSiteCreateErrorMarkers
+	default:
 		return false
 	}
 	var b strings.Builder
@@ -47,7 +60,7 @@ func isPermanentJobError(jobType string, execErr error, result *agentclient.Task
 		b.WriteString(result.Output)
 	}
 	msg := strings.ToLower(b.String())
-	for _, m := range permanentSSLErrorMarkers {
+	for _, m := range markers {
 		if strings.Contains(msg, m) {
 			return true
 		}

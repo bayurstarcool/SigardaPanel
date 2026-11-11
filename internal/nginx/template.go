@@ -369,15 +369,28 @@ type SiteConfig struct {
 	BlockedIPs            []string
 }
 
+// phpFpmTCPPorts maps PHP versions to the TCP port a CloudPanel-style
+// PHP-FPM pool listens on when there is no unix socket.
+var phpFpmTCPPorts = map[string]int{
+	"7.1": 11000, "7.2": 12000, "7.3": 13000, "7.4": 14000,
+	"8.0": 15000, "8.1": 16000, "8.2": 17000, "8.3": 18000,
+	"8.4": 19000, "8.5": 20000,
+}
+
+// PHPFPMTCPPort returns the TCP port generated vhosts fall back to for a PHP
+// version without a /run/php/php<version>-fpm.sock socket.
+func PHPFPMTCPPort(version string) (int, bool) {
+	p, ok := phpFpmTCPPorts[version]
+	return p, ok
+}
+
+// PHPFPMDefaultVersions are the sockets a vhost without an explicit (or with
+// an unknown) PHP version uses, in order of preference.
+var PHPFPMDefaultVersions = []string{"8.3", "8.4", "8.2", "8.1", "8.0"}
+
 // phpFpmAddr returns the TCP address for a specific PHP version.
 func phpFpmAddr(version string) string {
-	// Map PHP versions to TCP ports (ondrej/php PPA convention)
-	portMap := map[string]int{
-		"7.1": 11000, "7.2": 12000, "7.3": 13000, "7.4": 14000,
-		"8.0": 15000, "8.1": 16000, "8.2": 17000, "8.3": 18000,
-		"8.4": 19000, "8.5": 20000,
-	}
-	if p, ok := portMap[version]; ok {
+	if p, ok := phpFpmTCPPorts[version]; ok {
 		// Check if PHP-FPM is actually listening on TCP, otherwise use Unix socket
 		socketPath := fmt.Sprintf("/run/php/php%s-fpm.sock", version)
 		if _, err := os.Stat(socketPath); err == nil {
@@ -386,7 +399,7 @@ func phpFpmAddr(version string) string {
 		return fmt.Sprintf("127.0.0.1:%d", p)
 	}
 	// Default: try Unix socket for common versions
-	for _, v := range []string{"8.3", "8.4", "8.2", "8.1", "8.0"} {
+	for _, v := range PHPFPMDefaultVersions {
 		socketPath := fmt.Sprintf("/run/php/php%s-fpm.sock", v)
 		if _, err := os.Stat(socketPath); err == nil {
 			return fmt.Sprintf("unix:%s", socketPath)

@@ -50,6 +50,7 @@ type Router struct {
 	stubDev      bool
 	testAuth     bool
 	certDir      string // placeholder certificate referenced by generated vhosts
+	phpRunDir    string // PHP-FPM sockets (php<version>-fpm.sock)
 }
 
 // RouterOptions allows overriding router defaults for testing.
@@ -66,6 +67,8 @@ type RouterOptions struct {
 	// DefaultCertDir overrides where the placeholder vhost certificate is
 	// created (default /etc/nginx/ssl).
 	DefaultCertDir string
+	// PHPRunDir overrides where PHP-FPM sockets are looked up (default /run/php).
+	PHPRunDir string
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -94,6 +97,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		allowStubSSL: config.AgentAllowStubSSL(),
 		stubDev:      os.Getenv("SIGARDAPANEL_DEV") == "true",
 		certDir:      defaultSSLCertDir,
+		phpRunDir:    defaultPHPRunDir,
 	}
 	if opts != nil {
 		// RouterOptions is test/dependency-injection surface. Keep production
@@ -131,6 +135,9 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		r.certDir = filepath.Join(os.TempDir(), "sigardapanel-agent-test-ssl")
 		if opts.DefaultCertDir != "" {
 			r.certDir = opts.DefaultCertDir
+		}
+		if opts.PHPRunDir != "" {
+			r.phpRunDir = opts.PHPRunDir
 		}
 	}
 
@@ -419,6 +426,17 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 
 	if !isValidDomain(payload.Domain) || !r.isAllowedSitePath(payload.RootPath) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid domain or path")
+	}
+	if payload.PHPVersion != "" && siteinput.PHPVersion(payload.PHPVersion) != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid php_version")
+	}
+
+	// 0. Fail fast, before anything is written, when this server cannot run
+	// the site: a PHP site needs the PHP-FPM its vhost will point at.
+	if payload.Runtime == "php" {
+		if err := r.checkPHPFPM(payload.PHPVersion); err != nil {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
+		}
 	}
 
 	// 1. Create directory
