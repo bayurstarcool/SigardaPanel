@@ -148,7 +148,7 @@
             </div>
             <div class="flex items-center gap-2">
               <label for="purge-days" class="sr-only">Older than</label>
-              <select id="purge-days" bind:value={purgeDays} class="input h-8 w-36 text-[13px]" disabled={purging}>
+              <select id="purge-days" bind:value={purgeDays} class="input h-8 w-44 text-[13px]" disabled={purging}>
                 <option value="30">Older than 30 days</option>
                 <option value="90">Older than 90 days</option>
                 <option value="180">Older than 180 days</option>
