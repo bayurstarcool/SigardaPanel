@@ -294,13 +294,10 @@ Database migrations run automatically when the new API starts. They are
 forward-only; going back to an older version means restoring the database
 from the pre-update backup (the automatic rollback does that for you).
 
-The updater never edits your configuration files. If it warns that public sign-up
-is open (installs made before v1.5.0 did not set the variable), close it with:
-
-```bash
-echo SIGARDAPANEL_ALLOW_REGISTRATION=false | sudo tee -a /etc/sigardapanel/panel.env
-sudo systemctl restart sigardapanel-api
-```
+The updater never edits your configuration files. Public sign-up is closed by
+default since v1.6.0 (earlier versions left it open unless
+`SIGARDAPANEL_ALLOW_REGISTRATION=false` was set); the updater warns if your
+`panel.env` explicitly opens it with `SIGARDAPANEL_ALLOW_REGISTRATION=true`.
 
 Old update backups are not deleted automatically; remove the ones you no longer need.
 
@@ -425,9 +422,12 @@ The agent can also serve HTTPS itself (`SIGARDAPANEL_AGENT_TLS_CERT` and
 verifies the certificate, so it must be valid for the host name in the agent URL.
 
 > The **Servers** page and the API also offer an automatic one-line agent
-> installer (`GET /api/v1/agents/install` with a registration token). In v1.5.0
-> it still installs an outdated agent binary and fails at the final registration
-> step; use the manual steps above until a release fixes it.
+> installer (`GET /api/v1/agents/install` with a registration token, requires
+> `SIGARDAPANEL_PUBLIC_URL` to be an `https://` URL with a publicly trusted
+> certificate). Since v1.6.0 it installs the panel's own release version for the
+> server's architecture and verifies it against the signed `SHA256SUMS`
+> (needs `minisign` on the server). In v1.5.0 and earlier it installed an
+> outdated binary and failed at registration; use the manual steps there.
 
 ## Uninstalling
 

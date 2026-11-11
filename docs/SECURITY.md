@@ -117,7 +117,7 @@ Actions tracked: `site_create`, `site_delete`, `site_update`, `user_create`, `us
 |---|---|---|
 | ~~Token stored in `localStorage`~~ | — | **Resolved in v1.2.0**: HttpOnly + Secure + SameSite=Strict cookie |
 | No CSP header | Low | Recommended: `default-src 'self'` |
-| Public registration | Low | Open by design; close with `SIGARDAPANEL_ALLOW_REGISTRATION=false` |
+| Public registration | Low | Closed by default since v1.6.0; open with `SIGARDAPANEL_ALLOW_REGISTRATION=true` |
 | `test_db.php` may exist on web server (172.104.62.193) | High (out of scope) | Remove from that host |
 | Self-signed cert warning in browsers | Low | Use Let's Encrypt with `DOMAIN` + `CF_TOKEN` |
 | HTTP still works for direct IP (anti-loop only checks CF-Ray) | Low | `iptables` block if not needed |

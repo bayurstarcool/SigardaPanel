@@ -506,8 +506,8 @@ do_update() {
   systemctl restart sigardapanel-web || true
   healthy || rollback
   ok "Updated to $("$INSTALL_BIN" version)"
-  if ! grep -qE '^SIGARDAPANEL_ALLOW_REGISTRATION=' "$CONF_DIR/panel.env"; then
-    warn "Public sign-up is OPEN on this panel. To close it: echo SIGARDAPANEL_ALLOW_REGISTRATION=false >> ${CONF_DIR}/panel.env && systemctl restart sigardapanel-api"
+  if grep -qE '^SIGARDAPANEL_ALLOW_REGISTRATION=true' "$CONF_DIR/panel.env"; then
+    warn "Public sign-up is OPEN on this panel (SIGARDAPANEL_ALLOW_REGISTRATION=true in ${CONF_DIR}/panel.env)."
   fi
 }
 

@@ -65,7 +65,7 @@ The first group is written by the installer; the rest are optional.
 | `SIGARDAPANEL_AGENT_URL` | `http://localhost:7710` | `http://127.0.0.1:7710` | Agent used for the local server |
 | `SIGARDAPANEL_AGENT_TOKEN` | empty | random 64 hex | Shared secret with the local agent. Must equal the value in `agent.env`; the API copies it into the database on start. |
 | `SIGARDAPANEL_ENCRYPTION_KEY` | empty | random 64 hex | AES-256 key (32 bytes hex) for secrets at rest |
-| `SIGARDAPANEL_ALLOW_REGISTRATION` | `true` | `false` | Public sign-up (`POST /api/v1/auth/register`) |
+| `SIGARDAPANEL_ALLOW_REGISTRATION` | `false` (`true` before v1.6.0) | `false` | Public sign-up (`POST /api/v1/auth/register`) |
 | `SIGARDAPANEL_ENCRYPTION_KEY_FILE` | `encryption.key` next to the database | - | Key file used when `SIGARDAPANEL_ENCRYPTION_KEY` is not set |
 | `SIGARDAPANEL_LOCAL_IP` | auto | - | Address shown for the panel host (useful behind NAT) |
 | `SIGARDAPANEL_WORKER_CONCURRENCY` | `3` | - | Parallel background jobs (1-16) |

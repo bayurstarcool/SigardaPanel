@@ -590,11 +590,6 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "write nginx config failed: "+err.Error())
 	}
 
-	// Regenerate wildcard SSL cert to include this domain
-	if _, ok := r.executor.RunShell(ctx, "test", "-f", "/etc/nginx/ssl/sigardapanel.crt"); ok == nil {
-		r.executor.RunShell(ctx, "bash", "/root/SigardaPanel-Enterprise/scripts/regenerate-ssl.sh")
-	}
-
 	// 3b. logrotate: the distro default /etc/logrotate.d/nginx already rotates
 	// /var/log/nginx/*.log. A per-domain file duplicates those log entries and
 	// makes logrotate abort the WHOLE run ("duplicate log entry" → every

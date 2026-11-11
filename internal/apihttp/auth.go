@@ -365,8 +365,8 @@ func (ah *authHandler) login(c echo.Context) error {
 func (ah *authHandler) register(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
-	// Operators of self-hosted instances can close public sign-up with
-	// SIGARDAPANEL_ALLOW_REGISTRATION=false; default stays open.
+	// Public sign-up is closed by default; hosting resellers open it with
+	// SIGARDAPANEL_ALLOW_REGISTRATION=true.
 	if !config.AllowRegistration() {
 		return echo.NewHTTPError(http.StatusForbidden, "registration is disabled on this server")
 	}
