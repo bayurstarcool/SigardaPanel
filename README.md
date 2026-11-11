@@ -99,23 +99,19 @@ See [docs/INSTALL.md](docs/INSTALL.md) for full installation guide.
 
 ## CLI
 
+The same binary is the CLI client. Quick tour:
+
 ```bash
-# Health
-sigardapanel doctor --api-url http://127.0.0.1:7700
-
-# Users
-sigardapanel user list --direct
-sigardapanel user reset-password <username> --direct
-
-# Servers / tokens
-sigardapanel server list
-sigardapanel server token --id 1      # regenerate agent token, sync DB+env
-
-# Login
-sigardapanel login
+sigardapanel login --api-url https://cp.example.com --user admin
+sigardapanel site list -o yaml
+sigardapanel site suspend 12 && sigardapanel job watch <job_id>
+sigardapanel apikey create --name ci        # then: export SIGARDAPANEL_TOKEN=<key>
+sigardapanel user reset-password admin --direct   # recovery on the panel host
+sigardapanel doctor
 ```
 
-Full CLI: `sigardapanel --help`
+Full reference (every command, flags, env vars, output formats, exit codes):
+[docs/CLI.md](docs/CLI.md) · `sigardapanel help`
 
 ---
 
@@ -170,7 +166,7 @@ source/
 `sp_session` cookie (SameSite=Strict); API clients and the CLI use a Bearer token.
 
 ```bash
-TOKEN=$(sigardapanel login --user admin)
+TOKEN=<personal API key from: sigardapanel apikey create --name scripts>
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7700/api/v1/servers/1/stack
 ```
 
