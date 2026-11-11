@@ -1,14 +1,14 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtRelative } from '$lib/format';
+  import { fmtRelative, fmtDateTime } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import EmptyState from '$components/EmptyState.svelte';
   import StatusPill from '$components/StatusPill.svelte';
   import {
     Zap, X, RefreshCw, Globe, Trash2, Rocket, ShieldCheck, Server, Database, Users, UserMinus,
-    Play, Square, HardDrive, Download, RotateCcw,
+    Play, Square, HardDrive, Download, RotateCcw, ChevronDown, Copy, Check, AlertTriangle,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
@@ -18,7 +18,11 @@
   let refreshing = $state(false);
   let inFlight = false;
   let statusFilter = $state('');
+  let typeFilter = $state('');
   let cancelling = $state<string | null>(null);
+  let loadError = $state('');
+  let expanded = $state<Record<string, boolean>>({});
+  let copiedId = $state<string | null>(null);
 
   onMount(() => {
     if (!auth.user) { loading = false; return; }
@@ -37,9 +41,12 @@
     if (!auth.user || inFlight) return;
     inFlight = true;
     try {
-      const d = await apiFetch(auth.token, 'GET', 'jobs');
+      const d = await apiFetch(auth.token, 'GET', 'jobs?limit=200');
       jobs = d?.jobs || [];
-    } catch {}
+      loadError = '';
+    } catch (e: any) {
+      if (e?.message !== 'session expired') loadError = e?.message || 'Failed to load jobs';
+    }
     inFlight = false;
     if (loading) loading = false;
   }
@@ -61,18 +68,44 @@
     } finally { cancelling = null; }
   }
 
+  async function copyError(j: any) {
+    try {
+      await navigator.clipboard.writeText(j.error);
+      copiedId = j.id;
+      setTimeout(() => { if (copiedId === j.id) copiedId = null; }, 2000);
+    } catch {
+      toasts.error('Copy failed — select the text manually');
+    }
+  }
+
+  // First non-empty line of an error, for the collapsed row.
+  function errorSummary(err: string): string {
+    return err.split('\n').map((l) => l.trim()).find(Boolean) ?? err;
+  }
+  function isLongError(err: string): boolean {
+    return err.length > 140 || err.includes('\n');
+  }
+
   const statusOptions = [
     { value: '', label: 'All' },
     { value: 'running', label: 'Running' },
     { value: 'queued', label: 'Queued' },
     { value: 'failed', label: 'Failed' },
     { value: 'succeeded', label: 'Completed' },
+    { value: 'canceled', label: 'Canceled' },
   ];
 
   const counts = $derived(
     jobs.reduce((acc: Record<string, number>, j: any) => { acc[j.status] = (acc[j.status] || 0) + 1; return acc; }, {}),
   );
-  const filteredJobs = $derived(statusFilter ? jobs.filter((j: any) => j.status === statusFilter) : jobs);
+  const typeOptions = $derived(
+    [...new Set(jobs.map((j: any) => j.type as string))]
+      .map((t) => ({ value: t, label: jobType(t).label }))
+      .sort((a, b) => a.label.localeCompare(b.label)),
+  );
+  const filteredJobs = $derived(
+    jobs.filter((j: any) => (!statusFilter || j.status === statusFilter) && (!typeFilter || j.type === typeFilter)),
+  );
 
   const jobTypes: Record<string, { label: string; icon: any; danger?: boolean }> = {
     'site.create': { label: 'Create Site', icon: Globe },
@@ -101,7 +134,7 @@
 </script>
 
 <DashboardLayout active="Jobs">
-  <PageHeader title="Jobs" description={loading ? 'Loading…' : `${jobs.length} job(s) total`}>
+  <PageHeader title="Jobs" description={loading ? 'Loading…' : `Latest ${jobs.length} job${jobs.length === 1 ? '' : 's'}`}>
     {#snippet actions()}
       <button onclick={manualRefresh} class="btn btn-secondary btn-sm" disabled={refreshing}>
         <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} /> Refresh
@@ -119,19 +152,33 @@
           </button>
         {/each}
       </div>
-      <span class="text-xs text-subtle max-sm:hidden">Auto-refreshes every 5s</span>
+      <div class="flex w-full items-center gap-3 sm:w-auto">
+        <label for="job-type" class="sr-only">Job type</label>
+        <select id="job-type" bind:value={typeFilter} class="input h-8 w-full text-[13px] sm:w-48">
+          <option value="">All types</option>
+          {#each typeOptions as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
+        </select>
+        <span class="shrink-0 text-xs text-subtle max-lg:hidden">Auto-refreshes every 5s</span>
+      </div>
     </div>
 
+    {#if loadError && jobs.length > 0}
+      <div class="flex items-center gap-2 border-b border-line bg-danger/10 px-4 py-2 text-[13px] text-danger" role="alert">
+        <AlertTriangle size={14} class="shrink-0" /> <span class="min-w-0 break-words">Refresh failed: {loadError}</span>
+      </div>
+    {/if}
     {#if loading}
       <div class="space-y-3 p-4">
         {#each Array(5) as _, i (i)}<div class="skeleton h-10"></div>{/each}
       </div>
+    {:else if loadError && jobs.length === 0}
+      <EmptyState compact icon={AlertTriangle as any} title="Could not load jobs" description={loadError} actionLabel="Try again" onaction={manualRefresh} />
     {:else if filteredJobs.length === 0}
       <EmptyState
         compact
         icon={Zap as any}
-        title={statusFilter ? `No ${statusOptions.find((o) => o.value === statusFilter)?.label.toLowerCase()} jobs` : 'No jobs'}
-        description="Jobs will appear here when tasks are running." />
+        title={statusFilter || typeFilter ? 'No jobs match these filters' : 'No jobs'}
+        description={statusFilter || typeFilter ? 'Try another status or type.' : 'Jobs will appear here when tasks are running.'} />
     {:else}
       <div class="table-wrap">
         <table class="table">
@@ -160,7 +207,19 @@
                         <div class="truncate text-[13px] text-muted" title={j.description}>{j.description}</div>
                       {/if}
                       {#if j.status === 'failed' && j.error}
-                        <div class="truncate font-mono text-xs text-danger" title={j.error}>{j.error}</div>
+                        <div class="mt-0.5 flex min-w-0 items-center gap-1.5">
+                          <span class="min-w-0 truncate font-mono text-xs text-danger">{errorSummary(j.error)}</span>
+                          {#if isLongError(j.error)}
+                            <button
+                              class="btn btn-ghost btn-xs shrink-0"
+                              aria-expanded={!!expanded[j.id]}
+                              aria-controls="job-err-{j.id}"
+                              onclick={() => (expanded[j.id] = !expanded[j.id])}>
+                              <ChevronDown size={12} class="transition-transform duration-150 {expanded[j.id] ? 'rotate-180' : ''}" />
+                              {expanded[j.id] ? 'Less' : 'Details'}
+                            </button>
+                          {/if}
+                        </div>
                       {/if}
                       <div class="text-xs text-subtle sm:hidden">{fmtRelative(j.created_at)}</div>
                     </div>
@@ -179,7 +238,7 @@
                   {/if}
                 </td>
                 <td><StatusPill status={j.status} /></td>
-                <td class="whitespace-nowrap text-muted tabular-nums max-sm:hidden" title={j.created_at ? new Date(j.created_at).toLocaleString('id-ID') : ''}>
+                <td class="whitespace-nowrap text-muted tabular-nums max-sm:hidden" title={fmtDateTime(j.created_at)}>
                   {fmtRelative(j.created_at)}
                 </td>
                 <td class="text-right">
@@ -191,6 +250,19 @@
                   {/if}
                 </td>
               </tr>
+              {#if j.status === 'failed' && j.error && expanded[j.id]}
+                <tr id="job-err-{j.id}">
+                  <td colspan="5" class="bg-surface-2">
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                      <span class="text-xs font-medium text-muted">Error output</span>
+                      <button class="btn btn-ghost btn-xs" onclick={() => copyError(j)}>
+                        {#if copiedId === j.id}<Check size={12} class="text-success" /> Copied{:else}<Copy size={12} /> Copy{/if}
+                      </button>
+                    </div>
+                    <pre class="max-h-80 overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-xs break-words whitespace-pre-wrap text-fg">{j.error}</pre>
+                  </td>
+                </tr>
+              {/if}
             {/each}
           </tbody>
         </table>
