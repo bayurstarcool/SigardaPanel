@@ -539,6 +539,9 @@ process are marked failed when the worker starts.
 | SIGARDAPANEL_ENCRYPTION_KEY | - | 32-byte hex AES key for secrets at rest (`openssl rand -hex 32`) |
 | SIGARDAPANEL_ENCRYPTION_KEY_FILE | `<db dir>/encryption.key` | Key file used when the env key is unset |
 | SIGARDAPANEL_WORKER_CONCURRENCY | 3 | Job worker pool size (1-16) |
+| SIGARDAPANEL_ALLOW_REGISTRATION | false | Panel self-registration (`POST /api/v1/auth/register`) |
+| SIGARDAPANEL_LANDING_PAGE | false | `true`: `/` and `/pricing` show the SaaS landing; otherwise they redirect to `/login` (`/dashboard` when signed in). Read by the web via `GET /api/v1/public/config` |
+| SIGARDAPANEL_ALLOW_MEMBER_SIGNUP | false | `true`: `POST /api/v1/member/register` open (needs `MEMBER_DB_*`); otherwise 403 `member_signup_disabled` |
 
 ### Encryption key resolution
 

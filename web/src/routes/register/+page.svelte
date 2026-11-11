@@ -21,13 +21,15 @@
   let step = $state(1);
 
   // Self-hosted panels have no public sign-up: accounts are created by an
-  // administrator under Users. Only show the form when the API accepts it.
+  // administrator under Users. Only show the form when the API reports member
+  // sign-up open (SIGARDAPANEL_ALLOW_MEMBER_SIGNUP=true + member database);
+  // if the API cannot be asked, treat it as closed.
   let signupOpen = $state<boolean | null>(null);
   onMount(() => {
-    fetch('/api/v1/auth/signup', { cache: 'no-store' })
+    fetch('/api/v1/public/config', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => (signupOpen = d?.data ? !!d.data.member_signup : true))
-      .catch(() => (signupOpen = true));
+      .then((d) => (signupOpen = !!d?.data?.member_signup))
+      .catch(() => (signupOpen = false));
   });
 
   async function submit(e: Event) {

@@ -66,6 +66,8 @@ The first group is written by the installer; the rest are optional.
 | `SIGARDAPANEL_AGENT_TOKEN` | empty | random 64 hex | Shared secret with the local agent. Must equal the value in `agent.env`; the API copies it into the database on start. |
 | `SIGARDAPANEL_ENCRYPTION_KEY` | empty | random 64 hex | AES-256 key (32 bytes hex) for secrets at rest |
 | `SIGARDAPANEL_ALLOW_REGISTRATION` | `false` (`true` before v1.6.0) | `false` | Public sign-up (`POST /api/v1/auth/register`) |
+| `SIGARDAPANEL_LANDING_PAGE` | `false` (always on before v1.6.1) | - | `true`: `/` and `/pricing` show the Sigarda SaaS landing (pricing, "Contact Sales"). `false`: they redirect to `/login` (or `/dashboard` when signed in). Reported to the web by `GET /api/v1/public/config`. |
+| `SIGARDAPANEL_ALLOW_MEMBER_SIGNUP` | `false` (open before v1.6.1) | - | `true`: `POST /api/v1/member/register` creates member (SaaS customer) accounts; also needs `MEMBER_DB_HOST`. `false`: 403 `member_signup_disabled`, and `/register` says sign-up is closed. |
 | `SIGARDAPANEL_ENCRYPTION_KEY_FILE` | `encryption.key` next to the database | - | Key file used when `SIGARDAPANEL_ENCRYPTION_KEY` is not set |
 | `SIGARDAPANEL_LOCAL_IP` | auto | - | Address shown for the panel host (useful behind NAT) |
 | `SIGARDAPANEL_WORKER_CONCURRENCY` | `3` | - | Parallel background jobs (1-16) |

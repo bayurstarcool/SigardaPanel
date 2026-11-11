@@ -248,6 +248,22 @@ func AllowRegistration() bool {
 	return boolEnv("SIGARDAPANEL_ALLOW_REGISTRATION", false)
 }
 
+// LandingPage reports whether the web serves the Sigarda SaaS landing and
+// marketing pages (/, /pricing). Off by default: a self-hosted panel sends
+// visitors straight to /login (or /dashboard when signed in). Enable with
+// SIGARDAPANEL_LANDING_PAGE=true.
+func LandingPage() bool {
+	return boolEnv("SIGARDAPANEL_LANDING_PAGE", false)
+}
+
+// AllowMemberSignup reports whether POST /api/v1/member/register accepts new
+// member (SaaS customer) accounts. Off by default; the member portal also
+// needs its database to be configured. Enable with
+// SIGARDAPANEL_ALLOW_MEMBER_SIGNUP=true.
+func AllowMemberSignup() bool {
+	return boolEnv("SIGARDAPANEL_ALLOW_MEMBER_SIGNUP", false)
+}
+
 // AllowPrivateAgents lets self-registering agents (one-line installer) use a
 // private (RFC 1918 / ULA) callback address, for panels that reach their
 // servers over a VPC or VPN. Off by default.

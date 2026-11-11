@@ -161,8 +161,11 @@ password is generated and printed once.
    [add more servers](#adding-remote-servers).
 
 Public sign-up is **disabled** on installer-made panels
-(`SIGARDAPANEL_ALLOW_REGISTRATION=false`); `/register` says so. Create further
-accounts under **Users**.
+(`SIGARDAPANEL_ALLOW_REGISTRATION=false`, `SIGARDAPANEL_ALLOW_MEMBER_SIGNUP`
+unset); `/register` says so. Create further accounts under **Users**. The panel
+is self-hosted by default: opening `/` goes straight to the login, without the
+Sigarda SaaS landing and pricing pages (`SIGARDAPANEL_LANDING_PAGE`, see
+[Configuration files](#configuration-files)).
 
 Command-line access on the server:
 
@@ -243,6 +246,8 @@ certificate) or **Full**; "Flexible" causes a redirect loop.
 | `SIGARDAPANEL_AGENT_TOKEN` | random 64 hex | Shared secret with the local agent (same value in `agent.env`) |
 | `SIGARDAPANEL_ENCRYPTION_KEY` | random 64 hex | AES-256 key for secrets stored in the database (database passwords, job credentials, 2FA secrets) |
 | `SIGARDAPANEL_ALLOW_REGISTRATION` | `false` | Public sign-up on `/register` |
+| `SIGARDAPANEL_LANDING_PAGE` | not set (`false`) | `true`: `/` and `/pricing` show the Sigarda SaaS landing page. Otherwise they redirect to the login (self-hosted). |
+| `SIGARDAPANEL_ALLOW_MEMBER_SIGNUP` | not set (`false`) | `true`: member (SaaS customer) sign-up on `/register` (also needs the member database, `MEMBER_DB_*`). |
 | `SIGARDAPANEL_ALLOW_PRIVATE_AGENTS` | not set (`false`) | `true`: servers added with the [install command](#option-a-install-command) may register a private (RFC 1918 / ULA) address. See [Private networks](#private-networks). |
 | `MEMBER_DB_*` | commented out | Optional member area (PostgreSQL) |
 
@@ -304,6 +309,10 @@ The updater never edits your configuration files. Public sign-up is closed by
 default since v1.6.0 (earlier versions left it open unless
 `SIGARDAPANEL_ALLOW_REGISTRATION=false` was set); the updater warns if your
 `panel.env` explicitly opens it with `SIGARDAPANEL_ALLOW_REGISTRATION=true`.
+Since v1.6.1 the Sigarda SaaS landing page and member sign-up are off unless
+`panel.env` sets `SIGARDAPANEL_LANDING_PAGE=true` and
+`SIGARDAPANEL_ALLOW_MEMBER_SIGNUP=true`; a panel that is a public SaaS site
+adds those lines (and restarts `sigardapanel-api`) when updating.
 
 Old update backups are not deleted automatically; remove the ones you no longer need.
 
