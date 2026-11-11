@@ -3,9 +3,63 @@
 **VPS control plane** — self-hosted, multi-server, open source.
 Manage nginx, PHP, Node, databases, SSL, backups, firewall from one web UI.
 
-**Version:** 1.0.0
-**License:** MIT (recommended)
-**Stack:** Go 1.25 (Echo + SQLite) · SvelteKit · 12k+ LOC backend · 18k+ LOC frontend
+[Latest release](https://github.com/bayurstarcool/SigardaPanel/releases/latest) ·
+[Install guide](docs/INSTALL.md) · License: MIT ·
+Stack: Go (Echo + SQLite) · SvelteKit
+
+---
+
+## Quick install
+
+On a fresh **Ubuntu 24.04** (tested) or **Debian 12** server, amd64 or arm64, as root:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/bayurstarcool/SigardaPanel/main/install.sh
+less install.sh                     # read it first - it is a plain shell script
+sudo bash install.sh
+```
+
+The installer downloads the latest signed release (prebuilt binary and web
+bundle - no Go or npm needed), verifies it, sets up nginx with HTTPS and the three
+services, and prints the panel URL and a random admin password (also saved to
+`/root/.sigardapanel_admin_cred`). There are no default credentials.
+
+Common options: `DOMAIN=panel.example.com LETSENCRYPT_EMAIL=you@example.com`
+(trusted certificate), `ADMIN_USER`/`ADMIN_EMAIL`/`ADMIN_PASS`,
+`INSTALL_FIREWALL=yes`, `SIGARDA_VERSION=v1.5.0` - e.g.
+`sudo DOMAIN=panel.example.com LETSENCRYPT_EMAIL=you@example.com bash install.sh`.
+
+Update later (backup + automatic rollback):
+
+```bash
+sudo bash install.sh update
+```
+
+**[docs/INSTALL.md](docs/INSTALL.md) is the complete guide**: requirements, all
+options, first login, ports and firewall, update, rollback, backups, adding remote
+servers, uninstall and troubleshooting.
+
+## Verifying releases
+
+Every release contains `SHA256SUMS` and `SHA256SUMS.minisig`, signed with this
+[minisign](https://jedisct1.github.io/minisign/) key:
+
+```
+RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI
+```
+
+`install.sh` pins this key and refuses to install anything that fails the
+signature or checksum check. To verify by hand:
+
+```bash
+V=v1.5.0
+base=https://github.com/bayurstarcool/SigardaPanel/releases/download/$V
+for f in SHA256SUMS SHA256SUMS.minisig sigardapanel-linux-amd64 sigardapanel-web.tar.gz; do
+  curl -fsSLO "$base/$f"
+done
+minisign -Vm SHA256SUMS -P RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI
+sha256sum -c --ignore-missing SHA256SUMS
+```
 
 ---
 
@@ -52,9 +106,9 @@ Manage nginx, PHP, Node, databases, SSL, backups, firewall from one web UI.
 │   SigardaPanel API   (port 7700)                              │
 │   - Go 1.25 + Echo                                          │
 │   - Cookie + Bearer auth, RBAC, 2FA                        │
-│   - SQLite (sigardapanel.db) + PostgreSQL (member)          │
+│   - SQLite (sigardapanel.db), optional PostgreSQL (member)  │
 └──────────┬─────────────────────────────────┬───────────────┘
-           │ HTTPS + Bearer token             │
+           │ HTTP(S) + bearer token           │
            ▼                                  ▼
 ┌──────────────────────┐         ┌──────────────────────────┐
 │  SigardaPanel Agent  │         │  Other VPS Agents        │
@@ -74,69 +128,53 @@ Manage nginx, PHP, Node, databases, SSL, backups, firewall from one web UI.
 | `sigardapanel-agent` | 127.0.0.1:7710 | `root` | Local VPS task executor |
 | `sigardapanel-web` | 127.0.0.1:7720 | `sigardapanel` | SvelteKit SSR frontend |
 
-All services bind localhost. Only nginx exposes 80/443 publicly.
-
----
-
-## Quickstart (5 minutes)
-
-```bash
-# 1. Clone
-git clone https://github.com/yourorg/sigardapanel.git /opt/sigardapanel/source
-cd /opt/sigardapanel/source
-
-# 2. Install (run on fresh Ubuntu 24.04)
-sudo bash scripts/install.sh
-
-# 3. Open
-http://YOUR_SERVER_IP
-admin / <printed-password>
-```
-
-See [docs/INSTALL.md](docs/INSTALL.md) for full installation guide.
+All services bind localhost. Only nginx exposes 80/443 publicly. Agents on
+remote servers listen on 7710; allow that port only from the panel
+(see [Adding remote servers](docs/INSTALL.md#adding-remote-servers)).
 
 ---
 
 ## CLI
 
 ```bash
+# Log in once (token is stored in ~/.config/sigardapanel/)
+sigardapanel login --api-url http://127.0.0.1:7700 --user admin
+
 # Health
 sigardapanel doctor --api-url http://127.0.0.1:7700
 
-# Users
-sigardapanel user list --direct
-sigardapanel user reset-password <username> --direct
-
-# Servers / tokens
+# Servers / sites / users
 sigardapanel server list
-sigardapanel server token --id 1      # regenerate agent token, sync DB+env
-
-# Login
-sigardapanel login
+sigardapanel site list
+sigardapanel user list
 ```
 
-Full CLI: `sigardapanel --help`
+Full CLI: `sigardapanel --help` and [docs/CLI.md](docs/CLI.md).
 
 ---
 
 ## Security
 
 - **Auth:** Argon2id password hashing, 64-char session tokens (hashed in DB), 7/90-day TTL
-- **TLS:** Self-signed by default, Let's Encrypt via DNS-01 (Cloudflare) supported
+- **Releases:** minisign-signed checksums, verified by the installer with a pinned key
+- **TLS:** Self-signed by default, Let's Encrypt via the installer (`DOMAIN` + `LETSENCRYPT_EMAIL`); sites can use DNS-01 (Cloudflare)
 - **Headers:** HSTS, X-Frame-Options DENY, X-Content-Type-Options nosniff, Referrer-Policy
-- **Network:** SSH key-only, UFW 22/80/443, fail2ban, rate limits on login/register
+- **Network:** services on localhost behind nginx, rate limits on the API and login; recommended: UFW 22/80/443 (`INSTALL_FIREWALL=yes`), SSH keys, fail2ban
+- **Accounts:** no default password, public sign-up disabled by the installer, optional TOTP 2FA
 - **Agent:** Constant-time bearer compare, command allowlist, hostname spoofing prevention
 - **Hardened systemd:** NoNewPrivileges, ProtectSystem, ReadWritePaths scoped
 
-See [docs/SECURITY.md](docs/SECURITY.md) for threat model + audit log.
+See [docs/SECURITY.md](docs/SECURITY.md) for the threat model and
+[SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ---
 
 ## Project Layout
 
 ```
-source/
-├── cmd/sigardapanel/         # CLI entry (api, agent, install, dev, ...)
+.
+├── install.sh                # Installer (copy of installer/install.sh, kept identical)
+├── cmd/sigardapanel/         # Single binary entry (api, agent, CLI, dev)
 ├── internal/
 │   ├── apihttp/              # HTTP handlers + middleware
 │   ├── agenthttp/            # Agent task handlers
@@ -153,11 +191,13 @@ source/
 │   │   ├── routes/           # UI pages
 │   │   └── lib/              # Components, stores
 │   └── package.json
+├── installer/                # Installer source (install.sh)
 ├── scripts/
-│   └── install.sh            # One-shot installer
+│   └── release.sh            # Build, checksum and sign a release
 └── docs/
-    ├── INSTALL.md
-    ├── SYSTEMD.md
+    ├── INSTALL.md            # Installation and operations guide
+    ├── SYSTEMD.md            # Units and environment variables
+    ├── CLI.md
     ├── API.md
     └── SECURITY.md
 ```
@@ -166,11 +206,13 @@ source/
 
 ## API
 
-37 endpoints across 18 domains. Browsers authenticate with the HttpOnly
+REST API under `/api/v1`. Browsers authenticate with the HttpOnly
 `sp_session` cookie (SameSite=Strict); API clients and the CLI use a Bearer token.
 
 ```bash
-TOKEN=$(sigardapanel login --user admin)
+TOKEN=$(curl -s -X POST http://127.0.0.1:7700/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"..."}' | jq -r .data.token)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7700/api/v1/servers/1/stack
 ```
 
