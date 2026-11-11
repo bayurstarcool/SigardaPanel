@@ -184,6 +184,7 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `PUT /api/v1/auth/profile` — Update profile
 - `POST /api/v1/auth/logout` — Logout
 - `POST /api/v1/auth/stop-impersonation` — Stop impersonation
+- `GET /api/v1/public/config` (alias `GET /api/v1/auth/signup`) — public: `landing_page`, `member_signup`, `panel_signup`
 
 ### Servers (8 endpoints)
 - `GET /api/v1/servers` — List servers
@@ -615,4 +616,8 @@ Latest: v1.5.0 (always check the releases page; install/update with `install.sh`
 
 Recent security/stability releases: v1.1.1 file-manager upload traversal fix;
 v1.1.2 worker panic recovery + rate-limiter/error hygiene; v1.1.3 site deletion
-drops its MySQL databases; v1.2.0 cookie sessions + `SIGARDAPANEL_ALLOW_REGISTRATION`.
+drops its MySQL databases; v1.2.0 cookie sessions + `SIGARDAPANEL_ALLOW_REGISTRATION`;
+v1.6.1 self-hosted defaults (`SIGARDAPANEL_LANDING_PAGE`, `SIGARDAPANEL_ALLOW_MEMBER_SIGNUP`,
+both default false), API-enforced `password_change_required` + `sigardapanel passwd`,
+503 placeholder for suspended sites, PHP-FPM preflight and site-owner account on
+`site.create`, no fallback-key error from `init`.
