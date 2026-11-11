@@ -122,39 +122,41 @@
 
         <h3 class="mt-8 mb-3 text-base font-semibold text-fg">System Requirements</h3>
         <ul class="mb-6 list-disc space-y-2 pl-5 leading-relaxed text-muted marker:text-subtle">
-          <li><strong>Panel Server:</strong> Ubuntu 20.04+, 1GB RAM, 10GB disk</li>
-          <li><strong>Target VPS:</strong> Any Linux with systemd</li>
-          <li><strong>Network:</strong> Panel must reach agent on port 7710</li>
-          <li><strong>Dependencies:</strong> Go 1.22+, Node.js 18+ (for dashboard)</li>
+          <li><strong>Panel server:</strong> fresh Ubuntu 24.04 (tested) or Debian 12, amd64 or arm64, 1 GB RAM, 10 GB disk, root access</li>
+          <li><strong>Remote servers:</strong> Ubuntu/Debian with systemd, running the agent</li>
+          <li><strong>Network:</strong> ports 22, 80 and 443 open on the panel; the panel must reach each remote agent on port 7710</li>
+          <li><strong>Dependencies:</strong> installed by the installer (nginx, Node.js runtime, sqlite3, minisign); no Go or npm needed</li>
         </ul>
 
         <h3 class="mt-8 mb-3 text-base font-semibold text-fg">Installation</h3>
         <div class="mb-6 rounded-lg border border-line bg-surface-2 p-4">
-          <pre class="overflow-x-auto font-mono text-[13px] leading-relaxed text-fg"><code># Download and install
-curl -sSL https://github.com/bayurstarcool/SigardaPanel/releases/latest/download/sigardapanel -o sigardapanel
-chmod +x sigardapanel
+          <pre class="overflow-x-auto font-mono text-[13px] leading-relaxed text-fg"><code># Download, read and run the installer (verifies the signed release)
+curl -fsSLO https://raw.githubusercontent.com/bayurstarcool/SigardaPanel/main/install.sh
+less install.sh
+sudo bash install.sh
 
-# Run setup wizard
-./sigardapanel install
+# With a domain and a Let's Encrypt certificate
+sudo DOMAIN=panel.example.com LETSENCRYPT_EMAIL=you@example.com bash install.sh
 
-# Or start directly
-./sigardapanel dev</code></pre>
+# Update later (backup + automatic rollback)
+sudo bash install.sh update</code></pre>
         </div>
+        <p class="mb-6 leading-relaxed text-muted">The installer prints the panel URL and a random admin password (also saved to <code class="code">/root/.sigardapanel_admin_cred</code>); there are no default credentials. The full guide (options, firewall, rollback, remote servers, uninstall, troubleshooting) is <a class="link" href="https://github.com/bayurstarcool/SigardaPanel/blob/main/docs/INSTALL.md" target="_blank" rel="noopener noreferrer">docs/INSTALL.md</a>.</p>
 
         <h3 class="mt-8 mb-3 text-base font-semibold text-fg">Access</h3>
         <div class="rounded-lg border border-line bg-surface-2 p-4">
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
             <div>
-              <div class="mb-1 text-xs text-subtle">Web UI</div>
-              <code class="font-mono text-[13px] text-fg">http://YOUR_IP:7720</code>
+              <div class="mb-1 text-xs text-subtle">Web UI and API (nginx)</div>
+              <code class="font-mono text-[13px] text-fg">https://YOUR_DOMAIN_OR_IP</code>
             </div>
             <div>
-              <div class="mb-1 text-xs text-subtle">API</div>
-              <code class="font-mono text-[13px] text-fg">http://YOUR_IP:7700</code>
+              <div class="mb-1 text-xs text-subtle">API / web (localhost only)</div>
+              <code class="font-mono text-[13px] text-fg">127.0.0.1:7700 / :7720</code>
             </div>
             <div>
               <div class="mb-1 text-xs text-subtle">Agent</div>
-              <code class="font-mono text-[13px] text-fg">http://YOUR_IP:7710</code>
+              <code class="font-mono text-[13px] text-fg">127.0.0.1:7710</code>
             </div>
           </div>
         </div>
@@ -438,10 +440,10 @@ sigardapanel redis flush --server 1</code></pre>
             { cmd: 'sigardapanel api', desc: 'Start API server on :7700', example: '$ sigardapanel api' },
             { cmd: 'sigardapanel agent', desc: 'Start agent on :7710', example: '$ SIGARDAPANEL_AGENT_TOKEN=xxx sigardapanel agent' },
             { cmd: 'sigardapanel dev', desc: 'Run API + agent together', example: '$ sigardapanel dev' },
-            { cmd: 'sigardapanel install', desc: 'Setup wizard (interactive)', example: '$ sigardapanel install' },
+            { cmd: 'sigardapanel install', desc: 'Setup wizard for development checkouts (servers: use install.sh)', example: '$ sigardapanel install' },
             { cmd: 'sigardapanel init', desc: 'Create admin user directly', example: '$ sigardapanel init --user admin --password mypass' },
             { cmd: 'sigardapanel login', desc: 'Authenticate CLI', example: '$ sigardapanel login --api-url http://panel:7700' },
-            { cmd: 'sigardapanel version', desc: 'Print version', example: '$ sigardapanel version\n0.5.0' },
+            { cmd: 'sigardapanel version', desc: 'Print version', example: '$ sigardapanel version\n1.5.0' },
           ] as item (item.cmd)}
             <div class="rounded-lg border border-line bg-surface p-3">
               <div class="flex items-center gap-2">
@@ -630,9 +632,9 @@ sigardapanel redis flush --server 1</code></pre>
             </thead>
             <tbody>
               {#each [
-                { var: 'SIGARDAPANEL_API_ADDR', def: ':7700', desc: 'API listen address' },
-                { var: 'SIGARDAPANEL_AGENT_ADDR', def: ':7710', desc: 'Agent listen address' },
-                { var: 'SIGARDAPANEL_DB_PATH', def: 'sigardapanel.db', desc: 'Database path' },
+                { var: 'SIGARDAPANEL_API_ADDR', def: ':7700', desc: 'API listen address (installer: 127.0.0.1:7700)' },
+                { var: 'SIGARDAPANEL_AGENT_ADDR', def: ':7710', desc: 'Agent listen address (installer: 127.0.0.1:7710)' },
+                { var: 'SIGARDAPANEL_DB_PATH', def: 'sigardapanel.db', desc: 'Database path (installer: /var/lib/sigardapanel/sigardapanel.db)' },
                 { var: 'SIGARDAPANEL_API_URL', def: '-', desc: 'API base URL for CLI' },
                 { var: 'SIGARDAPANEL_TOKEN', def: '-', desc: 'API token from login' },
                 { var: 'SIGARDAPANEL_OUTPUT', def: 'table', desc: 'Output format (table|json|yaml)' },
@@ -757,7 +759,7 @@ sigardapanel redis flush --server 1</code></pre>
       </section>
 
       <footer class="pt-2 text-center text-sm text-subtle">
-        <p>SigardaPanel Documentation v0.5.3</p>
+        <p>SigardaPanel Documentation</p>
         <p class="mt-1">Built by <a href="https://github.com/bayurstarcool" class="link">bayurstarcool</a></p>
       </footer>
       </div>

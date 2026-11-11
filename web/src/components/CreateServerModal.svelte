@@ -42,7 +42,7 @@
   // Auto-fill agent_url from IP when IP changes and agent_url is empty
   $effect(() => {
     if (ip_address && !agent_url) {
-      agent_url = 'http://' + ip_address + ':9090';
+      agent_url = 'http://' + ip_address + ':7710';
     }
   });
 
@@ -121,10 +121,11 @@
         </div>
 
         <div class="border-t border-line pt-4">
-          <p class="text-xs text-subtle">Install the agent on your server with this token:</p>
-          <code class="mt-2 block rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs break-all text-muted">
-            curl -sL https://panel.sigarda.com/api/install-agent.sh | bash -s -- --token {createdToken}
-          </code>
+          <p class="text-xs text-subtle">
+            Install the agent on the server, put this token into <code class="code">/etc/sigardapanel/agent.env</code>
+            as <code class="code">SIGARDAPANEL_AGENT_TOKEN</code> and allow port 7710 only from this panel. Step by step:
+            <a class="link" href="https://github.com/bayurstarcool/SigardaPanel/blob/main/docs/INSTALL.md#adding-remote-servers" target="_blank" rel="noopener noreferrer">Adding remote servers</a>.
+          </p>
         </div>
       </div>
     {:else}
@@ -149,7 +150,7 @@
         </div>
         <div>
           <label class="label" for="cs-agent">Agent URL <span class="text-danger">*</span></label>
-          <input id="cs-agent" type="text" bind:value={agent_url} class="input font-mono text-[13px]" placeholder="http://1.2.3.4:9090" />
+          <input id="cs-agent" type="text" bind:value={agent_url} class="input font-mono text-[13px]" placeholder="http://1.2.3.4:7710" />
           <p class="hint">Auto-filled from IP. Must be reachable from this panel server.</p>
         </div>
         <div>
