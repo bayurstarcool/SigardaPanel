@@ -441,7 +441,7 @@ fi
 # ── Create config ──
 echo "[5/6] Creating configuration..."
 mkdir -p "$CONFIG_DIR"
-mkdir -p "$SITE_ROOT"
+[ -z "$SITE_ROOT" ] || mkdir -p "$SITE_ROOT"
 cat > "$CONFIG_DIR/agent.env" <<ENVEOF
 SIGARDAPANEL_AGENT_ADDR=:7710
 SIGARDAPANEL_PANEL_URL=$PANEL_URL

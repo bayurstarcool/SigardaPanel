@@ -25,6 +25,9 @@ func TestInstallScriptRendersAndParses(t *testing.T) {
 	if strings.Contains(script, "SIGARDAPANEL_AGENT_SITE_ROOT:-/var/www") {
 		t.Fatal("installer still restricts site files to /var/www")
 	}
+	if strings.Contains(script, "\nmkdir -p \"$SITE_ROOT\"\n") {
+		t.Fatal("installer runs mkdir on an empty SITE_ROOT")
+	}
 }
 
 func createRegToken(t *testing.T, publicURL string) map[string]any {
