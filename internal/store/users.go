@@ -24,6 +24,18 @@ type User struct {
 	TOTPSecret        string        // TOTP secret for 2FA
 	TOTPEnabled       bool          // Whether 2FA is enabled
 	PasswordChangedAt sql.NullTime  // NULL = never changed (force change)
+
+	// MustChangePassword (Create only): the password was chosen by someone
+	// else (installer-generated, set by an administrator), so the account
+	// must pick its own before using the API (password_changed_at stays
+	// NULL). Otherwise the password counts as the user's own choice.
+	MustChangePassword bool
+}
+
+// PasswordChangeRequired reports whether the user still has to replace a
+// password someone else chose.
+func (u *User) PasswordChangeRequired() bool {
+	return !u.PasswordChangedAt.Valid
 }
 
 // UserRepository defines user persistence operations.
@@ -70,9 +82,12 @@ func (s *SQLiteUserStore) Create(ctx context.Context, user *User) error {
 	}
 	user.PasswordHash = hash
 
+	// password_changed_at NULL = must change; set = the user's own password.
+	changedAt := sql.NullTime{Time: time.Now().UTC(), Valid: !user.MustChangePassword}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (username, email, password_hash, role, created_by, disk_limit, max_sites, plan_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		user.Username, user.Email, user.PasswordHash, user.Role, user.CreatedBy, user.DiskLimit, user.MaxSites, user.PlanID,
+		`INSERT INTO users (username, email, password_hash, role, created_by, disk_limit, max_sites, plan_id, password_changed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END)`,
+		user.Username, user.Email, user.PasswordHash, user.Role, user.CreatedBy, user.DiskLimit, user.MaxSites, user.PlanID, changedAt.Valid,
 	)
 	if err != nil {
 		return fmt.Errorf("insert user: %w", err)
@@ -82,6 +97,7 @@ func (s *SQLiteUserStore) Create(ctx context.Context, user *User) error {
 		return fmt.Errorf("last insert id: %w", err)
 	}
 	user.ID = id
+	user.PasswordChangedAt = changedAt
 	return nil
 }
 

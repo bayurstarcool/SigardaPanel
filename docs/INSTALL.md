@@ -152,8 +152,11 @@ password is generated and printed once.
    Without a Let's Encrypt certificate it is self-signed, so the browser shows a warning.
 2. Log in with the printed username and password (also in `/root/.sigardapanel_admin_cred`).
    This account is the `super_admin`.
-3. The panel asks for a new password first (**Profile**); it does the same for every
-   account an administrator creates. Then enable two-factor authentication under
+3. With a generated password the panel asks for a new one first (**Profile**); it
+   does the same for every account an administrator creates. Until then the API
+   refuses everything else, including that account's API keys (CLI:
+   `sigardapanel passwd`). A password you passed as `ADMIN_PASS` counts as your own
+   and is not asked again. Then enable two-factor authentication under
    **Settings → Two-factor authentication** and keep the recovery codes.
 4. Delete the credentials file: `sudo rm /root/.sigardapanel_admin_cred`.
 5. The panel host is already managed as **Local Server** (Servers page, online after

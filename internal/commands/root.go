@@ -85,6 +85,8 @@ func (a *App) Run(args []string) int {
 		return a.Login(args[1:])
 	case "logout":
 		return a.Logout(args[1:])
+	case "passwd":
+		return a.Passwd(args[1:])
 	case "server":
 		return a.Server(args[1:])
 	case "site":
@@ -343,6 +345,7 @@ Services (run on the panel host / managed servers):
 Session:
   login [--api-url URL]        log in and save the session token
   logout                       revoke and delete the saved session token
+  passwd                       change your own password (also: user passwd)
   whoami                       show the authenticated user
   version [--client]           CLI version and the server's version
   doctor                       check CLI config, API reachability and token
@@ -358,7 +361,7 @@ Resources:
   logs       tail
   metrics    latest|list|gpu
   system     disk-usage|updates
-  user       create|list|update|reset-password|delete
+  user       create|list|update|reset-password|passwd|delete
   apikey     create|list|revoke                personal API keys
   audit      list|purge
   notification list|count|read|delete          your in-panel notifications

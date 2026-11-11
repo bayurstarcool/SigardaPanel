@@ -4,6 +4,9 @@
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1500;
 
+/** API error code while the account must replace its initial password. */
+export const PASSWORD_CHANGE_REQUIRED = "password_change_required";
+
 // Track logout state to prevent cascading redirects
 let isLoggingOut = false;
 let lastLogoutTime = 0;
@@ -202,6 +205,17 @@ export async function apiFetch(
       }
 
       const json = await res.json();
+      if (res.status === 403 && json.error?.code === PASSWORD_CHANGE_REQUIRED) {
+        // The API refuses everything but the password change until the user
+        // replaces a password someone else chose. Send them to Profile (the
+        // layout does too, from /auth/me); never retry or log out.
+        if (typeof window !== "undefined" && window.location.pathname !== "/profile") {
+          window.location.href = "/profile?change-password=1";
+        }
+        const err = new Error(json.error.message || "Change your password to continue");
+        (err as Error & { code?: string }).code = PASSWORD_CHANGE_REQUIRED;
+        throw err;
+      }
       if (json.error) {
         // request_id lets support correlate a user-visible failure with the
         // server log line for the same request.

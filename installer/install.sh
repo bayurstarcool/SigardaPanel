@@ -384,7 +384,13 @@ do_install() {
   PUBLIC_URL="$ORIGIN"
   ADMIN_USER="${ADMIN_USER:-admin}"; ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
   [[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || die "ADMIN_USER must be 3-32 characters of A-Z a-z 0-9 _ . -"
-  ADMIN_PASS="${ADMIN_PASS:-$(openssl rand -base64 24 | tr -d '=+/' | cut -c1-20)}"
+  # A password the operator supplies is theirs; a generated one is temporary
+  # and must be replaced at the first login.
+  ADMIN_PASS_GENERATED=""
+  if [ -z "${ADMIN_PASS:-}" ]; then
+    ADMIN_PASS="$(openssl rand -base64 24 | tr -d '=+/' | cut -c1-20)"
+    ADMIN_PASS_GENERATED=1
+  fi
   [ "${#ADMIN_PASS}" -ge 8 ] || die "ADMIN_PASS must be at least 8 characters"
 
   log "Installing files..."
@@ -410,6 +416,14 @@ do_install() {
   runuser -u sigardapanel -- sqlite3 "${DATA_DIR}/sigardapanel.db" \
     "UPDATE users SET role='super_admin' WHERE username='${ADMIN_USER}' AND NOT EXISTS (SELECT 1 FROM users WHERE role='super_admin');" \
     || die "Could not grant super_admin to ${ADMIN_USER}"
+  # The API refuses everything but the password change while
+  # password_changed_at is NULL. Set it explicitly either way so the result
+  # does not depend on what this release's "init" defaults to.
+  local pw_changed="CURRENT_TIMESTAMP"
+  if [ -n "$ADMIN_PASS_GENERATED" ]; then pw_changed="NULL"; fi
+  runuser -u sigardapanel -- sqlite3 "${DATA_DIR}/sigardapanel.db" \
+    "UPDATE users SET password_changed_at=${pw_changed} WHERE username='${ADMIN_USER}';" \
+    || die "Could not record the password state of ${ADMIN_USER}"
   chmod 640 "${DATA_DIR}"/sigardapanel.db* 2>/dev/null || true
 
   log "Starting services..."
@@ -450,7 +464,12 @@ do_install() {
   fi
   echo
   echo "  Next steps:"
-  echo "   1. Open ${PUBLIC_URL} and log in; you are asked to choose your own password first."
+  if [ -n "$ADMIN_PASS_GENERATED" ]; then
+    echo "   1. Open ${PUBLIC_URL} and log in; you must choose your own password first"
+    echo "      (the API refuses everything else until then; CLI: sigardapanel passwd)."
+  else
+    echo "   1. Open ${PUBLIC_URL} and log in with the ADMIN_PASS you supplied."
+  fi
   echo "   2. Enable two-factor authentication under Settings, then: rm /root/.sigardapanel_admin_cred"
   echo "   3. This server is already managed as \"Local Server\". To add more servers:"
   echo "      Servers -> Add server (docs/INSTALL.md#adding-remote-servers)."

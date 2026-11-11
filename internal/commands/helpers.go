@@ -264,7 +264,9 @@ func (a *App) printAPIErrorFor(c *cli.Client, resp *cli.APIResponse, status int)
 			fmt.Fprintln(a.stderr, "hint: not logged in or session expired; run: sigardapanel login")
 		}
 	case http.StatusForbidden:
-		if c != nil && c.TokenSource == "env" && resp != nil && resp.Error != nil && strings.Contains(resp.Error.Message, "api key") {
+		if resp != nil && resp.Error != nil && resp.Error.Code == "password_change_required" {
+			fmt.Fprintln(a.stderr, "hint: choose your own password first: sigardapanel passwd (needs a login session: sigardapanel login)")
+		} else if c != nil && c.TokenSource == "env" && resp != nil && resp.Error != nil && strings.Contains(resp.Error.Message, "api key") {
 			fmt.Fprintln(a.stderr, "hint: this endpoint needs an interactive login session; unset SIGARDAPANEL_TOKEN and use: sigardapanel login")
 		}
 	}

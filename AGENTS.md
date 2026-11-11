@@ -47,6 +47,14 @@ No account is seeded. In development create one with `sigardapanel init`
 installs get a random password from `install.sh` (or `ADMIN_PASS`), and the
 first account is `super_admin`. Never document or ship a default password.
 
+`users.password_changed_at IS NULL` means "password chosen by someone else"
+(install.sh-generated, admin-created, `init --must-change-password`). While it is
+NULL the API (`RequireAuth`) answers `403 password_change_required` except for
+`GET /auth/me`, `GET /auth/2fa/status`, `PUT /auth/profile`, `POST /auth/logout`;
+the account's API keys are refused; impersonation sessions are exempt. A password
+supplied by the operator (`ADMIN_PASS`, `init` without the flag, self sign-up)
+is final. CLI way out: `sigardapanel passwd`.
+
 ## User-Site Isolation Model
 
 SigardaPanel uses **ownership-based site isolation**:

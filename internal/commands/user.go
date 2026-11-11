@@ -31,6 +31,8 @@ func (a *App) User(args []string) int {
 		return a.userUpdate(args[1:])
 	case "reset-password":
 		return a.userResetPassword(args[1:])
+	case "passwd", "change-password":
+		return a.Passwd(args[1:])
 	case "delete", "rm":
 		return a.userDelete(args[1:])
 	case "help", "--help", "-h":
@@ -566,6 +568,8 @@ Subcommands:
                         change role and quotas (0 = unlimited)
   reset-password <user> [--password P] [--direct]
                         set a new password (--direct writes the local panel DB)
+  passwd [--current P] [--new P]
+                        change YOUR OWN password (any role; same as: sigardapanel passwd)
   delete <user>         delete a user
 
 <user> is a numeric ID, a username or an email address.
