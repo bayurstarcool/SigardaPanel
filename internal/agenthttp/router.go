@@ -49,6 +49,7 @@ type Router struct {
 	allowStubSSL bool
 	stubDev      bool
 	testAuth     bool
+	certDir      string // placeholder certificate referenced by generated vhosts
 }
 
 // RouterOptions allows overriding router defaults for testing.
@@ -62,6 +63,9 @@ type RouterOptions struct {
 	AllowStubSSL   bool
 	StubDev        bool
 	Executor       *executor.Executor
+	// DefaultCertDir overrides where the placeholder vhost certificate is
+	// created (default /etc/nginx/ssl).
+	DefaultCertDir string
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -89,6 +93,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		siteRootDir:  config.AgentSiteRoot(),
 		allowStubSSL: config.AgentAllowStubSSL(),
 		stubDev:      os.Getenv("SIGARDAPANEL_DEV") == "true",
+		certDir:      defaultSSLCertDir,
 	}
 	if opts != nil {
 		// RouterOptions is test/dependency-injection surface. Keep production
@@ -121,6 +126,11 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		}
 		if opts.Executor != nil {
 			r.executor = opts.Executor
+		}
+		// Injected routers (tests) never write into the real /etc/nginx/ssl.
+		r.certDir = filepath.Join(os.TempDir(), "sigardapanel-agent-test-ssl")
+		if opts.DefaultCertDir != "" {
+			r.certDir = opts.DefaultCertDir
 		}
 	}
 
@@ -585,7 +595,15 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "config gen failed: "+err.Error())
 	}
 
+	// Every generated vhost listens on 443 with the placeholder certificate
+	// until Let's Encrypt replaces it; a fresh server does not have one yet.
+	if err := ensureDefaultSSLCert(r.certDir); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "prepare default certificate: "+err.Error())
+	}
+
 	nginxConfigPath := filepath.Join(r.nginxConfDir, payload.Domain+".conf")
+	previousConfig, readErr := os.ReadFile(nginxConfigPath)
+	hadPreviousConfig := readErr == nil
 	if err := r.executor.WriteFile(ctx, nginxConfigPath, config, 0644); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "write nginx config failed: "+err.Error())
 	}
@@ -600,7 +618,14 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 	// 4. Test nginx config
 	output, err := r.executor.RunShell(ctx, "nginx", "-t")
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "nginx test failed: "+strings.TrimSpace(output))
+		// Never leave a vhost behind that breaks "nginx -t": the next nginx
+		// restart (or reboot) would take every site on the server down.
+		if hadPreviousConfig {
+			_ = r.executor.WriteFile(ctx, nginxConfigPath, string(previousConfig), 0644)
+		} else {
+			_ = os.Remove(nginxConfigPath)
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "nginx test failed, vhost not installed: "+strings.TrimSpace(output))
 	}
 
 	slog.Info("agent: site.create", "site_id", payload.SiteID, "domain", payload.Domain, "runtime", payload.Runtime)
