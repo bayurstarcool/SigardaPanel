@@ -9,7 +9,7 @@
   import StatusPill from '$components/StatusPill.svelte';
   import AddServerButton from '$components/AddServerButton.svelte';
   import EditServerModal from '$components/EditServerModal.svelte';
-  import { Server as ServerIcon, Layers, Cpu, Pencil, RefreshCw } from 'lucide-svelte';
+  import { Server as ServerIcon, Layers, Cpu, Pencil, RefreshCw, TriangleAlert } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
   let servers = $state<any[]>([]);
@@ -29,12 +29,25 @@
       .finally(() => loading = false);
   }
 
-  onMount(() => loadServers());
+  // Agents should run the panel's release; show the ones that do not.
+  let panelVersion = $state('');
+  onMount(() => {
+    loadServers();
+    fetch('/api/v1/version')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => (panelVersion = d?.data?.version ?? ''))
+      .catch(() => {});
+  });
+
+  function versionMismatch(s: any) {
+    return !!(panelVersion && panelVersion !== 'dev' && s.agent_version && s.agent_version !== 'dev' && s.agent_version !== panelVersion);
+  }
 
   const health: Record<string, { label: string; cls: string }> = {
     online: { label: 'online', cls: 'text-success' },
     degraded: { label: 'degraded', cls: 'text-warning' },
     offline: { label: 'offline', cls: 'text-danger' },
+    unauthorized: { label: 'token rejected', cls: 'text-danger' },
   };
 
   function openEdit(s: any) {
@@ -88,7 +101,12 @@
                 <td class="font-mono text-[13px] text-muted max-md:hidden">{s.ip_address || '—'}</td>
                 <td class="text-xs">
                   {#if s.agent_url}
-                    <span class="inline-flex items-center gap-1.5 {h.cls}"><span class="dot"></span>{h.label}</span>
+                    <span class="inline-flex items-center gap-1.5 {h.cls}" title={s.health_status === 'unauthorized' ? "The agent answers but rejects the panel's token: update SIGARDAPANEL_AGENT_TOKEN in its agent.env" : ''}><span class="dot"></span>{h.label}</span>
+                    {#if s.agent_version}
+                      <span class="ml-1.5 tabular-nums {versionMismatch(s) ? 'text-warning' : 'text-subtle'}" title={versionMismatch(s) ? `Agent ${s.agent_version}, panel ${panelVersion}: update the agent to the panel's version` : 'Agent version'}>
+                        {#if versionMismatch(s)}<TriangleAlert size={11} class="inline -mt-0.5" />{/if} v{s.agent_version}
+                      </span>
+                    {/if}
                   {:else}
                     <span class="text-subtle">—</span>
                   {/if}
