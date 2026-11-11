@@ -288,7 +288,11 @@ func TestLogin_RateLimitedShowsAPIMessage(t *testing.T) {
 }
 
 func TestHelpExitCodes(t *testing.T) {
+	// If a help guard regressed, never let install/api touch a real DB.
+	t.Setenv("SIGARDAPANEL_DB_PATH", t.TempDir()+"/guard.db")
+	t.Setenv("SIGARDAPANEL_API_ADDR", "127.0.0.1:1")
 	for _, args := range [][]string{
+		{"install", "--help"}, {"api", "-h"}, {"agent", "--help"}, {"dev", "help"},
 		{"help"}, {"site", "--help"}, {"apikey", "help"}, {"audit", "purge", "--help"},
 		{"job", "watch", "-h"}, {"db", "user", "create", "--help"}, {"login", "--help"},
 	} {

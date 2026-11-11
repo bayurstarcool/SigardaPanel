@@ -56,18 +56,31 @@ func (a *App) Run(args []string) int {
 		return a.Audit(args[1:])
 	case "notification", "notifications":
 		return a.Notification(args[1:])
-	case "api":
-		return a.runService("api", backendserver.Run)
-	case "agent":
-		return a.runService("agent", agentserver.Run)
-	case "dev":
-		return a.runDev()
+	case "api", "agent", "dev", "install":
+		// These start long-running services or an interactive wizard that
+		// writes the DB: never run them when the user only asked for help.
+		if isHelpArg(args[1:]) {
+			a.printServiceHelp(args[0])
+			return 0
+		}
+		if len(args) > 1 {
+			fmt.Fprintf(a.stderr, "%s takes no arguments (configure it with SIGARDAPANEL_* environment variables)\n", args[0])
+			return 2
+		}
+		switch args[0] {
+		case "api":
+			return a.runService("api", backendserver.Run)
+		case "agent":
+			return a.runService("agent", agentserver.Run)
+		case "dev":
+			return a.runDev()
+		default:
+			return a.Install(args[1:])
+		}
 	case "doctor":
 		return a.doctor(args[1:])
 	case "init":
 		return a.Init(args[1:])
-	case "install":
-		return a.Install(args[1:])
 	case "login":
 		return a.Login(args[1:])
 	case "logout":
@@ -314,58 +327,79 @@ func syncAgentTokenToDB(token string) error {
 }
 
 func (a *App) printHelp() {
-	fmt.Fprint(a.stdout, `SigardaPanel CLI
+	fmt.Fprint(a.stdout, `SigardaPanel `+buildinfo.Version+` — panel API, agent and CLI in one binary
 
 Usage:
-  sigardapanel <command> [flags]
+  sigardapanel <command> [subcommand] [flags]
+  sigardapanel <command> --help        flags of a command or subcommand
 
-Commands:
-  api                          run API server
-  agent                        run agent service
-  dev                          run API + agent locally
-  install                      setup wizard (interactive)
-  init                         create admin user (direct DB)
-  login                        authenticate CLI
-  logout                       revoke current CLI token
-  server add|list|update|remove|doctor
-                               manage servers
-  site create|list|update|delete|deploy
-                               manage sites
-  ssl issue|renew|status       manage SSL
-  logs tail                    tail logs
-  job list|watch|cancel|logs   manage jobs
-  backup create|list|delete|restore
-                               manage backups
-  db create|list|update|delete manage databases
-  db user create|list|rotate-password|delete
-                               manage database users
-  channels add|list|remove     manage alert channels
-  alerts list                  view alert history
-  metrics latest|list          view server metrics
-  user create|list|reset-password|delete
-                               manage users
-  system disk-usage|updates   system management
-  docker ps|start|stop|restart|rm|logs|images|compose
-                               Docker container management
-  git branches|log|rollback|checkout
-                               Git deploy management
-  firewall status|enable|disable|allow|deny|rules|delete|reset
-                               Firewall (UFW) management
-  redis stats|info|flush|flushdb
-                               Redis management
-  cloudpanel scan|import-sites|import-ssl|doctor
-                               CloudPanel migration
-  doctor                       diagnose CLI configuration
-  version                      print version
+Services (run on the panel host / managed servers):
+  api                          run the panel API server
+  agent                        run the server agent
+  dev                          run API + agent in one process (development)
+  install                      interactive setup wizard (writes the local DB)
+  init [--user U] [--role R]   create an admin user directly in the local DB
 
-Global environment:
-  SIGARDAPANEL_API_ADDR        API listen addr, default :7700
-  SIGARDAPANEL_AGENT_ADDR      agent listen addr, default :7710
-  SIGARDAPANEL_API_URL         API base URL
-  SIGARDAPANEL_TOKEN           API token
-  SIGARDAPANEL_AGENT_TOKEN     agent bearer token (auto-synced from DB if empty)
-  SIGARDAPANEL_OUTPUT          table|json|yaml
+Session:
+  login [--api-url URL]        log in and save the session token
+  logout                       revoke and delete the saved session token
+  whoami                       show the authenticated user
+  version [--client]           CLI version and the server's version
+  doctor                       check CLI config, API reachability and token
+
+Resources:
+  server     add|list|get|health|update|remove|token|doctor
+  site       list|get|create|update|delete|deploy|suspend|resume|reload-nginx|setup-logrotate
+  ssl        status|issue|renew|renew-all
+  job        list|get|watch|cancel|logs
+  backup     create|list|restore|delete
+  db         create|list|update|delete
+  db user    create|list|rotate-password|delete
+  logs       tail
+  metrics    latest|list|gpu
+  system     disk-usage|updates
+  user       create|list|update|reset-password|delete
+  apikey     create|list|revoke                personal API keys
+  audit      list|purge
+  notification list|count|read|delete          your in-panel notifications
+  channels   add|list|remove                   alert channels
+  alerts     list                              alert history
+  docker     ps|start|stop|restart|rm|logs|images|compose
+  git        branches|log|rollback|checkout
+  firewall   status|enable|disable|allow|deny|rules|delete|reset
+  redis      stats|info|flush|flushdb
+  cloudpanel scan|import-sites|import-site|import-ssl|doctor
+
+Common flags:
+  -o, --output table|json|yaml   output format of list/get commands
+  -y, --yes                      skip confirmation prompts (destructive commands)
+
+Environment (CLI):
+  SIGARDAPANEL_API_URL         API base URL; overrides the URL saved by login
+                               (default `+cli.DefaultAPIURL+`)
+  SIGARDAPANEL_TOKEN           bearer token (e.g. a personal API key); overrides
+                               the token saved by login
+  SIGARDAPANEL_OUTPUT          default output format: table|json|yaml
+  SIGARDAPANEL_USER / SIGARDAPANEL_PASSWORD   defaults for login
+  XDG_CONFIG_HOME              config dir is $XDG_CONFIG_HOME/sigardapanel
+                               (default ~/.config/sigardapanel)
+
+Environment (services): SIGARDAPANEL_API_ADDR (:7700), SIGARDAPANEL_AGENT_ADDR (:7710),
+  SIGARDAPANEL_DB_PATH, SIGARDAPANEL_AGENT_TOKEN, SIGARDAPANEL_ENCRYPTION_KEY, ...
+
+Exit codes: 0 success, 1 error (API/network error, failed job, declined prompt),
+2 usage error. Full reference: docs/CLI.md
 `)
+}
+
+func (a *App) printServiceHelp(name string) {
+	desc := map[string]string{
+		"api":     "Run the panel API server (listens on SIGARDAPANEL_API_ADDR, default :7700).",
+		"agent":   "Run the server agent (listens on SIGARDAPANEL_AGENT_ADDR, default :7710; auth: SIGARDAPANEL_AGENT_TOKEN).",
+		"dev":     "Run API and agent in one process for development (SIGARDAPANEL_DEV=true disables rate limits).",
+		"install": "Interactive setup wizard: migrates the DB at SIGARDAPANEL_DB_PATH and creates the first super_admin.",
+	}[name]
+	fmt.Fprintf(a.stdout, "usage: sigardapanel %s\n\n%s\nConfigured through SIGARDAPANEL_* environment variables; see docs/CLI.md.\n", name, desc)
 }
 
 // devSyncAgentToken reads the agent token from the database.
