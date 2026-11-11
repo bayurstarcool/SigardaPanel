@@ -52,8 +52,8 @@ func TestInitSuccess(t *testing.T) {
 	if user.Email != "admin@test.local" {
 		t.Fatalf("expected email admin@test.local, got %s", user.Email)
 	}
-	if user.Role != "admin" {
-		t.Fatalf("expected role admin, got %s", user.Role)
+	if user.Role != "super_admin" {
+		t.Fatalf("expected first user to be super_admin, got %s", user.Role)
 	}
 }
 

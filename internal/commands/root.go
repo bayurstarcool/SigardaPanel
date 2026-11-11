@@ -4,19 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"net/http"
 	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	agentserver "sigardapanel/internal/agentserver"
 	backendserver "sigardapanel/internal/backendserver"
 	"sigardapanel/internal/buildinfo"
+	"sigardapanel/internal/cli"
 	"sigardapanel/internal/config"
 	_ "modernc.org/sqlite"
 )
@@ -41,9 +43,19 @@ func (a *App) Run(args []string) int {
 	case "help", "--help", "-h":
 		a.printHelp()
 		return 0
-	case "version", "--version", "-v":
+	case "--version", "-v":
 		fmt.Fprintln(a.stdout, buildinfo.Version)
 		return 0
+	case "version":
+		return a.Version(args[1:])
+	case "whoami":
+		return a.Whoami(args[1:])
+	case "apikey", "api-key", "apikeys", "api-keys":
+		return a.APIKey(args[1:])
+	case "audit":
+		return a.Audit(args[1:])
+	case "notification", "notifications":
+		return a.Notification(args[1:])
 	case "api":
 		return a.runService("api", backendserver.Run)
 	case "agent":
@@ -74,7 +86,7 @@ func (a *App) Run(args []string) int {
 		return a.Backup(args[1:])
 	case "metrics":
 		return a.Metrics(args[1:])
-	case "channels":
+	case "channels", "channel":
 		return a.Channels(args[1:])
 	case "alerts":
 		return a.Alerts(args[1:])
@@ -96,6 +108,7 @@ func (a *App) Run(args []string) int {
 		return a.Redis(args[1:])
 	default:
 		fmt.Fprintf(a.stderr, "unknown command: %s\n", args[0])
+		fmt.Fprintln(a.stderr, "run 'sigardapanel help' for the list of commands")
 		return 2
 	}
 }
@@ -196,24 +209,54 @@ func (a *App) runDev() int {
 }
 
 func (a *App) doctor(args []string) int {
-	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
-	apiURL := flags.String("api-url", os.Getenv("SIGARDAPANEL_API_URL"), "SigardaPanel API URL")
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
+	flags := a.newFlags("doctor", "[--api-url URL]")
+	apiURL := flags.String("api-url", "", "API URL to check (default: the one the CLI would use)")
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 
 	problems := 0
 	fmt.Fprintln(a.stdout, "SigardaPanel CLI doctor")
 	fmt.Fprintf(a.stdout, "version: %s\n", buildinfo.Version)
-	if *apiURL == "" {
-		fmt.Fprintln(a.stdout, "  api_url: not configured")
+	if cfgPath, err := cli.ConfigPath(); err == nil {
+		fmt.Fprintf(a.stdout, "  config: %s\n", cfgPath)
+	}
+
+	client, _ := a.apiClient()
+	if *apiURL != "" {
+		client.BaseURL = strings.TrimRight(*apiURL, "/")
+	}
+	client.HTTP = &http.Client{Timeout: 5 * time.Second}
+	fmt.Fprintf(a.stdout, "  api_url: %s\n", client.BaseURL)
+	if _, status, err := client.Get("/api/v1/health"); err != nil {
+		fmt.Fprintf(a.stdout, "  api health: UNREACHABLE (%v)\n", err)
+		problems++
+	} else if status != http.StatusOK {
+		fmt.Fprintf(a.stdout, "  api health: HTTP %d\n", status)
 		problems++
 	} else {
-		fmt.Fprintf(a.stdout, "  api_url: %s\n", *apiURL)
+		fmt.Fprintln(a.stdout, "  api health: ok")
+		switch client.TokenSource {
+		case "":
+			fmt.Fprintln(a.stdout, "  auth: no token (run: sigardapanel login)")
+		default:
+			src := "token file"
+			if client.TokenSource == "env" {
+				src = "SIGARDAPANEL_TOKEN"
+			}
+			resp, status, err := client.Get("/api/v1/auth/me")
+			if err == nil && status == http.StatusOK {
+				var me struct {
+					Username string `json:"username"`
+					Role     string `json:"role"`
+				}
+				a.decode(resp, &me)
+				fmt.Fprintf(a.stdout, "  auth: ok as %s (%s) via %s\n", me.Username, me.Role, src)
+			} else {
+				fmt.Fprintf(a.stdout, "  auth: token from %s rejected (HTTP %d)\n", src, status)
+				problems++
+			}
+		}
 	}
 
 	// Agent token consistency check

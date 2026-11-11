@@ -19,6 +19,7 @@ func setupMockAPI(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
+	t.Setenv("SIGARDAPANEL_API_URL", server.URL)
 
 	// Override config to point to mock server
 	cfg := &cli.Config{APIURL: server.URL}
