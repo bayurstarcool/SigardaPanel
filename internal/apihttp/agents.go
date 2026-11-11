@@ -11,13 +11,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
+	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -190,7 +190,7 @@ func (h *agentHandler) installScript(c echo.Context) error {
 	}
 	panelURL = strings.TrimRight(parsed.String(), "/")
 
-	script := fmt.Sprintf(installScriptTemplate, strconv.Quote(panelURL), strconv.Quote(token))
+	script := fmt.Sprintf(installScriptTemplate, shellQuote(panelURL), shellQuote(token), shellQuote(agentReleaseTag()), shellQuote(releasePublicKey))
 
 	c.Response().Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	c.Response().Header().Set("Content-Disposition", "attachment; filename=\"install-agent.sh\"")
@@ -204,14 +204,37 @@ func (h *agentHandler) statusDashboard(c echo.Context) error {
 	return c.String(http.StatusOK, statusDashboardScript)
 }
 
-// installScriptTemplate is the bash install script with two %s placeholders:
-// %1 = PANEL_URL, %2 = REGISTRATION_TOKEN
+// releasePublicKey is the minisign key every release is signed with; it is
+// also pinned in installer/install.sh and the README.
+const releasePublicKey = "RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI"
+
+// agentReleaseTag is the release a new agent installs: the panel's own version,
+// so panel and agent always speak the same protocol. Development builds
+// ("dev") fall back to the latest published release.
+func agentReleaseTag() string {
+	v := strings.TrimPrefix(buildinfo.Version, "v")
+	if v == "" || v == "dev" {
+		return "latest"
+	}
+	return "v" + v
+}
+
+// shellQuote wraps s in single quotes so bash treats it as a literal string
+// (no $, backtick or quote expansion).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// installScriptTemplate is the bash install script with four %s placeholders:
+// PANEL_URL, REGISTRATION_TOKEN, RELEASE_TAG, minisign PUBKEY (all shell-quoted).
 const installScriptTemplate = `#!/usr/bin/env bash
 set -euo pipefail
 
 # ── Configuration (set by panel) ──
 PANEL_URL=%s
 REG_TOKEN=%s
+RELEASE_TAG=%s
+PUBKEY=%s
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sigardapanel"
 SITE_ROOT="${SIGARDAPANEL_AGENT_SITE_ROOT:-/var/www}"
@@ -243,11 +266,12 @@ echo "[1/7] Installing dependencies..."
 case "$OS" in
     ubuntu|debian)
         apt-get update -qq
-        apt-get install -y -qq nginx tar git curl jq openssl ca-certificates > /dev/null 2>&1
+        apt-get install -y -qq nginx tar git curl jq openssl ca-certificates minisign > /dev/null 2>&1
         apt-get install -y -qq certbot python3-certbot-nginx > /dev/null 2>&1 || echo "  certbot install failed (optional)"
         ;;
     centos|rhel|fedora|rocky|almalinux)
         yum install -y -q nginx tar git curl jq openssl ca-certificates 2>/dev/null
+        yum install -y -q minisign 2>/dev/null || true
         yum install -y -q certbot 2>/dev/null || echo "  certbot install failed (optional)"
         ;;
     *)
@@ -282,8 +306,34 @@ echo "  IP: $SERVER_IP"
 
 # ── Download binary ──
 echo "[5/7] Downloading agent binary..."
-DOWNLOAD_URL="${SIGARDAPANEL_BINARY_URL:-https://github.com/bayurstarcool/SigardaPanel/releases/download/${SIGARDAPANEL_VERSION:-v1.3.1}/sigardapanel-linux-amd64}"
-BINARY_SHA256="${SIGARDAPANEL_BINARY_SHA256:-41a263439c2cc4369c8aea88f0f33c36b3196d8920da1aa3b7472766abfe9cf8}"
+case "$(uname -m)" in
+    x86_64|amd64) ARCH=amd64 ;;
+    aarch64|arm64) ARCH=arm64 ;;
+    *) echo "Error: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+esac
+RELEASE_TAG="${SIGARDAPANEL_VERSION:-$RELEASE_TAG}"
+if [ "$RELEASE_TAG" = "latest" ]; then
+    RELEASE_BASE="https://github.com/bayurstarcool/SigardaPanel/releases/latest/download"
+else
+    RELEASE_BASE="https://github.com/bayurstarcool/SigardaPanel/releases/download/$RELEASE_TAG"
+fi
+DOWNLOAD_URL="${SIGARDAPANEL_BINARY_URL:-$RELEASE_BASE/sigardapanel-linux-$ARCH}"
+# Integrity: an explicit SIGARDAPANEL_BINARY_SHA256 (offline/mirror installs),
+# otherwise the release's SHA256SUMS, which must carry a valid minisign signature.
+BINARY_SHA256="${SIGARDAPANEL_BINARY_SHA256:-}"
+if [ -z "$BINARY_SHA256" ]; then
+    command -v minisign >/dev/null || { echo "Error: minisign is required to verify the release (or set SIGARDAPANEL_BINARY_SHA256)" >&2; exit 1; }
+    SUMS_DIR=$(mktemp -d)
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --retry 3 "$RELEASE_BASE/SHA256SUMS" -o "$SUMS_DIR/SHA256SUMS"
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --retry 3 "$RELEASE_BASE/SHA256SUMS.minisig" -o "$SUMS_DIR/SHA256SUMS.minisig"
+    if ! minisign -Vm "$SUMS_DIR/SHA256SUMS" -P "$PUBKEY" -x "$SUMS_DIR/SHA256SUMS.minisig" >/dev/null; then
+        echo "Error: SHA256SUMS signature verification failed" >&2; rm -rf "$SUMS_DIR"; exit 1
+    fi
+    BINARY_SHA256=$(awk -v f="sigardapanel-linux-$ARCH" '$2==f {print $1}' "$SUMS_DIR/SHA256SUMS")
+    rm -rf "$SUMS_DIR"
+    [ -n "$BINARY_SHA256" ] || { echo "Error: release has no sigardapanel-linux-$ARCH" >&2; exit 1; }
+    echo "  Release $RELEASE_TAG signature verified."
+fi
 mkdir -p "$INSTALL_DIR"
 DOWNLOAD_TARGET="$INSTALL_DIR/.sigardapanel.new"
 ROLLBACK_DIR=$(mktemp -d)
@@ -324,7 +374,7 @@ if curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --retry 3 "$DOWN
     echo "  Binary downloaded."
 else
     rm -f "$DOWNLOAD_TARGET"
-    echo "Error: pinned SigardaPanel release could not be downloaded" >&2
+    echo "Error: SigardaPanel release $RELEASE_TAG could not be downloaded" >&2
     exit 1
 fi
 
@@ -393,7 +443,7 @@ if ! echo "$REGISTER_RESPONSE" | grep -q '"server_id"'; then
     exit 1
 fi
 
-SERVER_ID=$(jq -er '.server_id' <<<"$REGISTER_RESPONSE")
+SERVER_ID=$(jq -er '.data.server_id // .server_id' <<<"$REGISTER_RESPONSE")
 echo "  Registered! Server ID: $SERVER_ID"
 
 
