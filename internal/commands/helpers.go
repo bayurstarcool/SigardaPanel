@@ -111,7 +111,7 @@ func (a *App) idArg(pos []string, flagVal int64, what string) (int64, bool) {
 	if flagVal > 0 {
 		return flagVal, true
 	}
-	fmt.Fprintf(a.stderr, "%s ID is required\n", what)
+	fmt.Fprintf(a.stderr, "%s ID is required (pass <id> or --id)\n", what)
 	return 0, false
 }
 
