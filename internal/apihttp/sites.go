@@ -361,6 +361,13 @@ func (h *siteHandler) create(c echo.Context) error {
 
 	// Enqueue site.create job. App runtimes proxy to the assigned app_port.
 	port := int(appPort)
+	// system_user: the agent creates that Linux account on the target server
+	// when it is missing and hands the new site root to it. Only for sites
+	// this panel manages (imports keep their existing ownership).
+	systemUser := ""
+	if body.ManagedBy == "sigardapanel" {
+		systemUser = site.SystemUser.String
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"site_id":         site.ID,
 		"name":            site.Name,
@@ -377,6 +384,7 @@ func (h *siteHandler) create(c echo.Context) error {
 		"docker_env":      body.DockerEnv,
 		"docker_volume":   body.DockerVolume,
 		"docker_restart":  body.DockerRestart,
+		"system_user":     systemUser,
 	})
 	job := &jobmodel.Job{
 		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},

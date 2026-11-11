@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"sigardapanel/internal/store"
 )
 
 func TestCreateSite_RejectsRootEscalationInputs(t *testing.T) {
@@ -51,6 +53,27 @@ func TestCreateSite_RejectsRootEscalationInputs(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"system_user":"regular"`) {
 		t.Errorf("system_user not pinned to owner: %s", rec.Body.String())
+	}
+}
+
+// The site.create job tells the agent which Linux account owns the site, so
+// remote servers create it (and chown the new root) like the panel host.
+func TestCreateSite_JobPayloadCarriesSystemUser(t *testing.T) {
+	e, s, ctx := newTestAppWithAllMigrations(t)
+	token := newAdminToken(t, s, ctx)
+	srvID := createServer(t, s, ctx)
+	rec := doRequest(t, e, "POST", "/api/v1/sites", map[string]any{
+		"server_id": srvID, "name": "x", "domain": "owner.example.com", "runtime": "static", "system_user": "alice",
+	}, token)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	jobs, err := s.Jobs.List(ctx, store.JobListFilter{Type: "site.create"})
+	if err != nil || len(jobs) == 0 {
+		t.Fatalf("no job queued: %v", err)
+	}
+	if !strings.Contains(jobs[0].Payload, `"system_user":"alice"`) {
+		t.Fatalf("site.create payload lacks system_user: %s", jobs[0].Payload)
 	}
 }
 

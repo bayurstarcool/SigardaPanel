@@ -90,7 +90,13 @@ hanyawahyu       hanyawahyu      /home/hanyawahyu/htdocs/{domain}
 ```
 
 - **User created** → `useradd -m -s /bin/bash <username>` runs automatically
-- **Site created** → `system_user` set to owner's Linux username
+- **Site created** → `system_user` set to owner's Linux username; the `site.create`
+  job carries it and the agent (panel host or remote server) creates the account
+  with `useradd -m -s /bin/bash` if it is missing (validated name, never root or
+  service accounts; existing UID < 1000 accounts are not used as owner) and
+  `chown -R <user>:` the site root it just created (an existing root keeps its
+  ownership). PHP sites also fail fast (`422`, permanent job error) when the
+  server lacks the PHP-FPM socket/port the vhost would use.
 - **Root path** → `/home/{system_user}/htdocs/{domain}`
 - **File ownership** → `{system_user}:{system_user}` (not www-data!)
 - **PHP-FPM** → pool runs as `www-data` (shared, for now)
