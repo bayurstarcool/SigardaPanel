@@ -2,15 +2,15 @@ package commands
 
 import (
 	"bufio"
-	"io"
 	"fmt"
+	"io"
 	"net"
 	"os"
-	"os/exec"
-	"time"
 	"strings"
+	"time"
 
 	"sigardapanel/internal/auth"
+	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/db"
 	"sigardapanel/internal/migrations"
@@ -19,60 +19,80 @@ import (
 	"golang.org/x/term"
 )
 
-// Install runs the setup wizard.
+// Install runs the setup wizard for development checkouts: it migrates
+// SIGARDAPANEL_DB_PATH, creates the first super_admin if there is none and
+// tells the developer how to start the services. Production servers use
+// install.sh (docs/INSTALL.md).
 func (a *App) Install(args []string) int {
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
+		fmt.Fprintln(a.stdout, "usage: sigardapanel install   (interactive setup wizard for development checkouts; production: install.sh)")
+		return exitOK
+	}
 	scanner := bufio.NewScanner(a.stdin)
 
 	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "╔══════════════════════════════════════════════════╗")
-	fmt.Fprintln(a.stdout, "║         SigardaPanel Setup Wizard v0.5.1        ║")
-	fmt.Fprintln(a.stdout, "╚══════════════════════════════════════════════════╝")
+	fmt.Fprintf(a.stdout, "SigardaPanel setup wizard (%s) - development setup\n", buildinfo.Version)
+	fmt.Fprintln(a.stdout, "Production servers: use install.sh, see docs/INSTALL.md.")
 	fmt.Fprintln(a.stdout, "")
 
 	// Step 1: Database
-	fmt.Fprintln(a.stdout, "[1/5] Checking database...")
+	fmt.Fprintf(a.stdout, "[1/3] Database %s...\n", config.DBPath())
 
 	database, err := db.Open(config.DBPath())
 	if err != nil {
 		fmt.Fprintf(a.stderr, "  ✗ Database: %v\n", err)
-		return 1
+		return exitError
 	}
 	defer database.Close()
 
 	if err := migrations.Up(database, migrations.AllMigrations); err != nil {
 		fmt.Fprintf(a.stderr, "  ✗ Migration: %v\n", err)
-		return 1
+		return exitError
 	}
 	fmt.Fprintln(a.stdout, "  ✓ Database ready")
 
-	// Step 2: Admin user
+	// Step 2: first account
 	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "[2/5] Admin user...")
+	fmt.Fprintln(a.stdout, "[2/3] Admin account...")
 
 	s := store.New(database)
-	existing, _ := s.Users.GetByUsername(a.context(), "admin")
+	var existing string
+	_ = database.QueryRow("SELECT username FROM users WHERE role = ? ORDER BY id LIMIT 1", auth.RoleSuperAdmin).Scan(&existing)
+	username := existing
 
-	if existing != nil {
-		fmt.Fprintf(a.stdout, "  ✓ Admin '%s' exists (id=%d)\n", existing.Username, existing.ID)
+	if existing != "" {
+		fmt.Fprintf(a.stdout, "  ✓ super_admin '%s' already exists\n", existing)
 	} else {
-		username := readLine(scanner, a.stdout, "  Admin username [admin]")
+		username = readLine(scanner, a.stdout, "  Admin username [admin]")
 		if username == "" {
-			username = "admin"
+			username = defaultAdminUsername
+		}
+		if u, _ := s.Users.GetByUsername(a.context(), username); u != nil {
+			fmt.Fprintf(a.stderr, "  ✗ user '%s' already exists (not a super_admin); choose another name or use: sigardapanel init --role super_admin\n", username)
+			return exitError
 		}
 
-		email := readLine(scanner, a.stdout, "  Admin email [admin@localhost]")
+		email := readLine(scanner, a.stdout, "  Admin email ["+username+"@localhost]")
 		if email == "" {
-			email = "admin@localhost"
+			email = username + "@localhost"
 		}
 
 		password := ""
-		for len(password) < 8 {
-			pw1 := readPassword(scanner, a.stderr, "  Password (min 8 chars)")
+		for attempt := 0; password == ""; attempt++ {
+			if attempt == 3 {
+				fmt.Fprintln(a.stderr, "  ✗ no valid password entered")
+				return exitError
+			}
+			pw1, ok := readPassword(scanner, a.stderr, "  Password (min 8 chars)")
+			if !ok {
+				fmt.Fprintln(a.stderr, "  ✗ no input (stdin closed)")
+				return exitError
+			}
 			if len(pw1) < 8 {
 				fmt.Fprintln(a.stderr, "  ✗ Too short (min 8)")
 				continue
 			}
-			pw2 := readPassword(scanner, a.stderr, "  Confirm password")
+			pw2, _ := readPassword(scanner, a.stderr, "  Confirm password")
 			if pw1 != pw2 {
 				fmt.Fprintln(a.stderr, "  ✗ Mismatch")
 				continue
@@ -84,113 +104,38 @@ func (a *App) Install(args []string) int {
 			Username:     username,
 			Email:        email,
 			Role:         auth.RoleSuperAdmin,
-			PasswordHash: password,
+			PasswordHash: password, // Create hashes it
 		}
 		if err := s.Users.Create(a.context(), user); err != nil {
 			fmt.Fprintf(a.stderr, "  ✗ Create user: %v\n", err)
-			return 1
+			return exitError
 		}
-		fmt.Fprintf(a.stdout, "  ✓ Admin '%s' created\n", user.Username)
+		fmt.Fprintf(a.stdout, "  ✓ super_admin '%s' created\n", user.Username)
 	}
 
-	// Step 3: Detect IP and show access info
+	// Step 3: services
 	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "[3/5] Detecting server IP...")
-
-	publicIP := getPublicIP()
+	fmt.Fprintln(a.stdout, "[3/3] Services")
 	localIP := getLocalIP()
-
-	fmt.Fprintf(a.stdout, "  Public IP:  %s\n", publicIP)
-	fmt.Fprintf(a.stdout, "  Local IP:   %s\n", localIP)
-
-	// Step 4: Start services
-	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "[4/5] Starting services...")
-
-	// Check if already running
-	apiRunning := isPortOpen(7700)
-	frontendRunning := isPortOpen(7720)
-
-	if apiRunning && frontendRunning {
-		fmt.Fprintln(a.stdout, "  ✓ Services already running")
+	if portOpen(7700) {
+		fmt.Fprintln(a.stdout, "  ✓ API is running on :7700")
 	} else {
-		// Start dev mode in background
-		cmd := exec.Command(os.Args[0], "dev")
-		cmd.Stdout = a.stdout
-		cmd.Stderr = a.stderr
-		cmd.Stdin = os.Stdin
-
-		if err := cmd.Start(); err != nil {
-			fmt.Fprintf(a.stderr, "  ✗ Failed to start: %v\n", err)
-			fmt.Fprintln(a.stdout, "  Start manually: sigardapanel dev")
-		} else {
-			fmt.Fprintln(a.stdout, "  ✓ Services started (PID:", cmd.Process.Pid, ")")
-			// Wait a moment for ports to open
-			for i := 0; i < 10; i++ {
-				if isPortOpen(7700) {
-					break
-				}
-				fmt.Fprint(a.stdout, ".")
-			}
-			fmt.Fprintln(a.stdout, "")
-		}
+		fmt.Fprintln(a.stdout, "  API + agent:  SIGARDAPANEL_DEV=true sigardapanel dev")
+	}
+	if portOpen(7720) {
+		fmt.Fprintln(a.stdout, "  ✓ Web app is running on :7720")
+	} else {
+		fmt.Fprintln(a.stdout, "  Web app:      cd web && npx vite dev --host 0.0.0.0 --port 7720")
 	}
 
-	// Step 5: Show access info
 	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "[5/5] Access information")
-	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "╔══════════════════════════════════════════════════╗")
-	fmt.Fprintln(a.stdout, "║              Setup Complete!                    ║")
-	fmt.Fprintln(a.stdout, "╚══════════════════════════════════════════════════╝")
-	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "  🌐 Web UI:")
-	if publicIP != "" && publicIP != "unknown" {
-		fmt.Fprintf(a.stdout, "     https://%s\n", publicIP)
-	}
-	fmt.Fprintf(a.stdout, "     http://%s:7720\n", localIP)
-	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "  🔑 Credentials:")
-	fmt.Fprintln(a.stdout, "     Username: admin")
-	fmt.Fprintln(a.stdout, "     Password: (your password)")
-	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "  📡 Ports:")
-	fmt.Fprintf(a.stdout, "     API:      %s:7700\n", localIP)
-	fmt.Fprintf(a.stdout, "     Frontend: %s:7720\n", localIP)
-	fmt.Fprintf(a.stdout, "     Agent:    %s:7710\n", localIP)
-	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "  🚀 Quick start:")
-	fmt.Fprintln(a.stdout, "     1. Open the Web UI URL above")
-	fmt.Fprintln(a.stdout, "     2. Login with your credentials")
-	fmt.Fprintln(a.stdout, "     3. Add your first server")
-	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "  📖 Docs: https://panel.sigarda.dev/docs")
+	fmt.Fprintln(a.stdout, "Next:")
+	fmt.Fprintf(a.stdout, "  Web UI:  http://%s:7720  (log in as '%s')\n", localIP, username)
+	fmt.Fprintf(a.stdout, "  CLI:     sigardapanel login --api-url http://127.0.0.1:7700 --user %s\n", username)
+	fmt.Fprintln(a.stdout, "  Docs:    docs/GUIDE.md (development), docs/INSTALL.md (production)")
 	fmt.Fprintln(a.stdout, "")
 
-	return 0
-}
-
-// getPublicIP returns the server's public IP address.
-func getPublicIP() string {
-	// Try to get public IP from external service
-	resp, err := exec.Command("curl", "-s", "-m", "3", "https://api.ipify.org").Output()
-	if err == nil {
-		ip := strings.TrimSpace(string(resp))
-		if ip != "" && net.ParseIP(ip) != nil {
-			return ip
-		}
-	}
-
-	// Fallback: try another service
-	resp, err = exec.Command("curl", "-s", "-m", "3", "https://ifconfig.me").Output()
-	if err == nil {
-		ip := strings.TrimSpace(string(resp))
-		if ip != "" && net.ParseIP(ip) != nil {
-			return ip
-		}
-	}
-
-	return "unknown"
+	return exitOK
 }
 
 // getLocalIP returns the server's local IP address.
@@ -208,6 +153,9 @@ func getLocalIP() string {
 	}
 	return "127.0.0.1"
 }
+
+// portOpen is a variable so tests never probe the real ports.
+var portOpen = isPortOpen
 
 // isPortOpen checks if a port is listening.
 func isPortOpen(port int) bool {
@@ -228,22 +176,24 @@ func readLine(scanner *bufio.Scanner, out io.Writer, label string) string {
 	return strings.TrimSpace(scanner.Text())
 }
 
-func readPassword(scanner *bufio.Scanner, err io.Writer, label string) string {
+// readPassword reads a password (hidden on a terminal). ok is false when
+// there is no more input, so callers do not loop forever on a closed stdin.
+func readPassword(scanner *bufio.Scanner, err io.Writer, label string) (string, bool) {
 	fmt.Fprint(err, label+": ")
 
 	// If terminal, hide input
 	if term.IsTerminal(int(os.Stdin.Fd())) {
-		raw, _ := term.ReadPassword(int(os.Stdin.Fd()))
+		raw, rerr := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Fprintln(err)
-		return strings.TrimSpace(string(raw))
+		return strings.TrimSpace(string(raw)), rerr == nil
 	}
 
 	// Fallback: read from scanner
 	if !scanner.Scan() {
 		fmt.Fprintln(err)
-		return ""
+		return "", false
 	}
 	val := strings.TrimSpace(scanner.Text())
 	fmt.Fprintln(err)
-	return val
+	return val, true
 }
