@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,8 +81,8 @@ Flags (import-sites):
 	case "doctor":
 		return a.cloudpanelDoctor(args[1:])
 	default:
-		fmt.Fprintf(a.stderr, "unknown cloudpanel subcommand: %s\n", args[0])
-		return 2
+		fmt.Fprintf(a.stderr, "unknown cloudpanel subcommand: %s (run: sigardapanel cloudpanel)\n", args[0])
+		return exitUsage
 	}
 }
 
@@ -319,18 +317,14 @@ func systemUserFromRoot(rootPath string) string {
 }
 
 func (a *App) cloudpanelImportSites(args []string) int {
-	flags := flag.NewFlagSet("cloudpanel-import-sites", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("cloudpanel import-sites", "[--dry-run] [--db-path PATH] [--server-id ID] [--owner-id ID]")
 	dryRun := flags.Bool("dry-run", false, "preview only")
 	dbPath := flags.String("db-path", "sigardapanel.db", "SigardaPanel DB path")
 	serverID := flags.Int64("server-id", 1, "target server ID")
 	ownerID := flags.Int64("owner-id", 1, "target owner user ID")
 
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 
 	// First, scan CloudPanel
@@ -487,16 +481,12 @@ func (a *App) cloudpanelImportSite(args []string) int {
 }
 
 func (a *App) cloudpanelImportSSL(args []string) int {
-	flags := flag.NewFlagSet("cloudpanel-import-ssl", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("cloudpanel import-ssl", "[--dry-run=false] [--db-path PATH]")
 	dbPath := flags.String("db-path", "sigardapanel.db", "SigardaPanel DB path")
 	dryRun := flags.Bool("dry-run", true, "dry-run only (default)")
 
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 
 	letsDir := "/etc/letsencrypt/live/"

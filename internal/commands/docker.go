@@ -2,8 +2,8 @@ package commands
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
+	"net/url"
 	"sigardapanel/internal/cli"
 )
 
@@ -11,7 +11,7 @@ import (
 func (a *App) Docker(args []string) int {
 	if len(args) == 0 {
 		a.printDockerHelp()
-		return 0
+		return exitOK
 	}
 	switch args[0] {
 	case "ps", "list":
@@ -32,21 +32,19 @@ func (a *App) Docker(args []string) int {
 		return a.dockerCompose(args[1:])
 	case "help", "--help", "-h":
 		a.printDockerHelp()
-		return 0
+		return exitOK
 	default:
-		fmt.Fprintf(a.stderr, "unknown docker subcommand: %s\n", args[0])
-		return 2
+		return a.unknownSubcommand("docker", args[0], a.printDockerHelp)
 	}
 }
 
 func (a *App) dockerList(args []string) int {
-	flags := flag.NewFlagSet("docker list", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("docker ps", "--server ID [-o FORMAT]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
-	output := flags.String("output", "", "output format (table|json)")
+	output := addOutputFlag(flags)
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
@@ -80,14 +78,12 @@ func (a *App) dockerList(args []string) int {
 	}
 	json.Unmarshal(resp.Data, &data)
 
-	mode := cli.GetOutputMode()
-	if *output == "json" {
-		mode = cli.OutputJSON
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
-
-	if mode == cli.OutputJSON {
-		cli.PrintJSON(a.stdout, data.Containers)
-		return 0
+	if mode != cli.OutputTable {
+		return a.render(mode, data.Containers, nil)
 	}
 
 	if len(data.Containers) == 0 {
@@ -111,13 +107,12 @@ func (a *App) dockerList(args []string) int {
 }
 
 func (a *App) dockerContainerAction(args []string, action string) int {
-	flags := flag.NewFlagSet("docker "+action, flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("docker "+action, "--server ID --id CONTAINER")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 	containerID := flags.String("id", "", "container ID or name (required)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 || *containerID == "" {
 		fmt.Fprintln(a.stderr, "--server and --id are required")
@@ -147,14 +142,13 @@ func (a *App) dockerContainerAction(args []string, action string) int {
 }
 
 func (a *App) dockerContainerRemove(args []string) int {
-	flags := flag.NewFlagSet("docker remove", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("docker remove", "--server ID --id CONTAINER [--force]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 	containerID := flags.String("id", "", "container ID or name (required)")
 	force := flags.Bool("force", false, "force remove")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 || *containerID == "" {
 		fmt.Fprintln(a.stderr, "--server and --id are required")
@@ -194,14 +188,13 @@ func (a *App) dockerContainerRemove(args []string) int {
 }
 
 func (a *App) dockerLogs(args []string) int {
-	flags := flag.NewFlagSet("docker logs", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("docker logs", "--server ID --id CONTAINER [--lines N]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 	containerID := flags.String("id", "", "container ID or name (required)")
 	lines := flags.Int("lines", 100, "number of log lines")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 || *containerID == "" {
 		fmt.Fprintln(a.stderr, "--server and --id are required")
@@ -214,7 +207,7 @@ func (a *App) dockerLogs(args []string) int {
 		return 1
 	}
 
-	path := fmt.Sprintf("/api/v1/servers/%d/docker/container/logs?container_id=%s&lines=%d", *serverID, *containerID, *lines)
+	path := fmt.Sprintf("/api/v1/servers/%d/docker/container/logs?container_id=%s&lines=%d", *serverID, url.QueryEscape(*containerID), *lines)
 	resp, status, err := client.Get(path)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
@@ -234,13 +227,12 @@ func (a *App) dockerLogs(args []string) int {
 }
 
 func (a *App) dockerImages(args []string) int {
-	flags := flag.NewFlagSet("docker images", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("docker images", "--server ID [-o FORMAT]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
-	output := flags.String("output", "", "output format (table|json)")
+	output := addOutputFlag(flags)
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
@@ -268,14 +260,12 @@ func (a *App) dockerImages(args []string) int {
 	}
 	json.Unmarshal(resp.Data, &data)
 
-	mode := cli.GetOutputMode()
-	if *output == "json" {
-		mode = cli.OutputJSON
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
-
-	if mode == cli.OutputJSON {
-		cli.PrintJSON(a.stdout, data.Images)
-		return 0
+	if mode != cli.OutputTable {
+		return a.render(mode, data.Images, nil)
 	}
 
 	if len(data.Images) == 0 {
@@ -297,14 +287,13 @@ func (a *App) dockerCompose(args []string) int {
 		return 2
 	}
 
-	flags := flag.NewFlagSet("docker compose", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("docker compose", "up|down --server ID [--path FILE] [--build]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 	path := flags.String("path", "docker-compose.yml", "compose file path")
 	build := flags.Bool("build", false, "build images before starting (up only)")
 
-	if err := flags.Parse(args[1:]); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args[1:]); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
@@ -355,10 +344,13 @@ func (a *App) dockerCompose(args []string) int {
 }
 
 func (a *App) printDockerHelp() {
-	fmt.Fprint(a.stdout, `Usage: sigardapanel docker <subcommand>
+	fmt.Fprint(a.stdout, `Usage: sigardapanel docker <subcommand> [flags]
+
+Docker on a managed server, through its agent (admin; ps/logs are tenant-scoped).
 
 Subcommands:
-  ps --server ID        list all containers
+  ps --server ID [-o FORMAT]
+                        list containers (admin)
   start --server ID --id CID
                         start a container
   stop --server ID --id CID
@@ -369,7 +361,8 @@ Subcommands:
                         remove a container
   logs --server ID --id CID [--lines N]
                         view container logs
-  images --server ID    list Docker images
+  images --server ID [-o FORMAT]
+                        list Docker images
   compose up --server ID [--path PATH] [--build]
                         start compose services
   compose down --server ID [--path PATH]

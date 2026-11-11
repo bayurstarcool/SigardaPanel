@@ -7,20 +7,20 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"net/http"
+	"os"
 	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	_ "modernc.org/sqlite"
 	agentserver "sigardapanel/internal/agentserver"
 	backendserver "sigardapanel/internal/backendserver"
 	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/cli"
 	"sigardapanel/internal/config"
-	_ "modernc.org/sqlite"
 )
 
 type App struct {

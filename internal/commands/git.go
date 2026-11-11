@@ -2,7 +2,6 @@ package commands
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"sigardapanel/internal/cli"
 )
@@ -11,7 +10,7 @@ import (
 func (a *App) Git(args []string) int {
 	if len(args) == 0 {
 		a.printGitHelp()
-		return 0
+		return exitOK
 	}
 	switch args[0] {
 	case "branches":
@@ -24,21 +23,19 @@ func (a *App) Git(args []string) int {
 		return a.gitCheckout(args[1:])
 	case "help", "--help", "-h":
 		a.printGitHelp()
-		return 0
+		return exitOK
 	default:
-		fmt.Fprintf(a.stderr, "unknown git subcommand: %s\n", args[0])
-		return 2
+		return a.unknownSubcommand("git", args[0], a.printGitHelp)
 	}
 }
 
 func (a *App) gitBranches(args []string) int {
-	flags := flag.NewFlagSet("git branches", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("git branches", "--site ID [-o FORMAT]")
 	siteID := flags.Int64("site", 0, "site ID (required)")
-	output := flags.String("output", "", "output format (table|json)")
+	output := addOutputFlag(flags)
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *siteID <= 0 {
 		fmt.Fprintln(a.stderr, "--site is required")
@@ -66,14 +63,12 @@ func (a *App) gitBranches(args []string) int {
 	}
 	json.Unmarshal(resp.Data, &data)
 
-	mode := cli.GetOutputMode()
-	if *output == "json" {
-		mode = cli.OutputJSON
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
-
-	if mode == cli.OutputJSON {
-		cli.PrintJSON(a.stdout, map[string]any{"branches": data.Branches, "current": data.Current})
-		return 0
+	if mode != cli.OutputTable {
+		return a.render(mode, map[string]any{"branches": data.Branches, "current": data.Current}, nil)
 	}
 
 	fmt.Fprintf(a.stdout, "Current branch: %s\n\n", data.Current)
@@ -88,14 +83,13 @@ func (a *App) gitBranches(args []string) int {
 }
 
 func (a *App) gitLog(args []string) int {
-	flags := flag.NewFlagSet("git log", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("git log", "--site ID [--lines N] [-o FORMAT]")
 	siteID := flags.Int64("site", 0, "site ID (required)")
 	lines := flags.Int("lines", 20, "number of commits")
-	output := flags.String("output", "", "output format (table|json)")
+	output := addOutputFlag(flags)
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *siteID <= 0 {
 		fmt.Fprintln(a.stderr, "--site is required")
@@ -128,14 +122,12 @@ func (a *App) gitLog(args []string) int {
 	}
 	json.Unmarshal(resp.Data, &data)
 
-	mode := cli.GetOutputMode()
-	if *output == "json" {
-		mode = cli.OutputJSON
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
-
-	if mode == cli.OutputJSON {
-		cli.PrintJSON(a.stdout, data.Commits)
-		return 0
+	if mode != cli.OutputTable {
+		return a.render(mode, data.Commits, nil)
 	}
 
 	if len(data.Commits) == 0 {
@@ -156,13 +148,12 @@ func (a *App) gitLog(args []string) int {
 }
 
 func (a *App) gitRollback(args []string) int {
-	flags := flag.NewFlagSet("git rollback", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("git rollback", "--site ID --commit HASH")
 	siteID := flags.Int64("site", 0, "site ID (required)")
 	commit := flags.String("commit", "", "commit hash to rollback to (required)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *siteID <= 0 || *commit == "" {
 		fmt.Fprintln(a.stderr, "--site and --commit are required")
@@ -195,9 +186,9 @@ func (a *App) gitRollback(args []string) int {
 	}
 
 	var result struct {
-		Message       string `json:"message"`
-		NewHead       string `json:"new_head"`
-		BackupBranch  string `json:"backup_branch"`
+		Message      string `json:"message"`
+		NewHead      string `json:"new_head"`
+		BackupBranch string `json:"backup_branch"`
 	}
 	json.Unmarshal(resp.Data, &result)
 
@@ -209,13 +200,12 @@ func (a *App) gitRollback(args []string) int {
 }
 
 func (a *App) gitCheckout(args []string) int {
-	flags := flag.NewFlagSet("git checkout", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("git checkout", "--site ID --branch NAME")
 	siteID := flags.Int64("site", 0, "site ID (required)")
 	branch := flags.String("branch", "", "branch name (required)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *siteID <= 0 || *branch == "" {
 		fmt.Fprintln(a.stderr, "--site and --branch are required")
@@ -251,12 +241,14 @@ func (a *App) gitCheckout(args []string) int {
 }
 
 func (a *App) printGitHelp() {
-	fmt.Fprint(a.stdout, `Usage: sigardapanel git <subcommand>
+	fmt.Fprint(a.stdout, `Usage: sigardapanel git <subcommand> [flags]
+
+Git working copy of a site (rollback/checkout: admin).
 
 Subcommands:
-  branches --site ID [--output json]
+  branches --site ID [-o FORMAT]
                         list branches
-  log --site ID [--lines N] [--output json]
+  log --site ID [--lines N] [-o FORMAT]
                         view commit history
   rollback --site ID --commit HASH
                         rollback to a specific commit

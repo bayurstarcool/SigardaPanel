@@ -2,7 +2,6 @@ package commands
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"sigardapanel/internal/cli"
 )
@@ -11,7 +10,7 @@ import (
 func (a *App) Firewall(args []string) int {
 	if len(args) == 0 {
 		a.printFirewallHelp()
-		return 0
+		return exitOK
 	}
 	switch args[0] {
 	case "status":
@@ -32,20 +31,18 @@ func (a *App) Firewall(args []string) int {
 		return a.firewallReset(args[1:])
 	case "help", "--help", "-h":
 		a.printFirewallHelp()
-		return 0
+		return exitOK
 	default:
-		fmt.Fprintf(a.stderr, "unknown firewall subcommand: %s\n", args[0])
-		return 2
+		return a.unknownSubcommand("firewall", args[0], a.printFirewallHelp)
 	}
 }
 
 func (a *App) firewallStatus(args []string) int {
-	flags := flag.NewFlagSet("firewall status", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("firewall status", "--server ID")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
@@ -89,12 +86,11 @@ func (a *App) firewallStatus(args []string) int {
 }
 
 func (a *App) firewallToggle(args []string, action string) int {
-	flags := flag.NewFlagSet("firewall "+action, flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("firewall "+action, "--server ID")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
@@ -121,16 +117,15 @@ func (a *App) firewallToggle(args []string, action string) int {
 }
 
 func (a *App) firewallAllow(args []string) int {
-	flags := flag.NewFlagSet("firewall allow", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("firewall allow", "--server ID --port PORT [--protocol tcp|udp] [--from IP] [--comment TEXT]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 	port := flags.String("port", "", "port (e.g. 80, 443, 22/tcp)")
 	protocol := flags.String("protocol", "", "protocol (tcp|udp)")
 	from := flags.String("from", "", "source IP (optional)")
 	comment := flags.String("comment", "", "rule comment (optional)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 || *port == "" {
 		fmt.Fprintln(a.stderr, "--server and --port are required")
@@ -168,15 +163,14 @@ func (a *App) firewallAllow(args []string) int {
 }
 
 func (a *App) firewallDeny(args []string) int {
-	flags := flag.NewFlagSet("firewall deny", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("firewall deny", "--server ID --port PORT [--protocol tcp|udp] [--from IP]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 	port := flags.String("port", "", "port (e.g. 80, 443, 22/tcp)")
 	protocol := flags.String("protocol", "", "protocol (tcp|udp)")
 	from := flags.String("from", "", "source IP (optional)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 || *port == "" {
 		fmt.Fprintln(a.stderr, "--server and --port are required")
@@ -211,13 +205,12 @@ func (a *App) firewallDeny(args []string) int {
 }
 
 func (a *App) firewallRules(args []string) int {
-	flags := flag.NewFlagSet("firewall rules", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("firewall rules", "--server ID [-o FORMAT]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
-	output := flags.String("output", "", "output format (table|json)")
+	output := addOutputFlag(flags)
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
@@ -250,14 +243,12 @@ func (a *App) firewallRules(args []string) int {
 	}
 	json.Unmarshal(resp.Data, &data)
 
-	mode := cli.GetOutputMode()
-	if *output == "json" {
-		mode = cli.OutputJSON
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
-
-	if mode == cli.OutputJSON {
-		cli.PrintJSON(a.stdout, data.Rules)
-		return 0
+	if mode != cli.OutputTable {
+		return a.render(mode, data.Rules, nil)
 	}
 
 	if len(data.Rules) == 0 {
@@ -279,27 +270,22 @@ func (a *App) firewallRules(args []string) int {
 }
 
 func (a *App) firewallDelete(args []string) int {
-	flags := flag.NewFlagSet("firewall delete", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("firewall delete", "--server ID --number N [--yes]")
+	yes := flags.Bool("yes", false, "do not ask for confirmation")
+	flags.BoolVar(yes, "y", false, "shorthand for --yes")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 	number := flags.Int("number", 0, "rule number (required)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 || *number <= 0 {
 		fmt.Fprintln(a.stderr, "--server and --number are required")
 		return 2
 	}
 
-	confirmed, err := cli.Confirm(fmt.Sprintf("Delete firewall rule #%d?", *number), false, a.stdin, a.stdout)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if !confirmed {
-		fmt.Fprintln(a.stdout, "cancelled")
-		return 0
+	if !*yes && !a.confirm(fmt.Sprintf("Delete firewall rule #%d?", *number)) {
+		return exitError
 	}
 
 	client, err := cli.NewClient()
@@ -322,26 +308,21 @@ func (a *App) firewallDelete(args []string) int {
 }
 
 func (a *App) firewallReset(args []string) int {
-	flags := flag.NewFlagSet("firewall reset", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("firewall reset", "--server ID [--yes]")
+	yes := flags.Bool("yes", false, "do not ask for confirmation")
+	flags.BoolVar(yes, "y", false, "shorthand for --yes")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
 		return 2
 	}
 
-	confirmed, err := cli.Confirm("Reset firewall to defaults? This will remove ALL rules.", false, a.stdin, a.stdout)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if !confirmed {
-		fmt.Fprintln(a.stdout, "cancelled")
-		return 0
+	if !*yes && !a.confirm("Reset firewall to defaults? This will remove ALL rules.") {
+		return exitError
 	}
 
 	client, err := cli.NewClient()
@@ -364,7 +345,9 @@ func (a *App) firewallReset(args []string) int {
 }
 
 func (a *App) printFirewallHelp() {
-	fmt.Fprint(a.stdout, `Usage: sigardapanel firewall <subcommand>
+	fmt.Fprint(a.stdout, `Usage: sigardapanel firewall <subcommand> [flags]
+
+UFW on a managed server, through its agent (admin).
 
 Subcommands:
   status --server ID    show firewall status
@@ -374,10 +357,11 @@ Subcommands:
                         allow incoming traffic on port
   deny --server ID --port PORT [--protocol PROTO] [--from IP]
                         deny incoming traffic on port
-  rules --server ID [--output json]
+  rules --server ID [-o FORMAT]
                         list firewall rules
-  delete --server ID --number N
+  delete --server ID --number N [--yes]
                         delete a firewall rule by number
-  reset --server ID     reset firewall to defaults
+  reset --server ID [--yes]
+                        reset firewall to defaults (asks first)
 `)
 }
