@@ -115,7 +115,7 @@ func TestBackupRestore_Success(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	app := New(&stdout, &stderr, strings.NewReader(""))
-	code := app.Run([]string{"backup", "restore", "8"})
+	code := app.Run([]string{"backup", "restore", "8", "--yes"})
 
 	if code != 0 {
 		t.Fatalf("expected 0, got %d, stderr=%s", code, stderr.String())
@@ -161,5 +161,48 @@ func TestBackupUnknownSubcommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "unknown backup subcommand") {
 		t.Errorf("expected unknown subcommand error: %s", stderr.String())
+	}
+}
+
+func TestBackupCreate_AlreadyRunning(t *testing.T) {
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(409)
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": "already_running", "message": "A backup for this site is already in progress"}})
+	})
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	if code := app.Run([]string{"backup", "create", "--site", "5"}); code != 1 {
+		t.Fatalf("expected 1, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "already in progress") {
+		t.Errorf("stderr: %s", stderr.String())
+	}
+}
+
+func TestBackupDelete_CancelledWithoutYes(t *testing.T) {
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no request expected, got %s %s", r.Method, r.URL.Path)
+	})
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	if code := app.Run([]string{"backup", "delete", "4"}); code != 1 {
+		t.Fatalf("expected 1 when cancelled, got %d", code)
+	}
+}
+
+func TestBackupList_YAML(t *testing.T) {
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"backups": []map[string]any{
+			{"id": 3, "site_id": 2, "status": "completed", "site": map[string]any{"domain": "x.test"}},
+		}}})
+	})
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	t.Setenv("SIGARDAPANEL_OUTPUT", "yaml")
+	if code := app.Run([]string{"backup", "list"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if !strings.HasPrefix(stdout.String(), "- id: 3\n") || !strings.Contains(stdout.String(), "    domain: x.test\n") {
+		t.Errorf("yaml: %q", stdout.String())
 	}
 }

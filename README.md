@@ -136,20 +136,19 @@ remote servers listen on 7710; allow that port only from the panel
 
 ## CLI
 
+The same binary is the CLI client. Quick tour:
+
 ```bash
-# Log in once (token is stored in ~/.config/sigardapanel/)
-sigardapanel login --api-url http://127.0.0.1:7700 --user admin
-
-# Health
-sigardapanel doctor --api-url http://127.0.0.1:7700
-
-# Servers / sites / users
-sigardapanel server list
-sigardapanel site list
-sigardapanel user list
+sigardapanel login --api-url https://cp.example.com --user admin
+sigardapanel site list -o yaml
+sigardapanel site suspend 12 && sigardapanel job watch <job_id>
+sigardapanel apikey create --name ci        # then: export SIGARDAPANEL_TOKEN=<key>
+sigardapanel user reset-password admin --direct   # recovery on the panel host
+sigardapanel doctor
 ```
 
-Full CLI: `sigardapanel --help` and [docs/CLI.md](docs/CLI.md).
+Full reference (every command, flags, env vars, output formats, exit codes):
+[docs/CLI.md](docs/CLI.md) · `sigardapanel help`
 
 ---
 
@@ -210,9 +209,7 @@ REST API under `/api/v1`. Browsers authenticate with the HttpOnly
 `sp_session` cookie (SameSite=Strict); API clients and the CLI use a Bearer token.
 
 ```bash
-TOKEN=$(curl -s -X POST http://127.0.0.1:7700/api/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"..."}' | jq -r .data.token)
+TOKEN=<personal API key from: sigardapanel apikey create --name scripts>
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7700/api/v1/servers/1/stack
 ```
 

@@ -17,7 +17,7 @@ func TestVersion(t *testing.T) {
 	var stderr bytes.Buffer
 	app := newApp(&stdout, &stderr)
 
-	code := app.Run([]string{"version"})
+	code := app.Run([]string{"--version"})
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}

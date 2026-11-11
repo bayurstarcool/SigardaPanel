@@ -1,9 +1,8 @@
 package commands
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
+	"net/http"
 	"time"
 
 	"sigardapanel/internal/cli"
@@ -13,244 +12,207 @@ import (
 func (a *App) SSL(args []string) int {
 	if len(args) == 0 {
 		a.printSSLHelp()
-		return 0
+		return exitOK
 	}
 	switch args[0] {
 	case "status":
 		return a.sslStatus(args[1:])
 	case "issue":
-		return a.sslIssue(args[1:])
+		return a.sslJob(args[1:], "issue")
 	case "renew":
-		return a.sslRenew(args[1:])
+		return a.sslJob(args[1:], "renew")
 	case "renew-all":
 		return a.sslRenewAll(args[1:])
 	case "help", "--help", "-h":
 		a.printSSLHelp()
-		return 0
+		return exitOK
 	default:
-		fmt.Fprintf(a.stderr, "unknown ssl subcommand: %s\n", args[0])
-		return 2
+		return a.unknownSubcommand("ssl", args[0], a.printSSLHelp)
 	}
 }
 
 func (a *App) sslStatus(args []string) int {
-	flags := flag.NewFlagSet("ssl status", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
-	siteID := flags.Int64("site", 0, "site ID (required)")
-	if err := flags.Parse(args); err != nil {
-		return 2
+	flags := a.newFlags("ssl status", "<site-id> [-o FORMAT]")
+	siteFlag := flags.Int64("site", 0, "site ID (alternative to the positional argument)")
+	output := addOutputFlag(flags)
+	pos, code, ok := a.parseFlags(flags, args)
+	if !ok {
+		return code
 	}
-	if *siteID <= 0 {
-		fmt.Fprintln(a.stderr, "--site is required")
-		return 2
+	siteID, ok := a.idArg(flags, pos, *siteFlag, "site")
+	if !ok {
+		return exitUsage
 	}
-
-	client, err := cli.NewClient()
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-
-	path := fmt.Sprintf("/api/v1/sites/%d/ssl", *siteID)
-	resp, status, err := client.Get(path)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if status != 200 {
-		return a.printAPIError(resp, status)
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
 
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
+	}
+	resp, ok := a.call(client, http.MethodGet, fmt.Sprintf("/api/v1/sites/%d/ssl", siteID), nil, http.StatusOK)
+	if !ok {
+		return exitError
+	}
 	var data map[string]any
-	if err := json.Unmarshal(resp.Data, &data); err != nil {
-		fmt.Fprintf(a.stderr, "decode: %v\n", err)
-		return 1
+	if !a.decode(resp, &data) {
+		return exitError
 	}
-	if err := cli.PrintJSON(a.stdout, data); err != nil {
-		fmt.Fprintf(a.stderr, "encode: %v\n", err)
-		return 1
-	}
-	return 0
+	return a.render(mode, data, func() {
+		a.printKV(data, "site_id", "domain", "ssl_status", "ssl_issuer", "ssl_expires_at", "ssl_last_check")
+	})
 }
 
-func (a *App) sslIssue(args []string) int {
-	flags := flag.NewFlagSet("ssl issue", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
-	siteID := flags.Int64("site", 0, "site ID (required)")
-	email := flags.String("email", "", "contact email for Let's Encrypt")
-	if err := flags.Parse(args); err != nil {
-		return 2
+// sslJob queues an ssl.issue or ssl.renew job for one site.
+func (a *App) sslJob(args []string, action string) int {
+	synopsis := "<site-id>"
+	if action == "issue" {
+		synopsis = "<site-id> [--email E]"
 	}
-	if *siteID <= 0 || *email == "" {
-		fmt.Fprintln(a.stderr, "--site and --email required")
-		return 2
+	flags := a.newFlags("ssl "+action, synopsis)
+	siteFlag := flags.Int64("site", 0, "site ID (alternative to the positional argument)")
+	var email *string
+	if action == "issue" {
+		email = flags.String("email", "", "Let's Encrypt contact email (default: site owner's, then your account email)")
 	}
-
-	client, err := cli.NewClient()
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	pos, code, ok := a.parseFlags(flags, args)
+	if !ok {
+		return code
 	}
-
-	path := fmt.Sprintf("/api/v1/sites/%d/ssl/issue", *siteID)
-	resp, status, err := client.Post(path, map[string]string{"email": *email})
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if status != 202 {
-		return a.printAPIError(resp, status)
+	siteID, ok := a.idArg(flags, pos, *siteFlag, "site")
+	if !ok {
+		return exitUsage
 	}
 
-	var data struct{ JobID int64 `json:"job_id"` }
-	json.Unmarshal(resp.Data, &data)
-	fmt.Fprintf(a.stdout, "ssl issue job queued (job_id=%d)\n", data.JobID)
-	return 0
+	var body any
+	if email != nil && *email != "" {
+		body = map[string]string{"email": *email}
+	}
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
+	}
+	resp, ok := a.call(client, http.MethodPost, fmt.Sprintf("/api/v1/sites/%d/ssl/%s", siteID, action), body, http.StatusAccepted)
+	if !ok {
+		return exitError
+	}
+	var data struct {
+		JobID int64  `json:"job_id"`
+		Email string `json:"email"`
+	}
+	a.decode(resp, &data)
+	if data.Email != "" {
+		fmt.Fprintf(a.stdout, "ssl %s job queued (job_id=%d, email=%s)\n", action, data.JobID, data.Email)
+	} else {
+		fmt.Fprintf(a.stdout, "ssl %s job queued (job_id=%d)\n", action, data.JobID)
+	}
+	return exitOK
 }
 
-func (a *App) sslRenew(args []string) int {
-	flags := flag.NewFlagSet("ssl renew", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
-	siteID := flags.Int64("site", 0, "site ID (required)")
-	if err := flags.Parse(args); err != nil {
-		return 2
-	}
-	if *siteID <= 0 {
-		fmt.Fprintln(a.stderr, "--site required")
-		return 2
-	}
-
-	client, err := cli.NewClient()
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-
-	path := fmt.Sprintf("/api/v1/sites/%d/ssl/renew", *siteID)
-	resp, status, err := client.Post(path, nil)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if status != 202 {
-		return a.printAPIError(resp, status)
-	}
-
-	var data struct{ JobID int64 `json:"job_id"` }
-	json.Unmarshal(resp.Data, &data)
-	fmt.Fprintf(a.stdout, "ssl renew job queued (job_id=%d)\n", data.JobID)
-	return 0
-}
-
+// sslRenewAll asks the API to queue renewals for every certificate that
+// expires within 30 days (POST /api/v1/ssl/renew-all, admin). --dry-run only
+// lists the candidates from the sites you can see.
 func (a *App) sslRenewAll(args []string) int {
-	flags := flag.NewFlagSet("ssl renew-all", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
-	dryRun := flags.Bool("dry-run", false, "preview only, don't queue jobs")
-
-	if err := flags.Parse(args); err != nil {
-		return 2
+	flags := a.newFlags("ssl renew-all", "[--dry-run] [-o FORMAT]")
+	dryRun := flags.Bool("dry-run", false, "only list certificates expiring within 30 days; queue nothing")
+	output := addOutputFlag(flags)
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
+	}
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
 
-	client, err := cli.NewClient()
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
 	}
 
-	// Get all sites
-	resp, status, err := client.Get("/api/v1/sites")
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if status != 200 {
-		return a.printAPIError(resp, status)
-	}
-
-	var siteData struct {
-		Sites []struct {
-			ID          int64  `json:"id"`
-			Domain      string `json:"domain"`
-			SSLStatus   string `json:"ssl_status"`
-			SSLExpires  string `json:"ssl_expires_at"`
-		} `json:"sites"`
-	}
-	json.Unmarshal(resp.Data, &siteData)
-
-	// Filter sites with SSL expiring within 30 days
-	var expiring []struct {
-		ID     int64
-		Domain string
-		Expiry string
-	}
-	for _, s := range siteData.Sites {
-		if s.SSLStatus == "active" && s.SSLExpires != "" {
-			// Parse expiry date
-			expiry, err := time.Parse(time.RFC3339, s.SSLExpires)
-			if err != nil {
-				continue
-			}
-			daysLeft := int(time.Until(expiry).Hours() / 24)
-			if daysLeft <= 30 {
-				expiring = append(expiring, struct {
-					ID     int64
-					Domain string
-					Expiry string
-				}{s.ID, s.Domain, fmt.Sprintf("%s (%d days left)", s.SSLExpires[:10], daysLeft)})
-			}
+	if !*dryRun {
+		resp, ok := a.call(client, http.MethodPost, "/api/v1/ssl/renew-all", nil, http.StatusOK)
+		if !ok {
+			return exitError
 		}
-	}
-
-	if len(expiring) == 0 {
-		fmt.Fprintln(a.stdout, "No SSL certificates expiring within 30 days.")
-		return 0
-	}
-
-	// Display expiring certs
-	fmt.Fprintf(a.stdout, "SSL certificates expiring within 30 days (%d):\n\n", len(expiring))
-	rows := make([][]string, 0, len(expiring))
-	for _, e := range expiring {
-		rows = append(rows, []string{
-			fmt.Sprintf("%d", e.ID),
-			e.Domain,
-			e.Expiry,
+		var data map[string]any
+		if !a.decode(resp, &data) {
+			return exitError
+		}
+		return a.render(mode, data, func() {
+			fmt.Fprintf(a.stdout, "%s certificate(s) expire within 30 days: %s renewal job(s) queued, %s skipped (inactive site or renewal already pending)\n",
+				cli.Cell(data["total"]), cli.Cell(data["queued"]), cli.Cell(data["skipped"]))
 		})
 	}
-	cli.PrintTable(a.stdout, []string{"ID", "DOMAIN", "EXPIRES"}, rows)
 
-	if *dryRun {
-		fmt.Fprintln(a.stdout, "\nDry run — no jobs queued.")
-		return 0
+	resp, ok := a.call(client, http.MethodGet, "/api/v1/sites?limit=1000", nil, http.StatusOK)
+	if !ok {
+		return exitError
+	}
+	var siteData struct {
+		Sites []struct {
+			ID         int64  `json:"id"`
+			Domain     string `json:"domain"`
+			Status     string `json:"status"`
+			SSLStatus  string `json:"ssl_status"`
+			SSLExpires string `json:"ssl_expires_at"`
+		} `json:"sites"`
+	}
+	if !a.decode(resp, &siteData) {
+		return exitError
 	}
 
-	// Queue renew jobs
-	queued := 0
-	for _, e := range expiring {
-		_, status, err := client.Post(fmt.Sprintf("/api/v1/sites/%d/ssl/renew", e.ID), nil)
+	type candidate struct {
+		ID         int64  `json:"site_id"`
+		Domain     string `json:"domain"`
+		SiteStatus string `json:"site_status"`
+		ExpiresAt  string `json:"ssl_expires_at"`
+		DaysLeft   int    `json:"days_left"`
+	}
+	expiring := []candidate{}
+	for _, s := range siteData.Sites {
+		if s.SSLExpires == "" {
+			continue
+		}
+		expiry, err := time.Parse(time.RFC3339, s.SSLExpires)
 		if err != nil {
-			fmt.Fprintf(a.stderr, "  %s: %v\n", e.Domain, err)
 			continue
 		}
-		if status != 202 {
-			fmt.Fprintf(a.stderr, "  %s: HTTP %d\n", e.Domain, status)
-			continue
+		daysLeft := int(time.Until(expiry).Hours() / 24)
+		if daysLeft <= 30 {
+			expiring = append(expiring, candidate{s.ID, s.Domain, s.Status, expiry.UTC().Format("2006-01-02"), daysLeft})
 		}
-		queued++
-		fmt.Fprintf(a.stdout, "  ✓ %s — renew job queued\n", e.Domain)
 	}
 
-	fmt.Fprintf(a.stdout, "\n%d renewal job(s) queued.\n", queued)
-	return 0
+	return a.render(mode, expiring, func() {
+		if len(expiring) == 0 {
+			fmt.Fprintln(a.stdout, "No SSL certificates expire within 30 days.")
+			return
+		}
+		rows := make([][]string, 0, len(expiring))
+		for _, e := range expiring {
+			rows = append(rows, []string{fmt.Sprint(e.ID), e.Domain, e.SiteStatus, e.ExpiresAt, fmt.Sprint(e.DaysLeft)})
+		}
+		cli.PrintTable(a.stdout, []string{"SITE", "DOMAIN", "STATUS", "EXPIRES", "DAYS_LEFT"}, rows)
+		fmt.Fprintln(a.stdout, "\nDry run: no jobs queued. Only active sites are renewed.")
+	})
 }
 
 func (a *App) printSSLHelp() {
-	fmt.Fprint(a.stdout, `Usage: sigardapanel ssl <subcommand>
+	fmt.Fprint(a.stdout, `Usage: sigardapanel ssl <subcommand> [flags]
 
 Subcommands:
-  status --site ID       show SSL status for a site
-  issue --site ID --email E
-                         issue Let's Encrypt certificate
-  renew --site ID        renew certificate
-  renew-all [--dry-run]  renew all expiring certificates (≤30 days)
+  status <site-id> [-o FORMAT]
+                        show certificate status, issuer and expiry for a site
+  issue <site-id> [--email E]
+                        issue a Let's Encrypt certificate (queues a job; email
+                        defaults to the site owner's, then yours)
+  renew <site-id>       renew the site's certificate (queues a job)
+  renew-all [--dry-run] [-o FORMAT]
+                        queue renewals for all certificates expiring within 30
+                        days (admin); --dry-run only lists them
+
+Commands that take <site-id> also accept --site ID.
 `)
 }

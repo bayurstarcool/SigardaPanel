@@ -167,3 +167,46 @@ func TestDBDelete_MissingArg(t *testing.T) {
 		t.Errorf("expected usage hint, got: %s", stderr.String())
 	}
 }
+
+func TestDBList_AllDatabasesWithoutSite(t *testing.T) {
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/databases" {
+			t.Errorf("expected /api/v1/databases, got %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"databases": []map[string]any{{"id": 1, "name": "shopdb"}}}})
+	})
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	if code := app.Run([]string{"db", "list"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "shopdb") {
+		t.Errorf("output: %s", stdout.String())
+	}
+}
+
+func TestDBUserRotatePassword_PrintsGeneratedPassword(t *testing.T) {
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/databases/2/users/3/rotate-password" || r.Method != "POST" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(202)
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"user_id": 3, "username": "app", "password": "Gen3rated!", "job_id": 9}})
+	})
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	if code := app.Run([]string{"db", "user", "rotate-password", "--database", "2", "--user", "3", "--yes"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "new password: Gen3rated!") {
+		t.Errorf("output: %s", stdout.String())
+	}
+}
+
+func TestDBUpdate_RejectsRename(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	if code := app.Run([]string{"db", "update", "4", "--name", "x"}); code != 2 {
+		t.Fatalf("expected 2, got %d", code)
+	}
+}

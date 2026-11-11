@@ -49,7 +49,7 @@ func TestJobLogs_MissingID(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("expected 2, got %d", code)
 	}
-	if !strings.Contains(stderr.String(), "--id is required") {
+	if !strings.Contains(stderr.String(), "ID is required") {
 		t.Errorf("expected --id required: %s", stderr.String())
 	}
 }

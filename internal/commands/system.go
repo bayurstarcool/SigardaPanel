@@ -1,17 +1,15 @@
 package commands
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
-	"sigardapanel/internal/cli"
+	"net/http"
 )
 
 // System is the CLI group for system management
 func (a *App) System(args []string) int {
 	if len(args) == 0 {
 		a.printSystemHelp()
-		return 0
+		return exitOK
 	}
 	switch args[0] {
 	case "disk-usage":
@@ -20,151 +18,132 @@ func (a *App) System(args []string) int {
 		return a.systemUpdates(args[1:])
 	case "help", "--help", "-h":
 		a.printSystemHelp()
-		return 0
+		return exitOK
 	default:
-		fmt.Fprintf(a.stderr, "unknown system subcommand: %s\n", args[0])
-		return 2
+		return a.unknownSubcommand("system", args[0], a.printSystemHelp)
 	}
 }
 
 func (a *App) systemDiskUsage(args []string) int {
-	flags := flag.NewFlagSet("system disk-usage", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("system disk-usage", "--server ID [-o FORMAT]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
-	output := flags.String("output", "", "output format (table|json)")
-
-	if err := flags.Parse(args); err != nil {
-		return 2
+	output := addOutputFlag(flags)
+	pos, code, ok := a.parseFlags(flags, args)
+	if !ok {
+		return code
+	}
+	id, ok := a.serverIDFlag(pos, *serverID)
+	if !ok {
+		return exitUsage
+	}
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
 
-	if *serverID <= 0 {
-		fmt.Fprintln(a.stderr, "--server is required")
-		return 2
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
 	}
-
-	client, err := cli.NewClient()
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	resp, ok := a.call(client, http.MethodGet, fmt.Sprintf("/api/v1/servers/%d/metrics/latest", id), nil, http.StatusOK)
+	if !ok {
+		return exitError
 	}
-
-	// Get latest metrics
-	resp, status, err := client.Get(fmt.Sprintf("/api/v1/servers/%d/metrics/latest", *serverID))
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if status != 200 {
-		return a.printAPIError(resp, status)
-	}
-
 	var metrics struct {
-		DiskUsed  int64 `json:"disk_used"`
-		DiskTotal int64 `json:"disk_total"`
-		MemUsed   int64 `json:"mem_used"`
-		MemTotal  int64 `json:"mem_total"`
+		DiskUsed   int64   `json:"disk_used"`
+		DiskTotal  int64   `json:"disk_total"`
+		MemUsed    int64   `json:"mem_used"`
+		MemTotal   int64   `json:"mem_total"`
 		CPUPercent float64 `json:"cpu_percent"`
 	}
-	json.Unmarshal(resp.Data, &metrics)
-
+	a.decode(resp, &metrics)
 	if metrics.DiskTotal == 0 {
 		fmt.Fprintln(a.stderr, "no disk metrics available for this server")
-		return 1
+		return exitError
 	}
 
+	const gb = 1024 * 1024 * 1024
 	diskPercent := float64(metrics.DiskUsed) / float64(metrics.DiskTotal) * 100
-	diskUsedGB := float64(metrics.DiskUsed) / (1024 * 1024 * 1024)
-	diskTotalGB := float64(metrics.DiskTotal) / (1024 * 1024 * 1024)
+	diskUsedGB := float64(metrics.DiskUsed) / gb
+	diskTotalGB := float64(metrics.DiskTotal) / gb
 	diskFreeGB := diskTotalGB - diskUsedGB
-
-	mode := cli.GetOutputMode()
-	if *output == "json" {
-		mode = cli.OutputJSON
+	level := "ok"
+	switch {
+	case diskPercent >= 90:
+		level = "critical"
+	case diskPercent >= 80:
+		level = "warning"
+	case diskPercent >= 70:
+		level = "elevated"
 	}
 
-	if mode == cli.OutputJSON {
-		cli.PrintJSON(a.stdout, map[string]any{
-			"disk_used_gb":  fmt.Sprintf("%.2f", diskUsedGB),
-			"disk_total_gb": fmt.Sprintf("%.2f", diskTotalGB),
-			"disk_free_gb":  fmt.Sprintf("%.2f", diskFreeGB),
-			"disk_percent":  fmt.Sprintf("%.1f%%", diskPercent),
-			"mem_used_gb":   fmt.Sprintf("%.2f", float64(metrics.MemUsed)/(1024*1024*1024)),
-			"mem_total_gb":  fmt.Sprintf("%.2f", float64(metrics.MemTotal)/(1024*1024*1024)),
-			"cpu_percent":   fmt.Sprintf("%.1f%%", metrics.CPUPercent),
-		})
-		return 0
+	out := map[string]any{
+		"disk_used_gb":  round2(diskUsedGB),
+		"disk_total_gb": round2(diskTotalGB),
+		"disk_free_gb":  round2(diskFreeGB),
+		"disk_percent":  round2(diskPercent),
+		"mem_used_gb":   round2(float64(metrics.MemUsed) / gb),
+		"mem_total_gb":  round2(float64(metrics.MemTotal) / gb),
+		"cpu_percent":   round2(metrics.CPUPercent),
+		"level":         level,
 	}
+	return a.render(mode, out, func() {
+		fmt.Fprintf(a.stdout, "Server disk usage: %s\n\n", level)
+		fmt.Fprintf(a.stdout, "  Disk:  %.1f GB / %.1f GB (%.1f%% used, %.1f GB free)\n", diskUsedGB, diskTotalGB, diskPercent, diskFreeGB)
+		fmt.Fprintf(a.stdout, "  Mem:   %.1f GB / %.1f GB\n", float64(metrics.MemUsed)/gb, float64(metrics.MemTotal)/gb)
+		fmt.Fprintf(a.stdout, "  CPU:   %.1f%%\n", metrics.CPUPercent)
+	})
+}
 
-	// Table output with status indicator
-	statusIcon := "✅"
-	if diskPercent >= 90 {
-		statusIcon = "🔴 CRITICAL"
-	} else if diskPercent >= 80 {
-		statusIcon = "🟡 WARNING"
-	} else if diskPercent >= 70 {
-		statusIcon = "🟠 ELEVATED"
-	}
-
-	fmt.Fprintf(a.stdout, "Server Disk Usage: %s\n\n", statusIcon)
-	fmt.Fprintf(a.stdout, "  Disk:  %.1f GB / %.1f GB (%.1f%% used, %.1f GB free)\n", diskUsedGB, diskTotalGB, diskPercent, diskFreeGB)
-	fmt.Fprintf(a.stdout, "  Mem:   %.1f GB / %.1f GB\n", float64(metrics.MemUsed)/(1024*1024*1024), float64(metrics.MemTotal)/(1024*1024*1024))
-	fmt.Fprintf(a.stdout, "  CPU:   %.1f%%\n", metrics.CPUPercent)
-	return 0
+func round2(f float64) float64 {
+	return float64(int64(f*100+0.5)) / 100
 }
 
 func (a *App) systemUpdates(args []string) int {
-	flags := flag.NewFlagSet("system updates", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("system updates", "--server ID")
 	serverID := flags.Int64("server", 0, "server ID (required)")
-
-	if err := flags.Parse(args); err != nil {
-		return 2
+	pos, code, ok := a.parseFlags(flags, args)
+	if !ok {
+		return code
+	}
+	id, ok := a.serverIDFlag(pos, *serverID)
+	if !ok {
+		return exitUsage
 	}
 
-	if *serverID <= 0 {
-		fmt.Fprintln(a.stderr, "--server is required")
-		return 2
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
 	}
-
-	client, err := cli.NewClient()
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-
-	// Execute update check via agent command
+	// Runs apt on the server through the agent (admin only).
 	body := map[string]any{
 		"command": "bash -c 'apt-get update -qq 2>/dev/null && apt list --upgradable 2>/dev/null | head -20'",
 	}
-	resp, status, err := client.Post(fmt.Sprintf("/api/v1/servers/%d/command", *serverID), body)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	resp, ok := a.call(client, http.MethodPost, fmt.Sprintf("/api/v1/servers/%d/command", id), body, http.StatusOK, http.StatusAccepted)
+	if !ok {
+		return exitError
 	}
-	if status != 200 && status != 202 {
-		return a.printAPIError(resp, status)
+	if !a.commandSucceeded(resp) {
+		return exitError
 	}
-
 	var result struct {
 		Output string `json:"output"`
 	}
-	json.Unmarshal(resp.Data, &result)
-
+	a.decode(resp, &result)
 	if result.Output == "" {
-		fmt.Fprintln(a.stdout, "No updates available or command not executed.")
-		return 0
+		fmt.Fprintln(a.stdout, "No updates available.")
+		return exitOK
 	}
-
-	fmt.Fprintf(a.stdout, "Available updates:\n\n%s\n", result.Output)
-	return 0
+	fmt.Fprintf(a.stdout, "Available updates (first 20):\n\n%s\n", result.Output)
+	return exitOK
 }
 
 func (a *App) printSystemHelp() {
-	fmt.Fprint(a.stdout, `Usage: sigardapanel system <subcommand>
+	fmt.Fprint(a.stdout, `Usage: sigardapanel system <subcommand> [flags]
 
 Subcommands:
-  disk-usage --server ID [--output json]
-                        check disk usage for a server
-  updates --server ID   check available system updates
+  disk-usage --server ID [-o FORMAT]
+                        disk/memory/CPU from the latest metrics sample
+  updates --server ID   list upgradable apt packages (runs apt on the server; admin)
 `)
 }

@@ -128,27 +128,39 @@ GET  /api/v1/sites/:id/users          → List site's assigned users
 
 ## CLI Commands
 
+Full reference: [docs/CLI.md](docs/CLI.md). Help: `sigardapanel help`, `sigardapanel <cmd> [sub] --help`.
+
 ```
 sigardapanel
-├── api / agent / dev / install / init / login / logout / doctor / version
-├── server    add|list|update|remove|doctor
-├── site      create|list|update|delete|deploy|config|setup-logrotate
-├── ssl       status|issue|renew|renew-all
-├── job       list|watch|cancel|logs
-├── backup    create|list|delete|restore
-├── db        create|list|update|delete
-│   └── user  create|list|rotate-password|delete
-├── docker    ps|start|stop|restart|rm|logs|images|compose
-├── git       branches|log|rollback|checkout
-├── firewall  status|enable|disable|allow|deny|rules|delete|reset
-├── redis     stats|info|flush|flushdb
-├── system    disk-usage|updates
-├── channels  add|list|remove
-├── alerts    list
-├── metrics   latest|list
-├── user      create|list|reset-password|delete
-└── cloudpanel scan|import-sites|import-ssl|doctor
+├── api / agent / dev / install / init        services & bootstrap (local)
+├── login / logout / whoami / version / doctor
+├── server       list|get|health|add|update|remove|token|doctor
+├── site         list|get|create|update|delete|deploy|suspend|resume|reload-nginx|setup-logrotate
+├── ssl          status|issue|renew|renew-all
+├── job          list|get|watch|cancel|logs
+├── backup       list|create|restore|delete
+├── db           list|create|update|delete
+│   └── user     list|create|rotate-password|delete
+├── logs         tail
+├── metrics      latest|list|gpu
+├── system       disk-usage|updates
+├── user         list|create|update|reset-password|delete
+├── apikey       list|create|revoke
+├── audit        list|purge
+├── notification list|count|read|delete
+├── channels     list|add|remove
+├── alerts       list
+├── docker       ps|start|stop|restart|rm|logs|images|compose
+├── git          branches|log|rollback|checkout
+├── firewall     status|enable|disable|allow|deny|rules|delete|reset
+├── redis        stats|info|flush|flushdb
+└── cloudpanel   scan|import-sites|import-site|import-ssl|doctor
 ```
+
+CLI conventions: `-o table|json|yaml` on list/get commands, `--yes` on destructive
+ones, exit codes 0 ok / 1 error / 2 usage. CLI code: `internal/commands` (shared
+helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
+`setupMockAPI` and never touch the real `~/.config/sigardapanel` or `localhost:7700`.
 
 ## API Endpoints (~223)
 
@@ -520,9 +532,9 @@ process are marked failed when the worker starts.
 | SIGARDAPANEL_AGENT_ADDR | :7710 | Agent listen address |
 | SIGARDAPANEL_DB_PATH | sigardapanel.db | Database path |
 | SIGARDAPANEL_AGENT_TOKEN | - | Agent auth token |
-| SIGARDAPANEL_API_URL | - | API base URL for CLI |
-| SIGARDAPANEL_TOKEN | - | API token from login |
-| SIGARDAPANEL_OUTPUT | table | Output format (table|json|yaml) |
+| SIGARDAPANEL_API_URL | http://localhost:7700 | CLI: API base URL (overrides the URL saved by `login`) |
+| SIGARDAPANEL_TOKEN | - | CLI: bearer token, e.g. a personal API key (overrides the saved login token) |
+| SIGARDAPANEL_OUTPUT | table | CLI: default output format (table\|json\|yaml) |
 | SIGARDAPANEL_DEV | false | Dev mode (enables hot reload, disables rate limiters) |
 | SIGARDAPANEL_ENCRYPTION_KEY | - | 32-byte hex AES key for secrets at rest (`openssl rand -hex 32`) |
 | SIGARDAPANEL_ENCRYPTION_KEY_FILE | `<db dir>/encryption.key` | Key file used when the env key is unset |

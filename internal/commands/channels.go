@@ -2,8 +2,8 @@ package commands
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
+	"net/http"
 
 	"sigardapanel/internal/cli"
 )
@@ -12,153 +12,139 @@ import (
 func (a *App) Channels(args []string) int {
 	if len(args) == 0 {
 		a.printChannelsHelp()
-		return 0
+		return exitOK
 	}
 	switch args[0] {
-	case "add":
+	case "add", "create":
 		return a.channelAdd(args[1:])
 	case "list", "ls":
 		return a.channelList(args[1:])
-	case "remove", "rm":
+	case "remove", "rm", "delete":
 		return a.channelRemove(args[1:])
 	case "help", "--help", "-h":
 		a.printChannelsHelp()
-		return 0
+		return exitOK
 	default:
-		fmt.Fprintf(a.stderr, "unknown channel subcommand: %s\n", args[0])
-		return 2
+		return a.unknownSubcommand("channels", args[0], a.printChannelsHelp)
 	}
 }
 
 func (a *App) channelAdd(args []string) int {
-	flags := flag.NewFlagSet("channel add", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
-	name := flags.String("name", "", "channel name")
-	chType := flags.String("type", "", "channel type (telegram|discord|email|webhook)")
-	config := flags.String("config", "", "channel config JSON")
-	if err := flags.Parse(args); err != nil {
-		return 2
+	flags := a.newFlags("channels add", "--name NAME --type telegram|discord|email|webhook --config JSON")
+	name := flags.String("name", "", "channel name (required)")
+	chType := flags.String("type", "", "channel type: telegram|discord|email|webhook (required)")
+	config := flags.String("config", "", "channel config as a JSON object (required), e.g. '{\"bot_token\":\"..\",\"chat_id\":\"..\"}'")
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
-
 	if *name == "" || *chType == "" || *config == "" {
 		fmt.Fprintln(a.stderr, "name, type, and config are required")
-		fmt.Fprintln(a.stderr, "usage: channel add --name <name> --type <type> --config '{...}'")
-		return 2
+		fmt.Fprintln(a.stderr, "usage: sigardapanel channels add --name <name> --type <type> --config '{...}'")
+		return exitUsage
+	}
+	// The API expects config as a JSON object, not a string containing JSON.
+	var cfgObj map[string]any
+	if err := json.Unmarshal([]byte(*config), &cfgObj); err != nil || cfgObj == nil {
+		fmt.Fprintln(a.stderr, "--config must be a JSON object, e.g. '{\"url\":\"https://example.com/hook\"}'")
+		return exitUsage
 	}
 
-	client, err := cli.NewClient()
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-
-	body := map[string]string{
+	body := map[string]any{
 		"name":   *name,
 		"type":   *chType,
-		"config": *config,
+		"config": json.RawMessage(*config),
 	}
-
-	resp, status, err := client.Post("/api/v1/alert-channels", body)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
 	}
-	if status != 201 {
-		return a.printAPIError(resp, status)
+	resp, ok := a.call(client, http.MethodPost, "/api/v1/alert-channels", body, http.StatusCreated)
+	if !ok {
+		return exitError
 	}
-
 	var data struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(resp.Data, &data)
+	a.decode(resp, &data)
 	fmt.Fprintf(a.stdout, "channel created (id=%d)\n", data.ID)
-	return 0
+	return exitOK
 }
 
 func (a *App) channelList(args []string) int {
-	flags := flag.NewFlagSet("channel list", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
-	output := flags.String("output", "", "output format (table|json)")
-	if err := flags.Parse(args); err != nil {
-		return 2
+	flags := a.newFlags("channels list", "[-o FORMAT]")
+	output := addOutputFlag(flags)
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
-
-	client, err := cli.NewClient()
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
-
-	resp, status, err := client.Get("/api/v1/alert-channels")
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
 	}
-	if status != 200 {
-		return a.printAPIError(resp, status)
+	resp, ok := a.call(client, http.MethodGet, "/api/v1/alert-channels", nil, http.StatusOK)
+	if !ok {
+		return exitError
 	}
-
 	var data struct {
 		Channels []map[string]any `json:"channels"`
 	}
-	json.Unmarshal(resp.Data, &data)
-
-	mode := cli.GetOutputMode()
-	if *output == "json" {
-		mode = cli.OutputJSON
+	if !a.decode(resp, &data) {
+		return exitError
 	}
-
-	if mode == cli.OutputJSON {
-		cli.PrintJSON(a.stdout, data.Channels)
-		return 0
+	if data.Channels == nil {
+		data.Channels = []map[string]any{}
 	}
-
-	rows := make([][]string, 0, len(data.Channels))
-	for _, ch := range data.Channels {
-		rows = append(rows, []string{
-			fmt.Sprintf("%v", ch["id"]),
-			fmt.Sprintf("%v", ch["name"]),
-			fmt.Sprintf("%v", ch["type"]),
-			fmt.Sprintf("%v", ch["enabled"]),
-		})
-	}
-	cli.PrintTable(a.stdout, []string{"ID", "NAME", "TYPE", "ENABLED"}, rows)
-	return 0
+	return a.render(mode, data.Channels, func() {
+		rows := make([][]string, 0, len(data.Channels))
+		for _, ch := range data.Channels {
+			rows = append(rows, []string{
+				cli.Cell(ch["id"]),
+				cli.Cell(ch["name"]),
+				cli.Cell(ch["type"]),
+				cli.Cell(ch["enabled"]),
+			})
+		}
+		cli.PrintTable(a.stdout, []string{"ID", "NAME", "TYPE", "ENABLED"}, rows)
+	})
 }
 
 func (a *App) channelRemove(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(a.stderr, "usage: channel remove <id>")
-		return 2
+	flags := a.newFlags("channels remove", "<id>")
+	pos, code, ok := a.parseFlags(flags, args)
+	if !ok {
+		return code
 	}
-	id := args[0]
-
-	client, err := cli.NewClient()
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	id, ok := a.idArg(flags, pos, 0, "channel")
+	if !ok {
+		return exitUsage
 	}
-
-	resp, status, err := client.Delete("/api/v1/alert-channels/" + id)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
 	}
-	if status != 200 {
-		return a.printAPIError(resp, status)
+	if _, ok := a.call(client, http.MethodDelete, fmt.Sprintf("/api/v1/alert-channels/%d", id), nil, http.StatusOK); !ok {
+		return exitError
 	}
-
-	fmt.Fprintf(a.stdout, "channel %s deleted\n", id)
-	return 0
+	fmt.Fprintf(a.stdout, "channel %d deleted\n", id)
+	return exitOK
 }
 
 func (a *App) printChannelsHelp() {
-	fmt.Fprint(a.stdout, `Usage: sigardapanel channels <subcommand>
+	fmt.Fprint(a.stdout, `Usage: sigardapanel channels <subcommand> [flags]
+
+Alert channels receive server/site alerts (admin only).
 
 Subcommands:
-  add --name <name> --type <type> --config '{...}'
-                        create a new alert channel
-  list [--output json]  list all alert channels
-  remove <id>           remove an alert channel
+  add --name NAME --type TYPE --config JSON
+                        create a channel; config per type:
+                          telegram  {"bot_token":"..","chat_id":".."}
+                          discord   {"webhook_url":"https://discord.com/api/webhooks/.."}
+                          email     {"to_address":"ops@example.com","from_address":"..","smtp_tls":"starttls|ssl|none"}
+                          webhook   {"url":"https://example.com/hook"}
+  list [-o FORMAT]      list channels (secrets are redacted by the API)
+  remove <id>           delete a channel
 `)
 }

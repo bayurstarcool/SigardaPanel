@@ -19,7 +19,8 @@ func TestLogsTail_Success(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"message": "ok",
-				"lines":   []string{"line1", "line2"},
+				"logs":    []map[string]any{{"message": "line2"}, {"message": "line1"}},
+				"exists":  true,
 			},
 		})
 	})
@@ -31,8 +32,22 @@ func TestLogsTail_Success(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected 0, got %d, stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "line1") {
-		t.Errorf("expected line1 in output, got: %s", stdout.String())
+	if stdout.String() != "line1\nline2\n" {
+		t.Errorf("expected oldest-first lines, got: %q", stdout.String())
+	}
+}
+
+func TestLogsTail_SendsLimitParam(t *testing.T) {
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("limit") != "25" || r.URL.Query().Get("type") != "error" {
+			t.Errorf("unexpected query: %s", r.URL.RawQuery)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"logs": []any{}, "exists": true}})
+	})
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	if code := app.Run([]string{"logs", "tail", "--site", "1", "--type", "error", "--lines", "25"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
 }
 
@@ -57,7 +72,8 @@ func TestLogsTail_FollowOnce(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"message": "ok",
-				"lines":   []string{"line1"},
+				"logs":    []map[string]any{{"message": "line1"}},
+				"exists":  true,
 			},
 		})
 	})

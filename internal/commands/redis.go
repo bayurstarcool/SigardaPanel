@@ -2,7 +2,6 @@ package commands
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"sigardapanel/internal/cli"
 )
@@ -11,7 +10,7 @@ import (
 func (a *App) Redis(args []string) int {
 	if len(args) == 0 {
 		a.printRedisHelp()
-		return 0
+		return exitOK
 	}
 	switch args[0] {
 	case "stats":
@@ -24,22 +23,20 @@ func (a *App) Redis(args []string) int {
 		return a.redisFlushDB(args[1:])
 	case "help", "--help", "-h":
 		a.printRedisHelp()
-		return 0
+		return exitOK
 	default:
-		fmt.Fprintf(a.stderr, "unknown redis subcommand: %s\n", args[0])
-		return 2
+		return a.unknownSubcommand("redis", args[0], a.printRedisHelp)
 	}
 
 }
 
 func (a *App) redisStats(args []string) int {
-	flags := flag.NewFlagSet("redis stats", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("redis stats", "--server ID [-o FORMAT]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
-	output := flags.String("output", "", "output format (table|json)")
+	output := addOutputFlag(flags)
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
@@ -66,14 +63,12 @@ func (a *App) redisStats(args []string) int {
 	}
 	json.Unmarshal(resp.Data, &data)
 
-	mode := cli.GetOutputMode()
-	if *output == "json" {
-		mode = cli.OutputJSON
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
 	}
-
-	if mode == cli.OutputJSON {
-		cli.PrintJSON(a.stdout, data.Stats)
-		return 0
+	if mode != cli.OutputTable {
+		return a.render(mode, data.Stats, nil)
 	}
 
 	fmt.Fprintln(a.stdout, "Redis Statistics:")
@@ -85,12 +80,11 @@ func (a *App) redisStats(args []string) int {
 }
 
 func (a *App) redisInfo(args []string) int {
-	flags := flag.NewFlagSet("redis info", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("redis info", "--server ID")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
@@ -122,26 +116,21 @@ func (a *App) redisInfo(args []string) int {
 }
 
 func (a *App) redisFlush(args []string) int {
-	flags := flag.NewFlagSet("redis flush", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("redis flush", "--server ID [--yes]")
+	yes := flags.Bool("yes", false, "do not ask for confirmation")
+	flags.BoolVar(yes, "y", false, "shorthand for --yes")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
 		return 2
 	}
 
-	confirmed, err := cli.Confirm("Flush ALL Redis data on this server?", false, a.stdin, a.stdout)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if !confirmed {
-		fmt.Fprintln(a.stdout, "cancelled")
-		return 0
+	if !*yes && !a.confirm("Flush ALL Redis data on this server?") {
+		return exitError
 	}
 
 	client, err := cli.NewClient()
@@ -164,13 +153,14 @@ func (a *App) redisFlush(args []string) int {
 }
 
 func (a *App) redisFlushDB(args []string) int {
-	flags := flag.NewFlagSet("redis flushdb", flag.ContinueOnError)
-	flags.SetOutput(a.stderr)
+	flags := a.newFlags("redis flushdb", "--server ID --db N [--yes]")
+	yes := flags.Bool("yes", false, "do not ask for confirmation")
+	flags.BoolVar(yes, "y", false, "shorthand for --yes")
 	serverID := flags.Int64("server", 0, "server ID (required)")
 	db := flags.Int("db", 0, "database number (0-15)")
 
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
 	}
 	if *serverID <= 0 {
 		fmt.Fprintln(a.stderr, "--server is required")
@@ -181,14 +171,8 @@ func (a *App) redisFlushDB(args []string) int {
 		return 2
 	}
 
-	confirmed, err := cli.Confirm(fmt.Sprintf("Flush Redis database %d?", *db), false, a.stdin, a.stdout)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if !confirmed {
-		fmt.Fprintln(a.stdout, "cancelled")
-		return 0
+	if !*yes && !a.confirm(fmt.Sprintf("Flush Redis database %d?", *db)) {
+		return exitError
 	}
 
 	client, err := cli.NewClient()
@@ -211,14 +195,17 @@ func (a *App) redisFlushDB(args []string) int {
 }
 
 func (a *App) printRedisHelp() {
-	fmt.Fprint(a.stdout, `Usage: sigardapanel redis <subcommand>
+	fmt.Fprint(a.stdout, `Usage: sigardapanel redis <subcommand> [flags]
+
+Redis on a managed server, through its agent (admin).
 
 Subcommands:
-  stats --server ID [--output json]
+  stats --server ID [-o FORMAT]
                         show Redis statistics
   info --server ID     show detailed Redis info
-  flush --server ID    flush ALL Redis data (with confirmation)
-  flushdb --server ID --db N
+  flush --server ID [--yes]
+                        flush ALL Redis data (asks first)
+  flushdb --server ID --db N [--yes]
                         flush a specific database (0-15)
 `)
 }

@@ -52,8 +52,8 @@ func TestInitSuccess(t *testing.T) {
 	if user.Email != "admin@test.local" {
 		t.Fatalf("expected email admin@test.local, got %s", user.Email)
 	}
-	if user.Role != "admin" {
-		t.Fatalf("expected role admin, got %s", user.Role)
+	if user.Role != "super_admin" {
+		t.Fatalf("expected first user to be super_admin, got %s", user.Role)
 	}
 }
 
@@ -373,5 +373,36 @@ func TestLogoutAPIDown(t *testing.T) {
 	_, err := cli.LoadToken()
 	if !os.IsNotExist(err) {
 		t.Fatalf("expected token removed even when API down, got err=%v", err)
+	}
+}
+
+func TestInitRoleDefaults(t *testing.T) {
+	tmpDB := filepath.Join(t.TempDir(), "roles.db")
+	t.Setenv("SIGARDAPANEL_DB_PATH", tmpDB)
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	if code := app.Init([]string{"--user", "owner", "--password", "supersecret123"}); code != 0 {
+		t.Fatalf("first init: %d %s", code, stderr.String())
+	}
+	if code := app.Init([]string{"--user", "second", "--password", "supersecret123"}); code != 0 {
+		t.Fatalf("second init: %d %s", code, stderr.String())
+	}
+	if code := app.Init([]string{"--user", "third", "--password", "supersecret123", "--role", "super_admin"}); code != 0 {
+		t.Fatalf("third init: %d %s", code, stderr.String())
+	}
+	if code := app.Init([]string{"--user", "bad", "--password", "supersecret123", "--role", "user"}); code != 2 {
+		t.Fatalf("invalid role: expected 2, got %d", code)
+	}
+	database, err := db.Open(tmpDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	s := store.New(database)
+	for name, want := range map[string]string{"owner": "super_admin", "second": "admin", "third": "super_admin"} {
+		u, _ := s.Users.GetByUsername(t.Context(), name)
+		if u == nil || u.Role != want {
+			t.Errorf("%s: expected role %s, got %+v", name, want, u)
+		}
 	}
 }
