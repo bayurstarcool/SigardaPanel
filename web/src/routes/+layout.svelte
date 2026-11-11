@@ -33,6 +33,15 @@
       window.location.href = '/login';
     }
   });
+
+  // First login with a password the installer printed (or an admin chose):
+  // ask for a new one before anything else. Impersonation never sets the flag.
+  $effect(() => {
+    const path = window.location.pathname;
+    if (ready && auth.user?.password_change_required && path !== '/profile' && path !== '/login') {
+      window.location.href = '/profile?change-password=1';
+    }
+  });
 </script>
 
 {#if !ready}

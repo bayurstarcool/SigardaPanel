@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Eye, EyeOff, Loader2, Check, ArrowRight, AlertCircle } from 'lucide-svelte';
   import Logo from '$components/Logo.svelte';
+  import { onMount } from 'svelte';
 
   const plans = [
     { id: 'community', label: 'Community', price: 'Free' },
@@ -18,6 +19,16 @@
   let busy = $state(false);
   let showPass = $state(false);
   let step = $state(1);
+
+  // Self-hosted panels have no public sign-up: accounts are created by an
+  // administrator under Users. Only show the form when the API accepts it.
+  let signupOpen = $state<boolean | null>(null);
+  onMount(() => {
+    fetch('/api/v1/auth/signup', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => (signupOpen = d?.data ? !!d.data.member_signup : true))
+      .catch(() => (signupOpen = true));
+  });
 
   async function submit(e: Event) {
     e.preventDefault();
@@ -70,6 +81,7 @@
       <p class="mt-1 text-sm text-muted">Get your API token and start managing servers</p>
     </div>
 
+    {#if signupOpen}
     <!-- Steps -->
     <ol class="mb-6 flex items-center justify-center gap-2">
       {#each ['Account', 'Details', 'Complete'] as s, i (s)}
@@ -85,9 +97,20 @@
         </li>
       {/each}
     </ol>
+    {/if}
 
     <div class="card p-6 shadow-sm">
-      {#if step === 3}
+      {#if signupOpen === null}
+        <div class="flex justify-center py-8 text-subtle"><Loader2 size={20} class="animate-spin" /></div>
+      {:else if !signupOpen}
+        <div class="py-4 text-center">
+          <h2 class="text-base font-semibold text-fg">Sign-up is closed</h2>
+          <p class="mt-2 text-[13px] text-muted">
+            This panel does not accept public registrations. Ask the panel administrator to create an account for you.
+          </p>
+          <a href="/login" class="btn btn-primary mt-6">Go to sign in <ArrowRight size={16} /></a>
+        </div>
+      {:else if step === 3}
         <div class="py-6 text-center">
           <div class="mx-auto mb-4 flex size-11 items-center justify-center rounded-xl bg-success/10 text-success">
             <Check size={20} />

@@ -74,6 +74,7 @@ function createAuthStore() {
         username: json.data.username,
         email: json.data.email,
         role: json.data.role,
+        password_change_required: !!json.data.password_change_required,
       } as User,
       isImpersonating: !!json.data.impersonated_by,
       impersonator: json.data.impersonator || null,
@@ -189,6 +190,13 @@ function createAuthStore() {
     log("login() success (HttpOnly cookie session), user:", u.username);
   }
 
+  // Called after the user set a new password: lifts the first-login prompt.
+  function markPasswordChanged() {
+    if (!user) return;
+    user = { ...user, password_change_required: false };
+    localStorage.setItem("sigarda_user", JSON.stringify(user));
+  }
+
   function logout() {
     log("logout() called");
     if (isImpersonating) {
@@ -299,6 +307,7 @@ function createAuthStore() {
     logout,
     impersonateUser,
     stopImpersonation,
+    markPasswordChanged,
     clearSession, // expose for api.ts handler
     clearAuth, // full redirect
   };

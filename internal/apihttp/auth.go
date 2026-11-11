@@ -462,6 +462,11 @@ func (ah *authHandler) me(c echo.Context) error {
 		"username": user.Username,
 		"email":    user.Email,
 		"role":     user.Role,
+		// Accounts created by install.sh/init or by an admin start with a
+		// password someone else knows; the web UI asks for a new one first.
+		// Never during impersonation: that would make the admin change the
+		// user's password.
+		"password_change_required": !user.PasswordChangedAt.Valid && !sess.ImpersonatedBy.Valid,
 	}
 
 	// Include impersonation info if this is an impersonated session
@@ -526,6 +531,12 @@ func (ah *authHandler) updateProfile(c echo.Context) error {
 		match, err := auth.VerifyPassword(user.PasswordHash, body.OldPassword)
 		if err != nil || !match {
 			return echo.NewHTTPError(http.StatusBadRequest, "current password is incorrect")
+		}
+		if len(body.NewPassword) < 8 {
+			return echo.NewHTTPError(http.StatusBadRequest, "new password must be at least 8 characters")
+		}
+		if body.NewPassword == body.OldPassword {
+			return echo.NewHTTPError(http.StatusBadRequest, "new password must differ from the current one")
 		}
 		// Hash new password
 		hash, err := auth.HashPassword(body.NewPassword)

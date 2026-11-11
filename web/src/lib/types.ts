@@ -3,6 +3,8 @@ export interface User {
   username: string;
   email: string;
   role: "super_admin" | "admin" | "user";
+  /** Set for accounts whose password was chosen by someone else (installer, admin). */
+  password_change_required?: boolean;
 }
 
 export interface ImpersonatorInfo {
