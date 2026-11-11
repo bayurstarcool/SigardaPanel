@@ -8,6 +8,7 @@
     pending: 'badge-warning', warning: 'badge-warning', expiring_soon: 'badge-warning', degraded: 'badge-warning',
     deploying: 'badge-info', running: 'badge-info', in_progress: 'badge-info',
     queued: 'badge-accent',
+    suspended: 'badge-warning',
     disabled: 'badge-danger', failed: 'badge-danger', offline: 'badge-danger', expired: 'badge-danger',
     error: 'badge-danger',
   };

@@ -11,7 +11,7 @@
   import StatusPill from '$components/StatusPill.svelte';
   import {
     Globe, ShieldCheck, Database, Folder, Zap, Settings, Users, Package,
-    Lock, LoaderCircle, ExternalLink, Trash2, Copy, Check, Pencil, Save,
+    Lock, LoaderCircle, ExternalLink, Trash2, Pause, Play, Copy, Check, Pencil, Save,
     UserPlus, Mail, Code, Shield, Clock, ScrollText, Upload, Key, GitBranch, TriangleAlert, Server,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
@@ -104,6 +104,27 @@
     if (!transferEmail) return; transferBusy = true;
     try { await apiFetch(auth.token, 'POST', `sites/${siteId}/transfer`, { new_owner_email: transferEmail }); toasts.success('Site transferred'); showTransfer = false; transferEmail = ''; }
     catch (e: any) { toasts.error(e.message); } finally { transferBusy = false; }
+  }
+
+  // Suspend / resume (admin only): vhost + SSL renewal are disabled, nothing is deleted.
+  let toggleBusy = $state(false);
+  async function toggleSuspend() {
+    const suspending = site.status !== 'suspended';
+    const msg = suspending
+      ? `Suspend "${site.domain}"? The site goes offline (nginx vhost and SSL auto-renew are disabled). Files, databases and certificates are kept.`
+      : `Resume "${site.domain}"? The vhost and SSL auto-renew are re-enabled.`;
+    if (!confirm(msg)) return;
+    toggleBusy = true;
+    try {
+      const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/${suspending ? 'suspend' : 'resume'}`);
+      toasts.success(`${suspending ? 'Suspend' : 'Resume'} queued — Job #${d?.job_id}`);
+      // Poll briefly so the status pill reflects the result without a reload.
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const fresh = await apiFetch(auth.token, 'GET', `sites/${siteId}`);
+        if (fresh && fresh.status !== site.status) { site = fresh; break; }
+      }
+    } catch (e: any) { toasts.error(e.message); } finally { toggleBusy = false; }
   }
 
   async function deleteSite() {
@@ -201,9 +222,25 @@
             {#if deployBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Upload size={14} />{/if} Git pull
           </button>
         {/if}
+        {#if isAdmin && (site.status === 'active' || site.status === 'suspended')}
+          <button onclick={toggleSuspend} disabled={toggleBusy} class="btn btn-secondary btn-sm">
+            {#if toggleBusy}<LoaderCircle size={14} class="animate-spin" />{:else if site.status === 'suspended'}<Play size={14} />{:else}<Pause size={14} />{/if}
+            {site.status === 'suspended' ? 'Resume' : 'Suspend'}
+          </button>
+        {/if}
         <button onclick={deleteSite} class="btn btn-danger-ghost btn-sm"><Trash2 size={14} /> Delete</button>
       {/snippet}
     </PageHeader>
+
+    {#if site.status === 'suspended'}
+      <div class="card mb-6 flex items-start gap-3 border-warning/40 p-4 text-sm">
+        <Pause size={16} class="mt-0.5 shrink-0 text-warning" />
+        <div>
+          <p class="font-medium text-fg">This site is suspended</p>
+          <p class="text-muted">The nginx vhost and SSL auto-renewal are disabled. Files, databases and certificates are untouched{isAdmin ? ' — use Resume to bring it back online' : ''}.</p>
+        </div>
+      </div>
+    {/if}
 
     <!-- Quick stats -->
     <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">

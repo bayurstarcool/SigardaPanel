@@ -398,7 +398,7 @@
       </select>
       <select aria-label="Status filter" bind:value={statusFilter} onchange={() => (page = 1)} class="input h-8 w-auto text-[13px]">
         <option value="">All statuses</option>
-        {#each ['active', 'pending', 'deploying', 'disabled'] as s (s)}<option value={s}>{s}</option>{/each}
+        {#each ['active', 'pending', 'deploying', 'suspended', 'disabled'] as s (s)}<option value={s}>{s}</option>{/each}
       </select>
       <label class="ml-auto flex items-center gap-2 text-xs text-subtle">
         Per page

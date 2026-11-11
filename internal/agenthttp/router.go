@@ -41,6 +41,7 @@ func isPortAvailable(port string) bool {
 type Router struct {
 	executor     *executor.Executor
 	nginxConfDir string
+	leDir        string // letsencrypt config root (renewal/ lives here)
 	logDir       string
 	backupDir    string
 	authToken    string
@@ -52,14 +53,15 @@ type Router struct {
 
 // RouterOptions allows overriding router defaults for testing.
 type RouterOptions struct {
-	NginxConfDir string
-	LogDir       string
-	BackupDir    string
-	AuthToken    string
-	SiteRootDir  string
-	AllowStubSSL bool
-	StubDev      bool
-	Executor     *executor.Executor
+	NginxConfDir   string
+	LetsEncryptDir string
+	LogDir         string
+	BackupDir      string
+	AuthToken      string
+	SiteRootDir    string
+	AllowStubSSL   bool
+	StubDev        bool
+	Executor       *executor.Executor
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -80,6 +82,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	r := &Router{
 		executor:     &executor.Executor{Timeout: 30 * time.Minute},
 		nginxConfDir: "/etc/nginx/sites-enabled",
+		leDir:        "/etc/letsencrypt",
 		logDir:       "/var/log/nginx",
 		backupDir:    "/var/backups/sigardapanel",
 		authToken:    config.AgentToken(),
@@ -97,6 +100,9 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		}
 		if opts.NginxConfDir != "" {
 			r.nginxConfDir = opts.NginxConfDir
+		}
+		if opts.LetsEncryptDir != "" {
+			r.leDir = opts.LetsEncryptDir
 		}
 		if opts.LogDir != "" {
 			r.logDir = opts.LogDir
@@ -130,6 +136,8 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/site/create", r.siteCreateTask)
 	tasks.POST("/site/delete", r.siteDeleteTask)
 	tasks.POST("/site/deploy", r.siteDeployTask)
+	tasks.POST("/site/suspend", r.siteSuspendTask)
+	tasks.POST("/site/resume", r.siteResumeTask)
 	tasks.POST("/nginx/reload", r.nginxReloadTask)
 	tasks.POST("/ssl/issue", r.sslIssueTask)
 	tasks.POST("/ssl/renew", r.sslRenewTask)

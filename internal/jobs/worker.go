@@ -268,6 +268,16 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 
 	// Post-success: update related resource status
 	switch job.Type {
+	case jobmodel.TypeSiteSuspend, jobmodel.TypeSiteResume:
+		if job.SiteID.Valid {
+			status := "active"
+			if job.Type == jobmodel.TypeSiteSuspend {
+				status = "suspended"
+			}
+			if err := w.store.Sites.UpdateStatus(ctx, job.SiteID.Int64, status); err != nil {
+				slog.Error("worker: update site status", "id", job.SiteID.Int64, "error", err)
+			}
+		}
 	case jobmodel.TypeSiteCreate:
 		if job.SiteID.Valid {
 			siteID := job.SiteID.Int64

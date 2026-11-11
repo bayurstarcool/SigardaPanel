@@ -141,6 +141,10 @@ func endpointForType(t string) string {
 		return "/tasks/site/delete"
 	case "site.deploy":
 		return "/tasks/site/deploy"
+	case jobmodel.TypeSiteSuspend:
+		return "/tasks/site/suspend"
+	case jobmodel.TypeSiteResume:
+		return "/tasks/site/resume"
 	case "ssl.issue":
 		return "/tasks/ssl/issue"
 	case "ssl.renew":

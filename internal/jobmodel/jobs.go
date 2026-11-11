@@ -17,6 +17,8 @@ const (
 	TypeSiteCreate     = "site.create"
 	TypeSiteDelete     = "site.delete"
 	TypeSiteDeploy     = "site.deploy"
+	TypeSiteSuspend    = "site.suspend"
+	TypeSiteResume     = "site.resume"
 	TypeSSLIssue       = "ssl.issue"
 	TypeSSLRenew       = "ssl.renew"
 	TypeSSLAutoRenew   = "ssl.auto-renew"
