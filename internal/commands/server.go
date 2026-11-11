@@ -376,14 +376,5 @@ Subcommands:
 `)
 }
 
-func (a *App) printAPIError(resp *cli.APIResponse, status int) int {
-	if resp != nil && resp.Error != nil {
-		fmt.Fprintf(a.stderr, "API error (%d): %s — %s\n", status, resp.Error.Code, resp.Error.Message)
-	} else {
-		fmt.Fprintf(a.stderr, "HTTP %d\n", status)
-	}
-	return 1
-}
-
 // silence unused import warning if strings unused
 var _ = strings.TrimSpace
