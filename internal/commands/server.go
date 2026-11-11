@@ -296,13 +296,14 @@ func (a *App) serverDoctor(args []string) int {
 }
 
 func (a *App) serverUpdate(args []string) int {
-	flags := a.newFlags("server update", "<id> [--name N] [--hostname H] [--ip IP] [--ssh-port N] [--description TEXT]")
+	flags := a.newFlags("server update", "<id> [--name N] [--hostname H] [--ip IP] [--agent-url URL] [--ssh-port N] [--description TEXT]")
 	idFlag := flags.Int64("id", 0, "server ID (alternative to the positional argument)")
 	name := flags.String("name", "", "server name")
 	hostname := flags.String("hostname", "", "server hostname")
 	ip := flags.String("ip", "", "server IP address (\"none\" clears it)")
 	sshPort := flags.Int("ssh-port", 0, "SSH port")
 	description := flags.String("description", "", "free-text description")
+	agentURL := flags.String("agent-url", "", "agent URL, e.g. http://10.0.0.5:7710")
 	pos, code, ok := a.parseFlags(flags, args)
 	if !ok {
 		return code
@@ -330,9 +331,12 @@ func (a *App) serverUpdate(args []string) int {
 	if *description != "" {
 		body["description"] = *description
 	}
+	if *agentURL != "" {
+		body["agent_url"] = *agentURL
+	}
 	if len(body) == 0 {
-		fmt.Fprintln(a.stderr, "at least one of --name, --hostname, --ip, --ssh-port, --description is required")
-		fmt.Fprintln(a.stderr, "(status is maintained by health checks; the agent URL cannot be changed through the API)")
+		fmt.Fprintln(a.stderr, "at least one of --name, --hostname, --ip, --agent-url, --ssh-port, --description is required")
+		fmt.Fprintln(a.stderr, "(status is maintained by health checks)")
 		return exitUsage
 	}
 
@@ -491,10 +495,11 @@ Subcommands:
   get <id> [-o FORMAT]  show one server (alias: show)
   health [<id>] [-o FORMAT]
                         last health check of one server, or of all servers
-  update <id> [--name N] [--hostname H] [--ip IP|none] [--ssh-port N]
-         [--description TEXT]
+  update <id> [--name N] [--hostname H] [--ip IP|none] [--agent-url URL]
+         [--ssh-port N] [--description TEXT]
                         update server settings (admin)
-  remove <id>           remove a server (admin; alias: rm, delete)
+  remove <id>           remove a server without sites (admin; alias: rm, delete);
+                        the panel's own server cannot be removed
   token [<id>] [--no-env-sync]
                         regenerate the agent token (admin; default server 1). For the
                         local server (agent_url on localhost) it is also written to
