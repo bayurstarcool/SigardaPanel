@@ -26,7 +26,7 @@
   async function loadUsers() {
     usersLoading = true;
     try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/users`); siteUsers = d?.users || []; }
-    catch {} finally { usersLoading = false; }
+    catch (e: any) { if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load'); } finally { usersLoading = false; }
   }
 
   async function loadPlans() {

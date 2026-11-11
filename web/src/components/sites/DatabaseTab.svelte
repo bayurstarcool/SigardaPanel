@@ -63,7 +63,7 @@
   async function loadDBs() {
     dbLoading = true;
     try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbs = d?.databases || []; }
-    catch {} finally { dbLoading = false; }
+    catch (e: any) { if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load'); } finally { dbLoading = false; }
   }
   async function createDB() {
     if (!newDb.name) return; dbBusy = true;

@@ -140,10 +140,12 @@
 
   const appRuntimes = ['node', 'go', 'golang', 'python', 'docker'];
   const tabs = $derived(
-    !site ? allTabs.filter((t) => t.key !== 'app')
+    (!site ? allTabs.filter((t) => t.key !== 'app')
     : site.runtime === 'php' ? allTabs.filter((t) => t.key !== 'app')
     : appRuntimes.includes(site.runtime) ? allTabs
-    : allTabs.filter((t) => t.key !== 'app')
+    : allTabs.filter((t) => t.key !== 'app'))
+      // Site user assignments are admin-only in the API.
+      .filter((t) => isAdmin || t.key !== 'users')
   );
 
   const pendingReason = $derived(
