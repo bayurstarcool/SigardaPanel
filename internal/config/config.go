@@ -248,6 +248,13 @@ func AllowRegistration() bool {
 	return boolEnv("SIGARDAPANEL_ALLOW_REGISTRATION", false)
 }
 
+// AllowPrivateAgents lets self-registering agents (one-line installer) use a
+// private (RFC 1918 / ULA) callback address, for panels that reach their
+// servers over a VPC or VPN. Off by default.
+func AllowPrivateAgents() bool {
+	return boolEnv("SIGARDAPANEL_ALLOW_PRIVATE_AGENTS", false)
+}
+
 func env(key string, fallback string) string {
 	value := os.Getenv(key)
 	if value == "" {

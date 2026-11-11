@@ -70,9 +70,10 @@ install_packages() {
   apt-get update -qq
   apt-get install -y -qq --no-install-recommends \
     curl ca-certificates openssl nginx nodejs sqlite3 minisign tar >/dev/null
-  if [ -n "${DOMAIN:-}" ] && [ -n "${LETSENCRYPT_EMAIL:-}" ]; then
-    apt-get install -y -qq --no-install-recommends certbot python3-certbot-nginx >/dev/null || warn "certbot install failed"
-  fi
+  # certbot: the panel certificate (DOMAIN + LETSENCRYPT_EMAIL) and the
+  # Let's Encrypt certificates the panel requests for every new site.
+  apt-get install -y -qq --no-install-recommends certbot python3-certbot-nginx >/dev/null \
+    || warn "certbot install failed: sites will not get Let's Encrypt certificates until it is installed"
   command -v node >/dev/null || die "nodejs did not install"
   local v major minor
   v="$(node -v | sed 's/^v//')"; major="${v%%.*}"; minor="${v#*.}"; minor="${minor%%.*}"
@@ -345,6 +346,7 @@ NGINX
   if [ -n "${DOMAIN:-}" ] && [ -n "${LETSENCRYPT_EMAIL:-}" ] && command -v certbot >/dev/null; then
     log "Requesting a Let's Encrypt certificate for ${DOMAIN}..."
     if certbot --nginx -d "$DOMAIN" -m "$LETSENCRYPT_EMAIL" --agree-tos -n >/dev/null 2>&1; then
+      LE_OK=1
       ok "Let's Encrypt certificate installed"
     else
       warn "Let's Encrypt failed (DNS must point here and port 80 be reachable); keeping the self-signed certificate"
@@ -439,14 +441,21 @@ do_install() {
   echo "  Username:  ${ADMIN_USER}"
   echo "  Password:  ${ADMIN_PASS}     (also saved to /root/.sigardapanel_admin_cred)"
   echo
-  if [ -z "${DOMAIN:-}" ]; then
-    warn "The certificate is self-signed (browser warning). Use DOMAIN=panel.example.com (+ LETSENCRYPT_EMAIL) for a trusted one."
+  if [ -z "${LE_OK:-}" ]; then
+    warn "The certificate is self-signed (browser warning). Use DOMAIN=panel.example.com + LETSENCRYPT_EMAIL for a trusted one."
+    warn "New servers added with the one-line install command must then be given the panel certificate (docs/INSTALL.md, SIGARDAPANEL_PANEL_CA)."
   fi
   if [ "${INSTALL_FIREWALL:-no}" != "yes" ]; then
     warn "No firewall was configured. Recommended: allow only SSH, 80 and 443 - e.g. ufw allow OpenSSH && ufw allow 80,443/tcp && ufw enable"
   fi
-  warn "Change the admin password after the first login."
-  echo "  Update later:  sudo bash install.sh update"
+  echo
+  echo "  Next steps:"
+  echo "   1. Open ${PUBLIC_URL} and log in; you are asked to choose your own password first."
+  echo "   2. Enable two-factor authentication under Settings, then: rm /root/.sigardapanel_admin_cred"
+  echo "   3. This server is already managed as \"Local Server\". To add more servers:"
+  echo "      Servers -> Add server (docs/INSTALL.md#adding-remote-servers)."
+  echo "   CLI on this server:  sigardapanel login --api-url http://127.0.0.1:7700 --user ${ADMIN_USER}"
+  echo "   Update later:        sudo bash install.sh update"
 }
 
 do_update() {

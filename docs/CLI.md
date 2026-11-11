@@ -168,7 +168,7 @@ sigardapanel server list [-o FORMAT]
 sigardapanel server get <id> [-o FORMAT]
 sigardapanel server health [<id>] [-o FORMAT]
 sigardapanel server add --name NAME --hostname HOST [--ip IP] [--agent-url URL] [--ssh-port N] [--description TEXT]   # admin
-sigardapanel server update <id> [--name N] [--hostname H] [--ip IP|none] [--ssh-port N] [--description TEXT]      # admin
+sigardapanel server update <id> [--name N] [--hostname H] [--ip IP|none] [--agent-url URL] [--ssh-port N] [--description TEXT]   # admin
 sigardapanel server remove <id>                       # admin (aliases: rm, delete)
 sigardapanel server token [<id>] [--no-env-sync]      # admin
 sigardapanel server doctor
@@ -177,7 +177,10 @@ sigardapanel server doctor
 - `add` prints the new server's agent token once.
 - `get` never prints the agent token. `health` shows the last health check of one or
   all servers.
-- `update` cannot change the status (maintained by health checks) or the agent URL.
+- `update` cannot change the status (maintained by health checks). `--agent-url` fixes
+  where the panel reaches the agent (not for the panel's own server).
+- `remove` refuses the panel's own server and servers that still have sites (delete or
+  transfer them first); nothing on the removed machine is changed.
 - `token` regenerates the agent token (default server 1). If the server is the local
   one (its `agent_url` is a loopback address) the token is also written to
   `/etc/sigardapanel/agent.env` and `panel.env` when they exist; restart

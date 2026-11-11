@@ -31,6 +31,25 @@ func isValidAgentURL(raw string) bool {
 	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
+// isLocalServer reports whether the server is the panel host itself, i.e.
+// its agent is reached over loopback. Its token lives in panel.env/agent.env.
+func isLocalServer(s store.Server) bool {
+	return s.AgentURL.Valid && isLoopbackAgentURL(s.AgentURL.String)
+}
+
+func isLoopbackAgentURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	h := u.Hostname()
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
 type serverHandler struct {
 	store *store.Store
 	audit *audit.Recorder
@@ -191,11 +210,22 @@ func (h *serverHandler) update(c echo.Context) error {
 		IPAddress   *string `json:"ip_address"`
 		SSHPort     *int    `json:"ssh_port"`
 		Description *string `json:"description"`
+		AgentURL    *string `json:"agent_url"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 
+	if body.AgentURL != nil {
+		u := strings.TrimSpace(*body.AgentURL)
+		if !isValidAgentURL(u) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid agent_url (http(s)://host:port)")
+		}
+		if isLocalServer(*server) && !isLoopbackAgentURL(u) {
+			return echo.NewHTTPError(http.StatusBadRequest, "the panel's own server must keep its local agent URL")
+		}
+		server.AgentURL = sql.NullString{String: u, Valid: true}
+	}
 	if body.Name != nil {
 		n := strings.TrimSpace(*body.Name)
 		if n == "" {
@@ -242,11 +272,12 @@ func (h *serverHandler) update(c echo.Context) error {
 	}
 
 	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionServerUpdate, audit.ResourceServer, id, map[string]any{
-		"name": server.Name,
+		"name":      server.Name,
+		"agent_url": server.AgentURL.String,
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      serverToMap(*server, true),
+		Data:      serverToMap(*server, false),
 		RequestID: rid,
 	})
 }
@@ -272,6 +303,19 @@ func (h *serverHandler) delete(c echo.Context) error {
 	}
 	if server == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "server not found")
+	}
+	if isLocalServer(*server) {
+		return echo.NewHTTPError(http.StatusConflict, "the panel's own server cannot be removed (it is registered again on the next API start)")
+	}
+	// Removing a server cascades to its site records but leaves everything on
+	// the machine; make the operator delete (or move) the sites first.
+	sites, err := h.store.Sites.Count(c.Request().Context(), store.SiteListFilter{ServerID: id})
+	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
+	if sites > 0 {
+		return echo.NewHTTPError(http.StatusConflict, "server still has "+strconv.Itoa(sites)+" site(s); delete or transfer them first")
 	}
 
 	if err := h.store.Servers.Delete(c.Request().Context(), id); err != nil {
@@ -366,13 +410,23 @@ func (h *serverHandler) regenerateToken(c echo.Context) error {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
-	server.AgentToken = token
-	if err := h.store.Servers.Update(c.Request().Context(), server); err != nil {
+	// Servers.Update never writes agent_token, so this used to return a new
+	// token that was not stored: the agent configured with it was rejected.
+	if err := h.store.Servers.UpdateAgentToken(c.Request().Context(), id, token); err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
+	var userID int64
+	if sess := sessionFromEcho(c); sess != nil {
+		userID = sess.UserID
+	}
+	h.audit.RecordAction(c.Request().Context(), userID, "server_token_rotate", audit.ResourceServer, id, map[string]any{
+		"name": server.Name,
+	})
+
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      map[string]any{"agent_token": token},
+		Data:      map[string]any{"agent_token": token, "is_local": isLocalServer(*server)},
 		RequestID: rid,
 	})
 }
@@ -406,6 +460,10 @@ func serverToMap(s store.Server, includeToken bool) map[string]any {
 	}
 	if includeToken {
 		m["agent_token"] = s.AgentToken
+	}
+	m["is_local"] = isLocalServer(s)
+	if s.AgentVersion.Valid {
+		m["agent_version"] = s.AgentVersion.String
 	}
 	// Health fields
 	m["health_status"] = s.HealthStatus

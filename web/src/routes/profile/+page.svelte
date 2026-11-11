@@ -40,8 +40,18 @@
         body.old_password = form.old_password;
         body.new_password = form.new_password;
       }
+      if (auth.user?.password_change_required && !form.new_password) {
+        toasts.error('Choose a new password to continue');
+        busy = false;
+        return;
+      }
       await apiFetch(auth.token, 'PUT', 'auth/profile', body);
-      toasts.success('Profile updated');
+      toasts.success(body.new_password ? 'Password changed' : 'Profile updated');
+      if (body.new_password && auth.user?.password_change_required) {
+        auth.markPasswordChanged();
+        window.location.href = '/dashboard';
+        return;
+      }
       form.old_password = ''; form.new_password = '';
     } catch (e: any) { toasts.error(e.message); }
     finally { busy = false; }
@@ -68,6 +78,16 @@
   <PageHeader title="Profile" description="Manage your account settings" />
 
   <div class="max-w-3xl space-y-6">
+    {#if auth.user?.password_change_required}
+      <div role="alert" class="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-[13px] text-fg">
+        <p class="font-semibold">Set your own password to continue</p>
+        <p class="mt-1 text-muted">
+          This account still uses the password it was created with (printed by the installer or set by an
+          administrator). Enter it as the current password, choose a new one (at least 8 characters) and save.
+          Afterwards, enable two-factor authentication under <strong>Settings</strong>.
+        </p>
+      </div>
+    {/if}
     <!-- Account -->
     <section class="card">
       <div class="card-header">

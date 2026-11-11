@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,7 +126,8 @@ func (hc *HealthChecker) checkServer(ctx context.Context, srv store.Server) {
 	// Check for valid JSON response with status "ok"
 	var healthResp struct {
 		Data struct {
-			Status string `json:"status"`
+			Status  string `json:"status"`
+			Version string `json:"version"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &healthResp); err != nil {
@@ -144,7 +146,41 @@ func (hc *HealthChecker) checkServer(ctx context.Context, srv store.Server) {
 		status = "online"
 	}
 
+	if healthResp.Data.Version != "" && healthResp.Data.Version != srv.AgentVersion.String {
+		if err := hc.store.Servers.UpdateAgentVersion(ctx, srv.ID, healthResp.Data.Version); err != nil {
+			slog.Warn("healthcheck: store agent version", "server_id", srv.ID, "error", err)
+		}
+	}
+
+	// /health is public: an agent with a different token still answers it.
+	// Check the token too, so a typo in agent.env shows up as "unauthorized"
+	// instead of a server that looks online while every task fails.
+	if status != "offline" && hc.tokenRejected(ctx, srv) {
+		status = "unauthorized"
+	}
+
 	hc.updateAndAlert(ctx, srv, status, latencyMs)
+}
+
+// tokenRejected reports whether the agent refuses the panel's token. Agents
+// older than v1.6.1 have no /auth/check (404); they are not judged.
+func (hc *HealthChecker) tokenRejected(ctx context.Context, srv store.Server) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(srv.AgentURL.String, "/")+"/auth/check", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+srv.AgentToken)
+	resp, err := hc.client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		slog.Warn("healthcheck: agent rejects the panel's token", "server_id", srv.ID, "name", srv.Name)
+		return true
+	}
+	return false
 }
 
 func (hc *HealthChecker) updateAndAlert(ctx context.Context, srv store.Server, status string, latencyMs int64) {
@@ -175,6 +211,11 @@ func (hc *HealthChecker) updateAndAlert(ctx context.Context, srv store.Server, s
 		sender := notify.NewSender(hc.store)
 		sender.Send(ctx, "warning", "Server Offline", "Server '"+srv.Name+"' ("+srv.Hostname+") is unreachable")
 		slog.Warn("healthcheck: server went offline", "server_id", srv.ID, "name", srv.Name, "previous", previousStatus)
+	}
+
+	if status == "unauthorized" && previousStatus != "unauthorized" {
+		sender := notify.NewSender(hc.store)
+		sender.Send(ctx, "warning", "Agent token rejected", "Server '"+srv.Name+"' ("+srv.Hostname+") answers but rejects the panel's agent token; update SIGARDAPANEL_AGENT_TOKEN in its /etc/sigardapanel/agent.env")
 	}
 
 	// Alert if server recovered from offline

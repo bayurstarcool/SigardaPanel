@@ -270,6 +270,14 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 		}
 		slog.Error("worker: job failed permanently", "id", job.ID, "error", execErr, "attempts", job.Attempts)
 
+		// A site whose creation failed must not stay "pending" forever: show
+		// it as failed so the operator sees it and can delete/recreate it.
+		if job.Type == jobmodel.TypeSiteCreate && job.SiteID.Valid {
+			if err := w.store.Sites.UpdateStatus(ctx, job.SiteID.Int64, "failed"); err != nil {
+				slog.Error("worker: mark site failed", "id", job.SiteID.Int64, "error", err)
+			}
+		}
+
 		// Failover: if backup.create failed with s3_config, retry without (local backup)
 		if job.Type == jobmodel.TypeBackupCreate {
 			var payloadData map[string]any
@@ -359,7 +367,10 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			site, err := w.store.Sites.GetByID(ctx, siteID)
 			if err == nil && site != nil && site.Domain != "" {
 				// Get owner email for Let's Encrypt
-				email := "admin@sigarda.com" // fallback
+				// No owner e-mail: the agent registers without a contact
+				// address (it used to register every install's Let's
+				// Encrypt account with a Sigarda address).
+				email := ""
 				if site.OwnerID.Valid {
 					owner, err := w.store.Users.GetByID(ctx, site.OwnerID.Int64)
 					if err == nil && owner != nil && owner.Email != "" {

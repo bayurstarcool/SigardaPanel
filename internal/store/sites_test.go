@@ -361,3 +361,40 @@ func TestSiteGenerateWebhookSecret(t *testing.T) {
 		t.Fatalf("expected webhook secret %s, got %v", secret, got.WebhookSecret)
 	}
 }
+
+// The delete handler queues site.delete before removing the row; that job is
+// what cleans the agent (vhost, files), so it must survive the delete.
+func TestSiteDelete_KeepsQueuedCleanupJob(t *testing.T) {
+	db := testDB(t)
+	servers := NewServerStore(db)
+	sites := NewSiteStore(db)
+	jobStore := NewJobStore(db)
+
+	srv := &Server{Name: "srv", Hostname: "srv.example.com", Status: "active", AgentToken: "tok"}
+	servers.Create(ctx, srv)
+	site := &Site{ServerID: srv.ID, Name: "A", Domain: "keep.example.com", Runtime: "static"}
+	sites.Create(ctx, site)
+
+	cleanup := &jobmodel.Job{
+		ServerID: sql.NullInt64{Int64: srv.ID, Valid: true},
+		SiteID:   sql.NullInt64{Int64: site.ID, Valid: true},
+		Type:     jobmodel.TypeSiteDelete,
+		Payload:  `{"site_id":1}`,
+	}
+	if err := jobStore.Create(ctx, cleanup); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := sites.Delete(ctx, site.ID); err != nil {
+		t.Fatalf("delete site: %v", err)
+	}
+	got, err := jobStore.GetByID(ctx, cleanup.ID)
+	if err != nil || got == nil {
+		t.Fatalf("site.delete job was removed with the site (err=%v)", err)
+	}
+	if got.SiteID.Valid {
+		t.Fatalf("cleanup job still points at the deleted site: %v", got.SiteID)
+	}
+	if got.Status != jobmodel.StatusQueued {
+		t.Fatalf("cleanup job status = %q, want queued", got.Status)
+	}
+}

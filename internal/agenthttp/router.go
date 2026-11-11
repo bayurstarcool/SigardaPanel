@@ -49,6 +49,7 @@ type Router struct {
 	allowStubSSL bool
 	stubDev      bool
 	testAuth     bool
+	certDir      string // placeholder certificate referenced by generated vhosts
 }
 
 // RouterOptions allows overriding router defaults for testing.
@@ -62,6 +63,9 @@ type RouterOptions struct {
 	AllowStubSSL   bool
 	StubDev        bool
 	Executor       *executor.Executor
+	// DefaultCertDir overrides where the placeholder vhost certificate is
+	// created (default /etc/nginx/ssl).
+	DefaultCertDir string
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -89,6 +93,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		siteRootDir:  config.AgentSiteRoot(),
 		allowStubSSL: config.AgentAllowStubSSL(),
 		stubDev:      os.Getenv("SIGARDAPANEL_DEV") == "true",
+		certDir:      defaultSSLCertDir,
 	}
 	if opts != nil {
 		// RouterOptions is test/dependency-injection surface. Keep production
@@ -122,12 +127,19 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		if opts.Executor != nil {
 			r.executor = opts.Executor
 		}
+		// Injected routers (tests) never write into the real /etc/nginx/ssl.
+		r.certDir = filepath.Join(os.TempDir(), "sigardapanel-agent-test-ssl")
+		if opts.DefaultCertDir != "" {
+			r.certDir = opts.DefaultCertDir
+		}
 	}
 
 	e.GET("/health", healthHandler)
 	// /metrics forks several processes per call, so it requires the agent token.
 	e.GET("/metrics", r.metricsHandler, r.requireAgentAuth)
 	e.GET("/capabilities", capabilitiesHandler)
+	// /auth/check lets the panel tell "agent up" from "agent accepts our token".
+	e.GET("/auth/check", authCheckHandler, r.requireAgentAuth)
 
 	// WebSocket terminal endpoint (auth via query param or header)
 	e.GET("/ws/terminal", r.terminalWebSocket, r.requireAgentAuth)
@@ -263,6 +275,13 @@ func (r *Router) requireAgentAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 		return next(c)
 	}
+}
+
+func authCheckHandler(c echo.Context) error {
+	return c.JSON(http.StatusOK, httpjson.Success{
+		Data:      map[string]any{"ok": true, "version": buildinfo.Version},
+		RequestID: "",
+	})
 }
 
 func healthHandler(c echo.Context) error {
@@ -585,7 +604,15 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "config gen failed: "+err.Error())
 	}
 
+	// Every generated vhost listens on 443 with the placeholder certificate
+	// until Let's Encrypt replaces it; a fresh server does not have one yet.
+	if err := ensureDefaultSSLCert(r.certDir); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "prepare default certificate: "+err.Error())
+	}
+
 	nginxConfigPath := filepath.Join(r.nginxConfDir, payload.Domain+".conf")
+	previousConfig, readErr := os.ReadFile(nginxConfigPath)
+	hadPreviousConfig := readErr == nil
 	if err := r.executor.WriteFile(ctx, nginxConfigPath, config, 0644); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "write nginx config failed: "+err.Error())
 	}
@@ -600,7 +627,14 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 	// 4. Test nginx config
 	output, err := r.executor.RunShell(ctx, "nginx", "-t")
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "nginx test failed: "+strings.TrimSpace(output))
+		// Never leave a vhost behind that breaks "nginx -t": the next nginx
+		// restart (or reboot) would take every site on the server down.
+		if hadPreviousConfig {
+			_ = r.executor.WriteFile(ctx, nginxConfigPath, string(previousConfig), 0644)
+		} else {
+			_ = os.Remove(nginxConfigPath)
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "nginx test failed, vhost not installed: "+strings.TrimSpace(output))
 	}
 
 	slog.Info("agent: site.create", "site_id", payload.SiteID, "domain", payload.Domain, "runtime", payload.Runtime)
@@ -1106,6 +1140,30 @@ func (r *Router) nginxReloadTask(c echo.Context) error {
 	})
 }
 
+// acmeContactUsable reports whether Let's Encrypt would accept email as the
+// account contact: it needs a public-looking domain (localhost, .local,
+// .test and similar are refused by the ACME server).
+func acmeContactUsable(email string) bool {
+	at := strings.LastIndex(email, "@")
+	if at <= 0 || at == len(email)-1 || strings.ContainsAny(email, " \t\r\n") {
+		return false
+	}
+	domain := strings.ToLower(strings.TrimSuffix(email[at+1:], "."))
+	if !strings.Contains(domain, ".") {
+		return false
+	}
+	for _, suffix := range []string{".localhost", ".local", ".localdomain", ".test", ".invalid", ".example", ".internal", ".lan"} {
+		if strings.HasSuffix(domain, suffix) {
+			return false
+		}
+	}
+	switch domain {
+	case "example.com", "example.org", "example.net":
+		return false
+	}
+	return true
+}
+
 func (r *Router) sslIssueTask(c echo.Context) error {
 	var payload struct {
 		SiteID int64  `json:"site_id"`
@@ -1141,16 +1199,17 @@ func (r *Router) sslIssueTask(c echo.Context) error {
 	r.executor.Mkdir(ctx, webrootPath)
 
 	// Use webroot mode (does NOT modify nginx config — prevents redirect loop)
-	output, err := r.executor.RunShell(ctx, "certbot",
-		"certonly",
-		"--webroot",
-		"-w", webrootPath,
-		"-d", payload.Domain,
-		"--email", payload.Email,
-		"--agree-tos",
-		"--no-eff-email",
-		"--non-interactive",
-	)
+	args := []string{"certonly", "--webroot", "-w", webrootPath, "-d", payload.Domain}
+	if acmeContactUsable(payload.Email) {
+		args = append(args, "--email", payload.Email, "--no-eff-email")
+	} else {
+		// Let's Encrypt rejects addresses such as admin@localhost (the
+		// installer's default), which failed every site certificate.
+		slog.Warn("agent: ssl.issue without contact e-mail", "domain", payload.Domain, "email", payload.Email)
+		args = append(args, "--register-unsafely-without-email")
+	}
+	args = append(args, "--agree-tos", "--non-interactive")
+	output, err := r.executor.RunShell(ctx, "certbot", args...)
 
 	if err != nil {
 		// webroot failed — likely Cloudflare proxy blocking. Return error, don't fallback to --nginx

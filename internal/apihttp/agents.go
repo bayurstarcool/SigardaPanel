@@ -18,6 +18,7 @@ import (
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/buildinfo"
+	"sigardapanel/internal/config"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -68,12 +69,25 @@ func (h *agentHandler) createRegistrationToken(c echo.Context) error {
 		"expires_at": expiresAt,
 	})
 
+	data := map[string]any{
+		"token":                rawToken,
+		"token_id":             rt.ID,
+		"expires_at":           expiresAt,
+		"allow_private_agents": config.AllowPrivateAgents(),
+		"agent_version":        agentReleaseTag(),
+	}
+	if panelURL, err := installerPanelURL(); err == nil {
+		data["panel_url"] = panelURL
+		// The token travels in a header (never in the URL, which ends up in
+		// shell history and proxy logs only as the path).
+		data["install_command"] = "curl -fsSL -H " + shellQuote("X-Sigarda-Registration-Token: "+rawToken) + " " +
+			shellQuote(panelURL+"/api/v1/agents/install") + " | sudo bash"
+	} else {
+		data["installer_error"] = err.Error()
+	}
+
 	return c.JSON(http.StatusCreated, httpjson.Success{
-		Data: map[string]any{
-			"token":      rawToken,
-			"token_id":   rt.ID,
-			"expires_at": expiresAt,
-		},
+		Data:      data,
 		RequestID: rid,
 	})
 }
@@ -127,7 +141,10 @@ func (h *agentHandler) registerAgent(c echo.Context) error {
 	// Prefer the explicitly reported, validated address. Do not derive the
 	// privileged callback target from spoofable forwarded-client headers.
 	callbackIP := net.ParseIP(req.IPAddress)
-	if !isAllowedAgentCallbackIP(callbackIP) {
+	if !isAllowedAgentCallbackIP(callbackIP, config.AllowPrivateAgents()) {
+		if callbackIP != nil && callbackIP.IsPrivate() {
+			return echo.NewHTTPError(http.StatusBadRequest, "ip_address is a private address; set SIGARDAPANEL_ALLOW_PRIVATE_AGENTS=true in the panel's panel.env to register agents on a private network")
+		}
 		return echo.NewHTTPError(http.StatusBadRequest, "ip_address must be a global-unicast callback address")
 	}
 	agentHost := callbackIP.String()
@@ -169,8 +186,17 @@ func (h *agentHandler) registerAgent(c echo.Context) error {
 	})
 }
 
-func isAllowedAgentCallbackIP(ip net.IP) bool {
-	return ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast()
+// isAllowedAgentCallbackIP decides which address a self-registering agent may
+// make the panel call back to. Loopback, link-local (cloud metadata),
+// multicast and unspecified addresses are never allowed. Private (RFC 1918 /
+// ULA) addresses only when the operator opted in with
+// SIGARDAPANEL_ALLOW_PRIVATE_AGENTS, because a registration-token holder
+// could otherwise point the panel at internal services.
+func isAllowedAgentCallbackIP(ip net.IP, allowPrivate bool) bool {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	return allowPrivate || !ip.IsPrivate()
 }
 
 // --- Public: Serve Install Script ---
@@ -183,18 +209,31 @@ func (h *agentHandler) installScript(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "X-Sigarda-Registration-Token header required")
 	}
 
-	panelURL := strings.TrimSpace(os.Getenv("SIGARDAPANEL_PUBLIC_URL"))
-	parsed, err := url.Parse(panelURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return echo.NewHTTPError(http.StatusServiceUnavailable, "SIGARDAPANEL_PUBLIC_URL must be a clean https URL")
+	panelURL, err := installerPanelURL()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
 	}
-	panelURL = strings.TrimRight(parsed.String(), "/")
+	allowPrivate := "0"
+	if config.AllowPrivateAgents() {
+		allowPrivate = "1"
+	}
 
-	script := fmt.Sprintf(installScriptTemplate, shellQuote(panelURL), shellQuote(token), shellQuote(agentReleaseTag()), shellQuote(releasePublicKey))
+	script := fmt.Sprintf(installScriptTemplate, shellQuote(panelURL), shellQuote(token), shellQuote(agentReleaseTag()), shellQuote(releasePublicKey), shellQuote(allowPrivate))
 
 	c.Response().Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	c.Response().Header().Set("Content-Disposition", "attachment; filename=\"install-agent.sh\"")
 	return c.String(http.StatusOK, script)
+}
+
+// installerPanelURL returns SIGARDAPANEL_PUBLIC_URL when the one-line agent
+// installer can use it: the script talks to the panel over verified HTTPS.
+func installerPanelURL() (string, error) {
+	panelURL := strings.TrimSpace(os.Getenv("SIGARDAPANEL_PUBLIC_URL"))
+	parsed, err := url.Parse(panelURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("SIGARDAPANEL_PUBLIC_URL must be a clean https URL")
+	}
+	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 // statusDashboard serves the version-matched SSH dashboard used by agent installers.
@@ -225,8 +264,10 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// installScriptTemplate is the bash install script with four %s placeholders:
-// PANEL_URL, REGISTRATION_TOKEN, RELEASE_TAG, minisign PUBKEY (all shell-quoted).
+// installScriptTemplate is the bash install script with five %s placeholders:
+// PANEL_URL, REGISTRATION_TOKEN, RELEASE_TAG, minisign PUBKEY and
+// ALLOW_PRIVATE ("1" when the panel accepts private callback IPs), all
+// shell-quoted.
 const installScriptTemplate = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -235,10 +276,19 @@ PANEL_URL=%s
 REG_TOKEN=%s
 RELEASE_TAG=%s
 PUBKEY=%s
+ALLOW_PRIVATE=%s
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sigardapanel"
-SITE_ROOT="${SIGARDAPANEL_AGENT_SITE_ROOT:-/var/www}"
+# Optional allowed root for site files. Empty (the default, like on the panel
+# host) allows the panel's /home/<user>/htdocs/<domain> layout.
+SITE_ROOT="${SIGARDAPANEL_AGENT_SITE_ROOT:-}"
 SERVICE_NAME="sigardapanel-agent"
+# Requests to the panel use verified HTTPS. A panel with a private CA or a
+# self-signed certificate: SIGARDAPANEL_PANEL_CA=/path/to/panel.crt
+PANEL_CURL=(curl --proto '=https' --proto-redir '=https' --tlsv1.2)
+if [ -n "${SIGARDAPANEL_PANEL_CA:-}" ]; then
+    PANEL_CURL+=(--cacert "$SIGARDAPANEL_PANEL_CA")
+fi
 
 echo "╔══════════════════════════════════════════════════╗"
 echo "║       SigardaPanel Agent Installer              ║"
@@ -262,15 +312,15 @@ fi
 echo "Detected OS: $OS"
 
 # ── Install dependencies ──
-echo "[1/7] Installing dependencies..."
+echo "[1/6] Installing dependencies..."
 case "$OS" in
     ubuntu|debian)
         apt-get update -qq
-        apt-get install -y -qq nginx tar git curl jq openssl ca-certificates minisign > /dev/null 2>&1
+        apt-get install -y -qq nginx tar git curl jq openssl ca-certificates minisign python3 > /dev/null 2>&1
         apt-get install -y -qq certbot python3-certbot-nginx > /dev/null 2>&1 || echo "  certbot install failed (optional)"
         ;;
     centos|rhel|fedora|rocky|almalinux)
-        yum install -y -q nginx tar git curl jq openssl ca-certificates 2>/dev/null
+        yum install -y -q nginx tar git curl jq openssl ca-certificates python3 2>/dev/null
         yum install -y -q minisign 2>/dev/null || true
         yum install -y -q certbot 2>/dev/null || echo "  certbot install failed (optional)"
         ;;
@@ -281,31 +331,41 @@ case "$OS" in
 esac
 
 # ── Generate agent token ──
-echo "[2/7] Generating agent token..."
+echo "[2/6] Generating agent token..."
 AGENT_TOKEN=$(openssl rand -hex 32)
 echo "  Agent token generated."
 
 # ── Get server info ──
-echo "[3/7] Detecting server info..."
-SERVER_IP=${SIGARDAPANEL_AGENT_PUBLIC_IP:-$(curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --max-time 5 https://icanhazip.com 2>/dev/null)}
+echo "[3/6] Detecting server info..."
+# SIGARDAPANEL_AGENT_IP: the address the panel should use to reach this agent
+# (e.g. the private/VPC address). Default: this server's public IP.
+SERVER_IP=${SIGARDAPANEL_AGENT_IP:-${SIGARDAPANEL_AGENT_PUBLIC_IP:-$(curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --max-time 5 https://icanhazip.com 2>/dev/null)}}
 HOSTNAME=$(hostname -f 2>/dev/null || hostname)
-if ! python3 - "$SERVER_IP" <<'PYIP'
+if ! python3 - "$SERVER_IP" "$ALLOW_PRIVATE" <<'PYIP'
 import ipaddress, sys
 try:
     ip = ipaddress.ip_address(sys.argv[1].strip())
 except ValueError:
     raise SystemExit(1)
-raise SystemExit(0 if ip.is_global else 1)
+if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+    raise SystemExit(1)
+raise SystemExit(0 if ip.is_global or (sys.argv[2] == "1" and ip.is_private) else 1)
 PYIP
 then
-    echo "Error: callback must be a global-unicast IP; set SIGARDAPANEL_AGENT_PUBLIC_IP" >&2
+    echo "Error: '$SERVER_IP' cannot be used as the agent address." >&2
+    if [ "$ALLOW_PRIVATE" = "1" ]; then
+        echo "  Set SIGARDAPANEL_AGENT_IP to a public or private (VPC) address of this server." >&2
+    else
+        echo "  Set SIGARDAPANEL_AGENT_IP to this server's public address. Private/VPC addresses" >&2
+        echo "  need SIGARDAPANEL_ALLOW_PRIVATE_AGENTS=true on the panel (see docs/INSTALL.md)." >&2
+    fi
     exit 1
 fi
 echo "  Hostname: $HOSTNAME"
 echo "  IP: $SERVER_IP"
 
 # ── Download binary ──
-echo "[5/7] Downloading agent binary..."
+echo "[4/6] Downloading agent binary..."
 case "$(uname -m)" in
     x86_64|amd64) ARCH=amd64 ;;
     aarch64|arm64) ARCH=arm64 ;;
@@ -379,29 +439,31 @@ else
 fi
 
 # ── Create config ──
-echo "[6/7] Creating configuration..."
+echo "[5/6] Creating configuration..."
 mkdir -p "$CONFIG_DIR"
-mkdir -p "$SITE_ROOT"
+[ -z "$SITE_ROOT" ] || mkdir -p "$SITE_ROOT"
 cat > "$CONFIG_DIR/agent.env" <<ENVEOF
 SIGARDAPANEL_AGENT_ADDR=:7710
 SIGARDAPANEL_PANEL_URL=$PANEL_URL
 SIGARDAPANEL_AGENT_TOKEN=$AGENT_TOKEN
-SIGARDAPANEL_AGENT_SITE_ROOT=$SITE_ROOT
 SIGARDAPANEL_AGENT_ALLOW_STUB_SSL=false
 ENVEOF
+if [ -n "$SITE_ROOT" ]; then
+    echo "SIGARDAPANEL_AGENT_SITE_ROOT=$SITE_ROOT" >> "$CONFIG_DIR/agent.env"
+fi
 chmod 600 "$CONFIG_DIR/agent.env"
 
 # ── Install SSH status dashboard ──
 DASHBOARD_TMP=$(mktemp)
 
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --retry 3 "$PANEL_URL/api/v1/agents/status-dashboard" -o "$DASHBOARD_TMP"
+"${PANEL_CURL[@]}" -fsSL --retry 3 "$PANEL_URL/api/v1/agents/status-dashboard" -o "$DASHBOARD_TMP"
 printf '%%s  %%s\n' '9d4650c2d78fa71bbc19fdd1001717d599f6fd7badbac6bef662ca8c6490d58c' "$DASHBOARD_TMP" | sha256sum -c -
 bash -n "$DASHBOARD_TMP"
 install -o root -g root -m 0755 "$DASHBOARD_TMP" /etc/profile.d/sigardapanel-info.sh
 ln -sfn /etc/profile.d/sigardapanel-info.sh /usr/local/bin/sigardapanel-info
 
 # ── Create systemd service ──
-echo "[7/7] Setting up systemd service..."
+echo "[6/6] Setting up systemd service..."
 cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SVCEOF
 [Unit]
 Description=SigardaPanel Agent
@@ -429,8 +491,8 @@ systemctl restart "$SERVICE_NAME"
 sleep 2
 if systemctl is-active --quiet "$SERVICE_NAME" && curl -fsS --max-time 3 http://127.0.0.1:7710/health >/dev/null; then
 # ── Register with panel ──
-echo "[4/7] Registering with panel..."
-REGISTER_RESPONSE=$(curl --proto '=https' --proto-redir '=https' --tlsv1.2 -sf -X POST "$PANEL_URL/api/v1/agents/register" \
+echo "Registering with the panel..."
+REGISTER_RESPONSE=$("${PANEL_CURL[@]}" -sS -X POST "$PANEL_URL/api/v1/agents/register" \
     -H "Content-Type: application/json" \
     -d "$(jq -n --arg registration_token "$REG_TOKEN" --arg hostname "$HOSTNAME" \
         --arg ip_address "$SERVER_IP" --arg agent_token "$AGENT_TOKEN" \
@@ -458,6 +520,9 @@ echo "  Registered! Server ID: $SERVER_ID"
     echo "  Status:  systemctl status $SERVICE_NAME"
     echo "  Logs:    journalctl -u $SERVICE_NAME -f"
     echo "  Health:  curl http://localhost:7710/health"
+    echo ""
+    echo "  The agent listens on port 7710 on all interfaces. Allow it only from"
+    echo "  the panel, e.g.: ufw allow from <panel-ip> to any port 7710 proto tcp"
     ROLLBACK_ACTIVE=0
     rm -rf "$ROLLBACK_DIR" "$INSTALL_DIR/.sigardapanel.previous"
 else

@@ -120,7 +120,9 @@ func (h *sslHandler) issue(c echo.Context) error {
 		"email": email,
 	})
 
-	h.store.NotifySiteUsers(c.Request().Context(), site.ID, "ssl_issued", "SSL Certificate Issued", fmt.Sprintf("SSL issued for %s", site.Domain), "success", "site", site.ID)
+	// The certificate is only requested here; the job may still fail (DNS,
+	// rate limits), so do not announce it as issued.
+	h.store.NotifySiteUsers(c.Request().Context(), site.ID, "ssl_issued", "SSL certificate requested", fmt.Sprintf("Let's Encrypt certificate requested for %s (see Jobs for the result)", site.Domain), "info", "site", site.ID)
 
 	return c.JSON(http.StatusAccepted, httpjson.Success{
 		Data: map[string]any{
