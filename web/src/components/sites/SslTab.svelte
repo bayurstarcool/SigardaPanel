@@ -38,13 +38,24 @@
         const st = d?.status || '';
         if (st === 'succeeded') return 'success';
         if (st === 'failed') return `error: ${d?.error || 'Job failed'}`;
+        if (st === 'canceled') return 'error: Job was canceled';
       } catch {}
     }
     return 'timeout: Job still processing, check later';
   }
 
+  // Last failed SSL job: certbot output can be long, so it is shown inline
+  // (collapsible) rather than in a five-second toast.
+  let lastError = $state<{ jobId: number; text: string } | null>(null);
+
+  function reportJobError(jobId: number, result: string, what: string) {
+    lastError = { jobId, text: result.replace(/^error: /, '') };
+    toasts.error(`${what} failed — see details in the SSL tab.`);
+  }
+
   async function issueSSL() {
     sslBusy = true;
+    lastError = null;
     try {
       const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/ssl/issue`);
       const jobId = d?.job_id;
@@ -57,7 +68,7 @@
         await loadSSL();
         toasts.success('SSL certificate issued successfully!');
       } else if (result.startsWith('error')) {
-        toasts.error(result.replace(/^error: /, ''));
+        reportJobError(jobId, result, 'SSL issue');
       } else {
         toasts.info(result.replace(/^(timeout|info): /, ''));
       }
@@ -68,6 +79,7 @@
 
   async function renewSSL() {
     sslBusy = true;
+    lastError = null;
     try {
       const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/ssl/renew`);
       const jobId = d?.job_id;
@@ -79,7 +91,7 @@
         await loadSSL();
         toasts.success('SSL certificate renewed successfully!');
       } else if (result.startsWith('error')) {
-        toasts.error(result.replace(/^error: /, ''));
+        reportJobError(jobId, result, 'SSL renewal');
       } else {
         toasts.info(result.replace(/^(timeout|info): /, ''));
       }
@@ -131,6 +143,20 @@
           <RefreshCw size={14} class={sslBusy ? 'animate-spin' : ''} /> Renew
         </button>
       </div>
+      {#if lastError}
+        {@const firstLine = lastError.text.split('\n').find((l) => l.trim()) ?? lastError.text}
+        <div class="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3" role="alert">
+          <p class="text-[13px] font-medium text-danger">Job #{lastError.jobId} failed</p>
+          <p class="mt-0.5 font-mono text-xs wrap-anywhere text-fg">{firstLine}</p>
+          {#if lastError.text.trim() !== firstLine.trim()}
+            <details class="mt-2">
+              <summary class="cursor-pointer text-xs font-medium text-muted hover:text-fg">Full output</summary>
+              <pre class="mt-2 max-h-72 overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-fg">{lastError.text}</pre>
+            </details>
+          {/if}
+          <a href="/jobs" class="link mt-2 inline-block text-xs">Open jobs</a>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}
