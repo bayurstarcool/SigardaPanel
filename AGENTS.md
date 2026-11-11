@@ -31,16 +31,21 @@ Agent (:7710) per VPS
 ## Quick Start (Dev Mode)
 
 ```bash
-cd SigardaPanel-Enterprise
-./sigardapanel dev
+go build -o sigardapanel ./cmd/sigardapanel
+SIGARDAPANEL_DEV=true ./sigardapanel init --user admin   # first account (prompts for a password)
+SIGARDAPANEL_DEV=true ./sigardapanel dev
 ```
 
 Frontend: `cd web && npx vite dev --host 0.0.0.0 --port 7720`
 
-## Default Credentials
+Full dev setup: [docs/GUIDE.md](docs/GUIDE.md). Production installs: [docs/INSTALL.md](docs/INSTALL.md).
 
-- Username: `admin`
-- Password: `admin123`
+## Credentials
+
+No account is seeded. In development create one with `sigardapanel init`
+(local dev databases conventionally use `admin` / `admin123`). Production
+installs get a random password from `install.sh` (or `ADMIN_PASS`), and the
+first account is `super_admin`. Never document or ship a default password.
 
 ## User-Site Isolation Model
 
@@ -572,12 +577,12 @@ switching requires re-encrypting those values.
 ## Repositories
 
 - **Public (open source — full source + signed releases)**: github.com/bayurstarcool/SigardaPanel — `main` is the source of truth
-- **Enterprise (internal deployment flow)**: github.com/bayurstarcool/SigardaPanel-Enterprise
+- The former private `SigardaPanel-Enterprise` repository is retired; do not reference it in docs.
 
 ## GitHub Releases
 
 Binary releases: https://github.com/bayurstarcool/SigardaPanel/releases
-Latest: v1.2.0 — HttpOnly cookie sessions, registration toggle
+Latest: v1.5.0 (always check the releases page; install/update with `install.sh`, see docs/INSTALL.md)
 
 Recent security/stability releases: v1.1.1 file-manager upload traversal fix;
 v1.1.2 worker panic recovery + rate-limiter/error hygiene; v1.1.3 site deletion
