@@ -41,7 +41,7 @@ func TestGeneratedAgentInstallerDoesNotUseMissingDownloadEndpoint(t *testing.T) 
 
 func TestGeneratedAgentInstallerShellQuotesDynamicValues(t *testing.T) {
 	for _, bad := range []string{`x"; touch /tmp/pwned; #`, `$(touch /tmp/pwned)`, "`touch /tmp/pwned`", `x'; touch /tmp/pwned; #`} {
-		script := fmt.Sprintf(installScriptTemplate, shellQuote(bad), shellQuote(bad), shellQuote("v1.5.0"), shellQuote(releasePublicKey))
+		script := fmt.Sprintf(installScriptTemplate, shellQuote(bad), shellQuote(bad), shellQuote("v1.5.0"), shellQuote(releasePublicKey), shellQuote("0"))
 		out, err := exec.Command("bash", "-c", script[:strings.Index(script, "INSTALL_DIR=")]+`printf '%s\n%s' "$PANEL_URL" "$REG_TOKEN"`).CombinedOutput()
 		if err != nil || string(out) != bad+"\n"+bad {
 			t.Fatalf("value %q did not survive as a literal: %q (%v)", bad, out, err)
