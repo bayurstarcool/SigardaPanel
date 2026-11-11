@@ -15,6 +15,8 @@ import (
 // setupMockAPI creates a mock API server and saves it as the configured URL
 func setupMockAPI(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
+	// Per-test config dir: never read or delete the real ~/.config/sigardapanel.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
