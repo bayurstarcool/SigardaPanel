@@ -69,6 +69,10 @@ Flags (import-sites):
 		return 0
 	}
 
+	if len(args) > 1 && isHelpArg(args[1:]) {
+		// Never run a scan/import when only help was asked for.
+		return a.CloudPanel(nil)
+	}
 	switch args[0] {
 	case "scan":
 		return a.cloudpanelScan(args[1:])

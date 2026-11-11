@@ -293,6 +293,7 @@ func TestHelpExitCodes(t *testing.T) {
 	t.Setenv("SIGARDAPANEL_API_ADDR", "127.0.0.1:1")
 	for _, args := range [][]string{
 		{"install", "--help"}, {"api", "-h"}, {"agent", "--help"}, {"dev", "help"},
+		{"docker", "compose", "--help"}, {"cloudpanel", "scan", "--help"}, {"cloudpanel", "import-site", "-h"},
 		{"help"}, {"site", "--help"}, {"apikey", "help"}, {"audit", "purge", "--help"},
 		{"job", "watch", "-h"}, {"db", "user", "create", "--help"}, {"login", "--help"},
 	} {

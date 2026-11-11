@@ -286,6 +286,10 @@ func (a *App) dockerCompose(args []string) int {
 		fmt.Fprintln(a.stderr, "usage: docker compose up|down --server ID [--path PATH]")
 		return 2
 	}
+	if args[0] != "up" && args[0] != "down" && isHelpArg(args[:1]) {
+		fmt.Fprintln(a.stdout, "usage: sigardapanel docker compose up|down --server ID [--path FILE] [--build]")
+		return exitOK
+	}
 
 	flags := a.newFlags("docker compose", "up|down --server ID [--path FILE] [--build]")
 	serverID := flags.Int64("server", 0, "server ID (required)")
