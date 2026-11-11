@@ -123,9 +123,9 @@ func (s *SQLiteSiteStore) Create(ctx context.Context, site *Site) error {
 	}
 
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO sites (server_id, name, domain, runtime, root_path, status, owner_id, ssl_status, managed_by, system_user, conf_file, proxy_pass_url, app_port, app_command, app_status, app_memory_max, php_version, php_ini) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO sites (server_id, name, domain, runtime, root_path, status, owner_id, ssl_status, ssl_issuer, ssl_expires_at, managed_by, system_user, conf_file, proxy_pass_url, app_port, app_command, app_status, app_memory_max, php_version, php_ini) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		site.ServerID, site.Name, site.Domain, site.Runtime, site.RootPath, site.Status, site.OwnerID, site.SSLStatus,
-		site.ManagedBy, site.SystemUser, site.ConfFile, site.ProxyPassURL, site.AppPort, site.AppCommand, site.AppStatus, site.AppMemoryMax, site.PHPVersion, site.PHPIni,
+		site.SSLIssuer, nullTimeUTC(site.SSLExpiresAt), site.ManagedBy, site.SystemUser, site.ConfFile, site.ProxyPassURL, site.AppPort, site.AppCommand, site.AppStatus, site.AppMemoryMax, site.PHPVersion, site.PHPIni,
 	)
 	if err != nil {
 		return fmt.Errorf("insert site: %w", err)
@@ -289,13 +289,25 @@ func (s *SQLiteSiteStore) UpdateConfFile(ctx context.Context, id int64, confFile
 	return nil
 }
 
+// nullTimeUTC converts an optional timestamp to the canonical UTC text form
+// ("2006-01-02 15:04:05") or NULL. Never pass a time.Time straight to the
+// driver: it is stored as time.String(), e.g.
+// "2026-12-04 11:41:55.264167352 +0000 UTC m=+7776485.03", which does not
+// compare correctly with CURRENT_TIMESTAMP-style values.
+func nullTimeUTC(t sql.NullTime) any {
+	if !t.Valid || t.Time.IsZero() {
+		return nil
+	}
+	return sqliteUTC(t.Time)
+}
+
 // UpdateSSL updates the SSL-related fields of a site.
 func (s *SQLiteSiteStore) UpdateSSL(ctx context.Context, id int64, status, issuer string, expiresAt time.Time) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sites SET ssl_status = ?, ssl_issuer = ?, ssl_expires_at = ?, ssl_last_check = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		// Stored as UTC text so it compares correctly with CURRENT_TIMESTAMP and
 		// the cutoffs above regardless of the host's time zone.
-		status, issuer, expiresAt.UTC().Format("2006-01-02 15:04:05"), id,
+		status, issuer, sqliteUTC(expiresAt), id,
 	)
 	if err != nil {
 		return fmt.Errorf("update site ssl: %w", err)
