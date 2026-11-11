@@ -168,16 +168,26 @@ sudo bash install.sh update</code></pre>
         <p class="mt-1.5 mb-2 text-muted">Add, monitor, and manage your VPS fleet.</p>
 
         <h3 class="mt-8 mb-3 text-base font-semibold text-fg">Adding a Server</h3>
+        <p class="mb-3 leading-relaxed text-muted">
+          The panel host is managed from the start as <strong>Local Server</strong>. To add another machine open
+          <strong>Servers → Add server</strong>:
+        </p>
+        <ul class="mb-4 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-muted">
+          <li><strong>Install command</strong> (recommended): generates a one-time command (valid for one hour) that you run as root on a fresh Ubuntu/Debian server. It installs the agent of the panel's version, verifies the signed release and registers the server automatically. It needs the panel to have an <code class="code">https://</code> <code class="code">SIGARDAPANEL_PUBLIC_URL</code>; servers on a private network additionally need <code class="code">SIGARDAPANEL_ALLOW_PRIVATE_AGENTS=true</code> on the panel.</li>
+          <li><strong>Manual setup</strong>: register the server with its agent URL, then install the binary and write <code class="code">/etc/sigardapanel/agent.env</code> with the token shown once.</li>
+        </ul>
+        <p class="mb-3 text-sm leading-relaxed text-muted">Allow port 7710 on the new server only from the panel. Step by step: <a class="link" href="https://github.com/bayurstarcool/SigardaPanel/blob/main/docs/INSTALL.md#adding-remote-servers" target="_blank" rel="noopener noreferrer">Adding remote servers</a>.</p>
         <div class="mb-4 rounded-lg border border-line bg-surface-2 p-4">
-          <pre class="overflow-x-auto font-mono text-[13px] leading-relaxed text-fg"><code># Via CLI
-sigardapanel server add --name "Production" --hostname prod.example.com --ip 1.2.3.4
+          <pre class="overflow-x-auto font-mono text-[13px] leading-relaxed text-fg"><code># Manual registration via CLI
+sigardapanel server add --name "Production" --hostname prod.example.com --ip 1.2.3.4 \
+  --agent-url http://1.2.3.4:7710
 
 # Output:
-# server created (id=1)
+# server created (id=2)
 # name: Production
 # hostname: prod.example.com
 # agent_token: abc123def456...
-# 
+#
 # save this token — it won't be shown again</code></pre>
         </div>
 
@@ -192,7 +202,7 @@ sigardapanel server add --name "Production" --hostname prod.example.com --ip 1.2
 
         <h3 class="mt-8 mb-3 text-base font-semibold text-fg">Update Server</h3>
         <div class="mb-4 rounded-lg border border-line bg-surface-2 p-4">
-          <pre class="overflow-x-auto font-mono text-[13px] leading-relaxed text-fg"><code>sigardapanel server update --id 1 --name "Production Server" --status active
+          <pre class="overflow-x-auto font-mono text-[13px] leading-relaxed text-fg"><code>sigardapanel server update 2 --name "Production Server" --agent-url http://10.0.0.5:7710
 
 # Output:
 # server updated (id=1)
@@ -206,7 +216,9 @@ sigardapanel server add --name "Production" --hostname prod.example.com --ip 1.2
           <span class="badge badge-success">Online (&lt;1s)</span>
           <span class="badge badge-warning">Degraded (&gt;1s)</span>
           <span class="badge badge-danger">Offline</span>
+          <span class="badge badge-danger">Token rejected</span>
         </div>
+        <p class="mt-3 text-sm leading-relaxed text-muted"><em>Token rejected</em> means the agent answers but its <code class="code">SIGARDAPANEL_AGENT_TOKEN</code> differs from the panel's (for example after <strong>Edit → Regenerate</strong>). The servers list also flags agents that run a different version than the panel.</p>
       </section>
 
       <!-- Site Management -->
@@ -723,7 +735,7 @@ sigardapanel redis flush --server 1</code></pre>
             <ul class="space-y-1 text-sm leading-relaxed text-muted">
               <li>1. Check agent is running: <code class="code">systemctl status sigardapanel-agent</code></li>
               <li>2. Check port 7710 is open: <code class="code">ss -tlnp | grep 7710</code></li>
-              <li>3. Check agent token matches panel config</li>
+              <li>3. "Token rejected": put the server's current token into its <code class="code">/etc/sigardapanel/agent.env</code> and restart the agent</li>
               <li>4. Check network connectivity from panel to agent</li>
             </ul>
           </div>

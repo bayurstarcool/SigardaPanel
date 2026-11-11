@@ -47,9 +47,9 @@ for a machine that already serves other sites through nginx.
 
 The installer installs these packages from the distribution:
 `nginx`, `nodejs` (>= 18.13, runs the prebuilt web bundle), `sqlite3`,
-`minisign`, `openssl`, `curl`, `ca-certificates`, `tar`; plus `certbot` and
-`python3-certbot-nginx` when you ask for a Let's Encrypt certificate, and `ufw`
-with `INSTALL_FIREWALL=yes`.
+`minisign`, `openssl`, `curl`, `ca-certificates`, `tar`, `certbot` and
+`python3-certbot-nginx` (Let's Encrypt certificates for the panel and for every
+site you create); plus `ufw` with `INSTALL_FIREWALL=yes`.
 
 ## Install
 
@@ -149,15 +149,20 @@ password is generated and printed once.
 ## First login
 
 1. Open the URL the installer printed: `https://<server-ip>` or `https://<DOMAIN>`.
-   Without a domain the certificate is self-signed, so the browser shows a warning.
+   Without a Let's Encrypt certificate it is self-signed, so the browser shows a warning.
 2. Log in with the printed username and password (also in `/root/.sigardapanel_admin_cred`).
    This account is the `super_admin`.
-3. Change the password under **Profile**, and enable two-factor authentication
-   under **Settings**.
+3. The panel asks for a new password first (**Profile**); it does the same for every
+   account an administrator creates. Then enable two-factor authentication under
+   **Settings → Two-factor authentication** and keep the recovery codes.
 4. Delete the credentials file: `sudo rm /root/.sigardapanel_admin_cred`.
+5. The panel host is already managed as **Local Server** (Servers page, online after
+   the first health check). Create sites on it right away, or
+   [add more servers](#adding-remote-servers).
 
 Public sign-up is **disabled** on installer-made panels
-(`SIGARDAPANEL_ALLOW_REGISTRATION=false`); create further accounts under **Users**.
+(`SIGARDAPANEL_ALLOW_REGISTRATION=false`); `/register` says so. Create further
+accounts under **Users**.
 
 Command-line access on the server:
 
@@ -238,6 +243,7 @@ certificate) or **Full**; "Flexible" causes a redirect loop.
 | `SIGARDAPANEL_AGENT_TOKEN` | random 64 hex | Shared secret with the local agent (same value in `agent.env`) |
 | `SIGARDAPANEL_ENCRYPTION_KEY` | random 64 hex | AES-256 key for secrets stored in the database (database passwords, job credentials, 2FA secrets) |
 | `SIGARDAPANEL_ALLOW_REGISTRATION` | `false` | Public sign-up on `/register` |
+| `SIGARDAPANEL_ALLOW_PRIVATE_AGENTS` | not set (`false`) | `true`: servers added with the [install command](#option-a-install-command) may register a private (RFC 1918 / ULA) address. See [Private networks](#private-networks). |
 | `MEMBER_DB_*` | commented out | Optional member area (PostgreSQL) |
 
 `/etc/sigardapanel/agent.env` (read by `sigardapanel-agent`):
@@ -347,21 +353,80 @@ server's agent token.
 The panel connects to the agent at `http://<server>:7710` and sends the token
 with every request, so keep that traffic off the open internet: use a private
 network or VPN (WireGuard, provider VLAN) if you can, and in any case allow port
-7710 only from the panel's IP address.
+7710 only from the panel's IP address. Keep agents on the panel's version; the
+**Servers** page shows each agent's version and warns about a mismatch.
 
-**1. In the panel:** **Servers → Add server**. Enter a name, the hostname, the
-IP address and the agent URL `http://<server-ip>:7710` (use the private/VPN
-address if you have one). Copy the **agent token** shown after saving (admins
-can display it again in the server's **Edit** dialog).
-Do not use `sigardapanel server token` for remote servers: it also writes the
-new token into the panel host's own `agent.env`/`panel.env`, which is only right
-for the local server (id 1).
+There are two ways, both under **Servers → Add server**:
+
+| | Install command | Manual setup |
+|---|---|---|
+| What you do | paste one command on the new server | register it, then install and configure the agent |
+| Panel needs | `SIGARDAPANEL_PUBLIC_URL=https://…` (the installer default) whose certificate the new server trusts | nothing special |
+| New server reaches the panel? | yes, over HTTPS | not needed |
+| Private/VPC address | only with `SIGARDAPANEL_ALLOW_PRIVATE_AGENTS=true` | yes |
+
+### Option A: install command
+
+1. **Servers → Add server → Install command → Generate install command.** The
+   panel creates a one-time registration token (valid for one hour) and shows:
+
+   ```bash
+   curl -fsSL -H 'X-Sigarda-Registration-Token: <token>' 'https://panel.example.com/api/v1/agents/install' | sudo bash
+   ```
+
+   (API: `POST /api/v1/agents/tokens` returns the same command as `install_command`.)
+2. Run it on the new server (Ubuntu/Debian, root or sudo). The script installs
+   nginx, certbot and the other dependencies, downloads the panel's release
+   version for the server's architecture, verifies it against the signed
+   `SHA256SUMS`, writes `/etc/sigardapanel/agent.env`, starts `sigardapanel-agent`
+   and registers the server with its public IP. The dialog notices the new server
+   by itself.
+3. Allow port 7710 only from the panel:
+   `ufw allow from <panel-ip> to any port 7710 proto tcp`.
+
+Options, set between `sudo` and `bash` (e.g. `| sudo SIGARDAPANEL_AGENT_IP=10.0.0.5 bash`):
+
+| Variable | Meaning |
+|---|---|
+| `SIGARDAPANEL_AGENT_IP` | Address the panel uses to reach the agent. Default: the server's public IP (from api.ipify.org). The dialog's *Address* field adds it for you. |
+| `SIGARDAPANEL_PANEL_CA` | CA/certificate file that signs the panel's HTTPS certificate, for a panel with a self-signed or private certificate. Copy the panel's `/etc/sigardapanel/selfsigned.crt` to the server and also pass `--cacert <file>` to the first `curl`. |
+| `SIGARDAPANEL_VERSION` | Install another release tag than the panel's. |
+| `SIGARDAPANEL_BINARY_URL` + `SIGARDAPANEL_BINARY_SHA256` | Download the binary from a mirror (HTTPS only) and check this SHA-256 instead of the signed `SHA256SUMS`. |
+| `SIGARDAPANEL_AGENT_SITE_ROOT` | Restrict site files to this directory (default: no restriction; sites live in `/home/<user>/htdocs/<domain>`). |
+
+If anything fails, the script restores the previous state and prints the panel's
+error message. A token can only be used once; generate a new command to retry.
+
+#### Private networks
+
+By default a self-registering agent must report a public (global unicast)
+address: anyone holding a registration token could otherwise make the panel
+connect to internal addresses. If your panel reaches its servers over a VPC or
+VPN, allow private addresses on the panel:
+
+```bash
+echo 'SIGARDAPANEL_ALLOW_PRIVATE_AGENTS=true' | sudo tee -a /etc/sigardapanel/panel.env
+sudo systemctl restart sigardapanel-api
+```
+
+and pass the private address: `| sudo SIGARDAPANEL_AGENT_IP=10.0.0.5 bash`.
+Loopback, link-local (cloud metadata) and multicast addresses are always refused.
+The one-line installer still needs an `https://` panel URL; without one use
+[option B](#option-b-manual-setup).
+
+### Option B: manual setup
+
+**1. In the panel:** **Servers → Add server → Manual setup**. Enter a name, the
+hostname and the IP address; the agent URL `http://<server-ip>:7710` is filled in
+(use the private/VPN address if you have one). After saving, the dialog shows the
+**agent token** once, already inserted into the `agent.env` commands of step 3.
+CLI: `sigardapanel server add --name web1 --hostname web1.example.com --ip 203.0.113.10 --agent-url http://203.0.113.10:7710`.
 
 **2. On the remote server** (Ubuntu/Debian, as root), download and verify the binary:
 
 ```bash
-apt-get update && apt-get install -y curl ca-certificates minisign nginx
-V=v1.5.0                           # use the same version as the panel
+apt-get update && apt-get install -y curl ca-certificates minisign nginx certbot python3-certbot-nginx
+V=v1.6.0                           # the panel's version: sigardapanel version, or Settings -> System info
 ARCH=$(dpkg --print-architecture)  # amd64 or arm64
 base=https://github.com/bayurstarcool/SigardaPanel/releases/download/$V
 for f in SHA256SUMS SHA256SUMS.minisig "sigardapanel-linux-$ARCH"; do curl -fsSLO "$base/$f"; done
@@ -412,22 +477,33 @@ ufw allow from <panel-ip> to any port 7710 proto tcp
 
 **4. Check from the panel:** the server shows as online after the next health
 check (within about a minute), and the server's **Stack** page lists the
-installed software.
-
-To update a remote agent, repeat step 2 with the new version, then
-`systemctl restart sigardapanel-agent`. Keep agents on the same version as the panel.
+installed software. *Token rejected* means the agent runs but its token differs
+from the panel's (see [Troubleshooting](#troubleshooting)).
 
 The agent can also serve HTTPS itself (`SIGARDAPANEL_AGENT_TLS_CERT` and
 `SIGARDAPANEL_AGENT_TLS_KEY` in `agent.env`, agent URL `https://...`). The panel
 verifies the certificate, so it must be valid for the host name in the agent URL.
 
-> The **Servers** page and the API also offer an automatic one-line agent
-> installer (`GET /api/v1/agents/install` with a registration token, requires
-> `SIGARDAPANEL_PUBLIC_URL` to be an `https://` URL with a publicly trusted
-> certificate). Since v1.6.0 it installs the panel's own release version for the
-> server's architecture and verifies it against the signed `SHA256SUMS`
-> (needs `minisign` on the server). In v1.5.0 and earlier it installed an
-> outdated binary and failed at registration; use the manual steps there.
+### After adding a server
+
+- **Sites** on the new server: **Sites → Create site** and pick the server. The
+  agent writes the vhost there; until a Let's Encrypt certificate is issued the
+  site's HTTPS uses a self-signed placeholder (`/etc/nginx/ssl/sigardapanel.crt`,
+  created by the agent on first use). Let's Encrypt is requested automatically
+  and needs public DNS for the domain pointing at that server; without it the
+  request fails (visible under **Jobs**) and the site keeps working over HTTP.
+- **Wrong agent URL:** **Edit** the server (or `sigardapanel server update <id> --agent-url URL`).
+- **Rotate the token:** **Edit → Regenerate** (or `sigardapanel server token <id>`) shows a
+  new token once; put it into the server's `agent.env` and run
+  `systemctl restart sigardapanel-agent` there. Until then the server shows *Token rejected*.
+  For the panel's own server use `sudo sigardapanel server token` on the panel host,
+  which also updates `/etc/sigardapanel/{panel,agent}.env`.
+- **Update an agent:** repeat step 2 of option B with the panel's new version, then
+  `systemctl restart sigardapanel-agent`.
+- **Remove a server:** delete or transfer its sites first, then **Edit → Remove**
+  (`sigardapanel server remove <id>`). The panel's own server cannot be removed.
+  Nothing on the machine is changed; to uninstall the agent there:
+  `systemctl disable --now sigardapanel-agent && rm -f /etc/systemd/system/sigardapanel-agent.service /usr/local/bin/sigardapanel && rm -rf /etc/sigardapanel`.
 
 ## Uninstalling
 
@@ -512,8 +588,20 @@ with the fallback key and would become unreadable. Plan a re-encryption instead.
 
 **Remote server stays offline** - from the panel host run
 `curl -s http://<server>:7710/health`. No answer: the agent is not running or
-port 7710 is blocked. If health answers but actions fail with `401`, the token in
-the agent's `agent.env` does not match the panel.
+port 7710 is blocked.
+
+**Remote server shows "token rejected"** - the agent answers but its
+`SIGARDAPANEL_AGENT_TOKEN` differs from the panel's (typo, or the token was
+regenerated). Regenerate it under **Servers → Edit**, put it into the server's
+`/etc/sigardapanel/agent.env` and run `systemctl restart sigardapanel-agent`.
+
+**Install command: "cannot be used as the agent address"** - the server's
+detected address is private (or you passed one). Pass its public address with
+`SIGARDAPANEL_AGENT_IP`, or allow [private networks](#private-networks).
+
+**Install command: "SSL certificate problem"** - the server does not trust the
+panel's certificate (self-signed). Use a Let's Encrypt certificate for the panel,
+or `SIGARDAPANEL_PANEL_CA` (see [option A](#option-a-install-command)).
 
 ## Building from source
 
