@@ -395,7 +395,7 @@ do_install() {
   chown -R root:root "$WEB_DIR"; chmod -R go-w "$WEB_DIR"
   write_env_files
   write_units
-  ok "Binary: $("$INSTALL_BIN" version)"
+  ok "Binary: $("$INSTALL_BIN" version --client)"
 
   log "Creating the admin account..."
   local enc_key
@@ -453,7 +453,7 @@ do_update() {
   require_root; check_os; detect_arch
   [ -x "$INSTALL_BIN" ] && [ -f "$CONF_DIR/panel.env" ] || die "SigardaPanel is not installed here. Run: bash install.sh"
   command -v minisign >/dev/null || { apt-get update -qq; apt-get install -y -qq minisign >/dev/null; }
-  local current; current="$("$INSTALL_BIN" version 2>/dev/null || echo unknown)"
+  local current; current="$("$INSTALL_BIN" version --client 2>/dev/null || echo unknown)"
   resolve_tag
   if [ "${current#v}" = "${TAG#v}" ] && [ -z "${FORCE:-}" ]; then
     ok "Already on ${TAG}. (FORCE=1 to reinstall)"; return 0
@@ -505,7 +505,7 @@ do_update() {
   systemctl restart sigardapanel-api || true; sleep 2
   systemctl restart sigardapanel-web || true
   healthy || rollback
-  ok "Updated to $("$INSTALL_BIN" version)"
+  ok "Updated to $("$INSTALL_BIN" version --client)"
   if grep -qE '^SIGARDAPANEL_ALLOW_REGISTRATION=true' "$CONF_DIR/panel.env"; then
     warn "Public sign-up is OPEN on this panel (SIGARDAPANEL_ALLOW_REGISTRATION=true in ${CONF_DIR}/panel.env)."
   fi
