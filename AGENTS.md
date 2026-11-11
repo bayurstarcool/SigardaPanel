@@ -483,12 +483,16 @@ location /api/ws/ {
 ### Features
 - **S3 upload**: backup to S3-compatible storage (B2, Wasabi, etc.)
 - **Local fallback**: if S3 fails, keep local backup
-- **Concurrency limit**: max 5 concurrent backups per server
+- **Concurrency limit**: max 1 concurrent backup per server (enforced atomically when a job is claimed)
 - **Stuck cleanup**: jobs stuck >30min auto-marked as failed
 - **Deduplication**: skip if backup job already active for site
 - **Retention**: auto-expire old backups based on config
 
 ### Worker Flow
+The worker runs a bounded pool (default 3, `SIGARDAPANEL_WORKER_CONCURRENCY` 1-16).
+Jobs of the same site never run concurrently. Jobs left `running` by a previous
+process are marked failed when the worker starts.
+
 1. Claim next queued job
 2. Set backup status to "running"
 3. Execute on agent (tar + optional S3 upload)
