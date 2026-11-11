@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"sigardapanel/internal/jobmodel"
@@ -101,6 +102,60 @@ func runTick(ctx context.Context, s *store.Store) {
 // before queuing another one for the same site.
 const sslRenewRetryBackoff = 6 * time.Hour
 
+// sslExpiryNotifyInterval is the minimum gap between two "SSL Certificate
+// Expiring" alerts for the same site (unless a threshold is crossed).
+const sslExpiryNotifyInterval = 24 * time.Hour
+
+// sslExpiryNotifier remembers, per site, when the last expiry alert was sent
+// and at which urgency level. It is in-memory: a panel restart can cause at
+// most one extra alert per site.
+type sslExpiryNotifier struct {
+	mu   sync.Mutex
+	last map[int64]sslExpiryNotice
+}
+
+type sslExpiryNotice struct {
+	at    time.Time
+	level int
+}
+
+var sslExpiryNotices = &sslExpiryNotifier{last: map[int64]sslExpiryNotice{}}
+
+// sslExpiryLevel buckets days-left into urgency levels; moving to a higher
+// level triggers an alert even within the 24h window.
+func sslExpiryLevel(daysLeft int) int {
+	switch {
+	case daysLeft <= 1:
+		return 4
+	case daysLeft <= 3:
+		return 3
+	case daysLeft <= 7:
+		return 2
+	case daysLeft <= 14:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (n *sslExpiryNotifier) shouldNotify(siteID int64, daysLeft int, now time.Time) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	level := sslExpiryLevel(daysLeft)
+	prev, ok := n.last[siteID]
+	if ok && now.Sub(prev.at) < sslExpiryNotifyInterval && level <= prev.level {
+		return false
+	}
+	n.last[siteID] = sslExpiryNotice{at: now, level: level}
+	// Drop stale entries so the map does not grow with deleted sites.
+	for id, v := range n.last {
+		if now.Sub(v.at) > 7*sslExpiryNotifyInterval {
+			delete(n.last, id)
+		}
+	}
+	return true
+}
+
 func runSSLAutoRenew(ctx context.Context, s *store.Store) {
 	const renewWindow = 30 * 24 * time.Hour // 30 days
 
@@ -160,11 +215,15 @@ func runSSLAutoRenew(ctx context.Context, s *store.Store) {
 
 		slog.Info("scheduler: ssl auto-renew enqueued", "site_id", site.ID, "domain", site.Domain, "job_id", job.ID, "expires_at", site.SSLExpiresAt.Time.Format(time.RFC3339))
 
-		// Send notification
-		sender := notify.NewSender(s)
+		// Notify at most once per site per 24h, or sooner when the days left
+		// cross a threshold (14/7/3/1). Each failed renewal is re-queued every
+		// 6h and used to alert every time.
 		daysLeft := int(time.Until(site.SSLExpiresAt.Time).Hours() / 24)
-		sender.Send(ctx, "warning", "SSL Certificate Expiring",
-			fmt.Sprintf("SSL for %s expires in %d days. Auto-renewal job queued (job #%d).", site.Domain, daysLeft, job.ID))
+		if sslExpiryNotices.shouldNotify(site.ID, daysLeft, time.Now()) {
+			sender := notify.NewSender(s)
+			sender.Send(ctx, "warning", "SSL Certificate Expiring",
+				fmt.Sprintf("SSL for %s expires in %d days. Auto-renewal job queued (job #%d).", site.Domain, daysLeft, job.ID))
+		}
 	}
 }
 

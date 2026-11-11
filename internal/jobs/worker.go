@@ -248,7 +248,11 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	result, execErr := agent.Execute(ctx, job.Type, dispatchPayload)
 
 	if execErr != nil {
-		if job.Attempts < job.MaxAttempts {
+		permanent := isPermanentJobError(job.Type, execErr, result)
+		if permanent && job.Attempts < job.MaxAttempts {
+			slog.Warn("worker: deterministic failure, not retrying", "id", job.ID, "type", job.Type, "error", execErr)
+		}
+		if job.Attempts < job.MaxAttempts && !permanent {
 			delay := defaultBackoff.delay(job.Attempts)
 			retryAt := time.Now().Add(delay)
 			if err := w.store.Jobs.ScheduleRetry(ctx, job.ID, retryAt); err != nil {
