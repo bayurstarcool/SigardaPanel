@@ -174,7 +174,7 @@ func scanUser(row *sql.Row) (*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan user: %w", err)
 	}
-	u.TOTPSecret = totpSecret.String
+	u.TOTPSecret = totpSecretForUser(u.ID, totpSecret.String)
 	u.TOTPEnabled = totpEnabled.Int64 == 1
 	return &u, nil
 }
@@ -204,7 +204,7 @@ func (s *SQLiteUserStore) List(ctx context.Context, filter UserListFilter) ([]Us
 		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedBy, &u.CreatedAt, &u.DiskLimit, &u.MaxSites, &u.PlanID, &totpSecret, &totpEnabled, &u.PasswordChangedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
-		u.TOTPSecret = totpSecret.String
+		u.TOTPSecret = totpSecretForUser(u.ID, totpSecret.String)
 		u.TOTPEnabled = totpEnabled.Int64 == 1
 		users = append(users, u)
 	}
