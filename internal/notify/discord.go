@@ -33,11 +33,11 @@ func (d *DiscordNotifier) Send(ctx context.Context, channel *Channel, alert *Ale
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("discord request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp)
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("discord returned %d", resp.StatusCode)
