@@ -87,7 +87,7 @@ func (s *SQLiteMetricStore) GetRange(ctx context.Context, serverID int64, since 
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+metricsColumns+` FROM server_metrics WHERE server_id = ? AND collected_at >= ? ORDER BY collected_at DESC LIMIT ?`,
-		serverID, since, limit,
+		serverID, sqliteUTC(since), limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query metrics: %w", err)

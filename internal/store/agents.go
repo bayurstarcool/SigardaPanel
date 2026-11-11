@@ -38,7 +38,9 @@ func NewRegistrationTokenStore(db *sql.DB) *SQLiteRegistrationTokenStore {
 func (s *SQLiteRegistrationTokenStore) Create(ctx context.Context, rt *RegistrationToken) error {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO registration_tokens (token_hash, created_by, expires_at) VALUES (?, ?, ?)`,
-		rt.TokenHash, rt.CreatedBy, rt.ExpiresAt,
+		// Canonical UTC text: "expires_at > CURRENT_TIMESTAMP" is a text
+		// comparison, which time.String() output breaks on non-UTC hosts.
+		rt.TokenHash, rt.CreatedBy, sqliteUTC(rt.ExpiresAt),
 	)
 	if err != nil {
 		return fmt.Errorf("insert registration token: %w", err)
