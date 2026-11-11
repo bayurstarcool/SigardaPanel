@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
@@ -52,9 +53,17 @@ func (r *Router) ensureSiteUser(ctx context.Context, name string) (*siteOwner, e
 				name, name, strings.TrimSpace(out+" "+err.Error()))
 		}
 		slog.Info("agent: created Linux user for site owner", "user", name)
-		if u, err = user.Lookup(name); err != nil {
+		home := filepath.Join("/home", name)
+		if u, err = user.Lookup(name); err == nil && u.HomeDir != "" {
+			home = u.HomeDir
+		}
+		// Recent useradd defaults (HOME_MODE 0750, e.g. Ubuntu 24.04) make
+		// the new home untraversable for nginx/PHP-FPM, and every file under
+		// htdocs/ would 404. Grant traverse-only (o+x) on the home we created.
+		allowTraverse(home)
+		if err != nil {
 			// Created but not resolvable through NSS yet: own by name.
-			return &siteOwner{name: name, home: filepath.Join("/home", name)}, nil
+			return &siteOwner{name: name, home: home}, nil
 		}
 	}
 	uid, err := strconv.ParseUint(u.Uid, 10, 32)
@@ -67,6 +76,18 @@ func (r *Router) ensureSiteUser(ctx context.Context, name string) (*siteOwner, e
 		home = filepath.Join("/home", name)
 	}
 	return &siteOwner{name: name, home: home}, nil
+}
+
+// allowTraverse adds o+x to dir (a home this agent just created) so the web
+// server can reach htdocs/ without being able to list the home.
+func allowTraverse(dir string) {
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() || fi.Mode().Perm()&0o001 != 0 {
+		return
+	}
+	if err := os.Chmod(dir, fi.Mode().Perm()|0o001); err != nil {
+		slog.Warn("agent: make site owner's home traversable", "dir", dir, "error", err)
+	}
 }
 
 // chownNewSiteRoot gives a site root the agent just created (and the starter

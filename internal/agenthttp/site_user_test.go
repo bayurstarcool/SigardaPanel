@@ -123,6 +123,24 @@ func TestSiteCreate_InjectedRouterNeverRunsRealUseradd(t *testing.T) {
 	}
 }
 
+// A home created with HOME_MODE 0750 (Ubuntu 24.04) must become traversable,
+// or nginx 404s every file under htdocs/.
+func TestAllowTraverse(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "home")
+	if err := os.Mkdir(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	allowTraverse(dir)
+	fi, _ := os.Stat(dir)
+	if fi.Mode().Perm() != 0o751 {
+		t.Fatalf("mode %o, want 751", fi.Mode().Perm())
+	}
+	allowTraverse(filepath.Join(dir, "missing")) // no panic, no error
+}
+
 func TestSiteCreate_WithoutSystemUserTouchesNoAccounts(t *testing.T) {
 	bin := setupTestBinaries(t)
 	log := filepath.Join(t.TempDir(), "calls.log")
