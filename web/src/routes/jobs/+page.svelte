@@ -207,19 +207,17 @@
                         <div class="truncate text-[13px] text-muted" title={j.description}>{j.description}</div>
                       {/if}
                       {#if j.status === 'failed' && j.error}
-                        <div class="mt-0.5 flex min-w-0 items-center gap-1.5">
-                          <span class="min-w-0 truncate font-mono text-xs text-danger">{errorSummary(j.error)}</span>
-                          {#if isLongError(j.error)}
-                            <button
-                              class="btn btn-ghost btn-xs shrink-0"
-                              aria-expanded={!!expanded[j.id]}
-                              aria-controls="job-err-{j.id}"
-                              onclick={() => (expanded[j.id] = !expanded[j.id])}>
-                              <ChevronDown size={12} class="transition-transform duration-150 {expanded[j.id] ? 'rotate-180' : ''}" />
-                              {expanded[j.id] ? 'Less' : 'Details'}
-                            </button>
-                          {/if}
-                        </div>
+                        {#if !expanded[j.id]}
+                          <div class="mt-0.5 line-clamp-2 font-mono text-xs break-all text-danger">{errorSummary(j.error)}</div>
+                        {/if}
+                        <button
+                          class="mt-0.5 inline-flex cursor-pointer items-center gap-1 text-xs font-medium text-muted hover:text-fg"
+                          aria-expanded={!!expanded[j.id]}
+                          aria-controls="job-err-{j.id}"
+                          onclick={() => (expanded[j.id] = !expanded[j.id])}>
+                          <ChevronDown size={12} class="transition-transform duration-150 {expanded[j.id] ? 'rotate-180' : ''}" />
+                          {expanded[j.id] ? 'Hide error' : isLongError(j.error) ? 'Show full error' : 'Show error'}
+                        </button>
                       {/if}
                       <div class="text-xs text-subtle sm:hidden">{fmtRelative(j.created_at)}</div>
                     </div>
@@ -253,13 +251,17 @@
               {#if j.status === 'failed' && j.error && expanded[j.id]}
                 <tr id="job-err-{j.id}">
                   <td colspan="5" class="bg-surface-2">
+                    <!-- On narrow screens the table scrolls sideways; keep the panel
+                         pinned to the visible width so long logs wrap instead. -->
+                    <div class="sticky left-4 max-w-[calc(100vw-4.5rem)] sm:max-w-[calc(100vw-6.5rem)] lg:max-w-none">
                     <div class="mb-2 flex items-center justify-between gap-2">
                       <span class="text-xs font-medium text-muted">Error output</span>
                       <button class="btn btn-ghost btn-xs" onclick={() => copyError(j)}>
                         {#if copiedId === j.id}<Check size={12} class="text-success" /> Copied{:else}<Copy size={12} /> Copy{/if}
                       </button>
                     </div>
-                    <pre class="max-h-80 overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-xs break-words whitespace-pre-wrap text-fg">{j.error}</pre>
+                    <pre class="max-h-80 overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-fg">{j.error}</pre>
+                    </div>
                   </td>
                 </tr>
               {/if}
