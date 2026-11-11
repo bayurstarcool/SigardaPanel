@@ -36,11 +36,12 @@ func (a *App) context() context.Context {
 
 // Init bootstraps an admin user locally via direct DB access (no API).
 func (a *App) Init(args []string) int {
-	flags := a.newFlags("init", "[--user NAME] [--password P] [--email E] [--role super_admin|admin]")
+	flags := a.newFlags("init", "[--user NAME] [--password P] [--email E] [--role super_admin|admin] [--must-change-password]")
 	username := flags.String("user", os.Getenv("SIGARDAPANEL_ADMIN_USER"), "admin username (env SIGARDAPANEL_ADMIN_USER, default admin)")
 	password := flags.String("password", os.Getenv("SIGARDAPANEL_ADMIN_PASSWORD"), "admin password, min 8 chars (env SIGARDAPANEL_ADMIN_PASSWORD; prompted if empty)")
 	email := flags.String("email", "", "admin email (default <user>@localhost)")
 	role := flags.String("role", "", "role: super_admin or admin (default super_admin if none exists yet, else admin)")
+	mustChange := flags.Bool("must-change-password", false, "the password is temporary: the account must choose its own (web Profile or 'sigardapanel passwd') before using the API")
 	if _, code, ok := a.parseFlags(flags, args); !ok {
 		return code
 	}
@@ -115,10 +116,11 @@ func (a *App) Init(args []string) int {
 
 	// PasswordHash holds the plaintext here because Create hashes it.
 	user := &store.User{
-		Username:     *username,
-		Email:        *email,
-		Role:         *role,
-		PasswordHash: *password,
+		Username:           *username,
+		Email:              *email,
+		Role:               *role,
+		PasswordHash:       *password,
+		MustChangePassword: *mustChange,
 	}
 	if err := s.Users.Create(a.context(), user); err != nil {
 		fmt.Fprintf(a.stderr, "create user: %v\n", err)
@@ -229,7 +231,9 @@ func (a *App) Login(args []string) int {
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintf(a.stdout, "token saved to %s\n", tokenPathDisplay())
 	if result.Data.User.PasswordChangeRequired {
-		fmt.Fprintln(a.stdout, "note: the panel asks you to change your password (web UI → profile)")
+		fmt.Fprintln(a.stderr, "password change required: this account still uses a password someone else chose (installer or administrator).")
+		fmt.Fprintln(a.stderr, "Until you choose your own, the API refuses every other command (and this account's API keys).")
+		fmt.Fprintln(a.stderr, "Change it now with:  sigardapanel passwd   (or in the web panel under Profile)")
 	}
 	if os.Getenv("SIGARDAPANEL_TOKEN") != "" {
 		fmt.Fprintln(a.stderr, "warning: SIGARDAPANEL_TOKEN is set and overrides the saved token; unset it to use this login")
@@ -305,6 +309,73 @@ func (a *App) Logout(args []string) int {
 	if !revoked {
 		fmt.Fprintf(a.stderr, "warning: could not revoke the session at %s; the local token was deleted anyway\n", apiURL)
 	}
+	return exitOK
+}
+
+// Passwd changes the password of the logged-in account through
+// PUT /api/v1/auth/profile. It is the CLI way out of password_change_required.
+func (a *App) Passwd(args []string) int {
+	flags := a.newFlags("passwd", "[--current P] [--new P]")
+	current := flags.String("current", "", "current password (prompted if empty)")
+	newPass := flags.String("new", "", "new password, min 8 chars (prompted twice if empty)")
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
+	}
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
+	}
+	if client.Token == "" {
+		fmt.Fprintln(a.stderr, "not logged in: run sigardapanel login first")
+		return exitError
+	}
+	if client.TokenSource == "env" {
+		fmt.Fprintln(a.stderr, "note: SIGARDAPANEL_TOKEN is set; changing a password needs a login session (unset it and run sigardapanel login)")
+	}
+
+	if *current == "" {
+		pw, err := cli.PromptPassword("current password", a.stdin, a.stderr)
+		if err != nil {
+			fmt.Fprintf(a.stderr, "read password: %v\n", err)
+			return exitError
+		}
+		*current = pw
+	}
+	if *newPass == "" {
+		pw, err := cli.PromptPassword("new password", a.stdin, a.stderr)
+		if err != nil {
+			fmt.Fprintf(a.stderr, "read password: %v\n", err)
+			return exitError
+		}
+		pw2, err := cli.PromptPassword("confirm new password", a.stdin, a.stderr)
+		if err != nil {
+			fmt.Fprintf(a.stderr, "read password: %v\n", err)
+			return exitError
+		}
+		if pw != pw2 {
+			fmt.Fprintln(a.stderr, "passwords do not match")
+			return exitError
+		}
+		*newPass = pw
+	}
+	if *current == "" {
+		fmt.Fprintln(a.stderr, "current password is required")
+		return exitUsage
+	}
+	if len(*newPass) < 8 {
+		fmt.Fprintln(a.stderr, "new password must be at least 8 characters")
+		return exitUsage
+	}
+	if *newPass == *current {
+		fmt.Fprintln(a.stderr, "new password must differ from the current one")
+		return exitUsage
+	}
+
+	if _, ok := a.call(client, http.MethodPut, "/api/v1/auth/profile",
+		map[string]string{"old_password": *current, "new_password": *newPass}, http.StatusOK); !ok {
+		return exitError
+	}
+	fmt.Fprintln(a.stdout, "password changed")
 	return exitOK
 }
 

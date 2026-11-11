@@ -89,9 +89,16 @@ func New(db *sql.DB) *Store {
 		IPRestrictions:     NewSQLiteIPRestrictionStore(db),
 		APIKeys:            NewUserAPIKeyStore(db),
 	}
-	// Initialize DBStore with encryption key derived from config
-	encKey := sha256.Sum256(config.EncryptionKey())
-	s.DBStore = dbserver.NewStore(db, encKey[:])
+	// DBStore's key is derived from the panel encryption key on first use,
+	// not here: commands that open the store without touching secrets
+	// ("sigardapanel init", CLI imports) must not resolve the key, which on a
+	// fresh dev database logged a misleading "derived fallback key" ERROR.
+	// The API settles the key (secrets.InitEncryptionKey) before store.New,
+	// so for it the resolved key is unchanged.
+	s.DBStore = dbserver.NewStoreWithKeyFunc(db, func() []byte {
+		encKey := sha256.Sum256(config.EncryptionKey())
+		return encKey[:]
+	})
 	return s
 }
 

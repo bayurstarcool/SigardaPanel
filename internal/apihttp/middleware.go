@@ -77,6 +77,13 @@ func RequireAuth(s *store.Store) echo.MiddlewareFunc {
 				if apiKey.ExpiresAt.Valid && time.Now().After(apiKey.ExpiresAt.Time) {
 					return echo.NewHTTPError(http.StatusUnauthorized, "api key expired")
 				}
+				// The owner still has to replace a password someone else
+				// chose: refuse the key outright (it cannot change it).
+				if blocked, err := passwordChangePending(c, s, apiKey.UserID); err != nil {
+					return err
+				} else if blocked {
+					return passwordChangeRequiredError(c, "the account of this API key must change its password first: sign in to the web panel (Profile) or run 'sigardapanel passwd' after 'sigardapanel login', then use the key again")
+				}
 				go s.APIKeys.UpdateLastUsed(context.Background(), apiKey.ID)
 				c.Set(apiKeyIDKey, apiKey.ID)
 				c.Set(sessionKey, &store.Session{ID: 0, UserID: apiKey.UserID})
@@ -98,6 +105,18 @@ func RequireAuth(s *store.Store) echo.MiddlewareFunc {
 			}
 			if !sess.ExpiresAt.IsZero() && time.Now().After(sess.ExpiresAt) {
 				return echo.NewHTTPError(http.StatusUnauthorized, "session expired")
+			}
+
+			// Until the user replaces a password someone else chose, a login
+			// session may only read itself, change the password and log out.
+			// Impersonation sessions are exempt: the admin must not be made
+			// to change the user's password.
+			if !sess.ImpersonatedBy.Valid && !allowedDuringPasswordChange(c) {
+				if blocked, err := passwordChangePending(c, s, sess.UserID); err != nil {
+					return err
+				} else if blocked {
+					return passwordChangeRequiredError(c, "you must change your password before using the panel: open Profile in the web panel, or run 'sigardapanel passwd'")
+				}
 			}
 
 			c.Set(sessionKey, sess)

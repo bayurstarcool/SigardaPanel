@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	_ "github.com/lib/pq"
 	"sigardapanel/internal/auth"
+	"sigardapanel/internal/config"
 	"sigardapanel/internal/httpjson"
 )
 
@@ -31,6 +32,17 @@ func NewHandler(db *sql.DB) *Handler {
 // Register creates a new member account.
 func (h *Handler) Register(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+
+	// Member (SaaS customer) sign-up is closed unless the operator opens it.
+	if !config.AllowMemberSignup() {
+		return c.JSON(http.StatusForbidden, httpjson.ErrorBody{
+			Error: httpjson.APIError{
+				Code:    "member_signup_disabled",
+				Message: "member sign-up is disabled on this panel (SIGARDAPANEL_ALLOW_MEMBER_SIGNUP is not true); ask the panel administrator for an account",
+			},
+			RequestID: rid,
+		})
+	}
 
 	var body struct {
 		Name     string `json:"name"`

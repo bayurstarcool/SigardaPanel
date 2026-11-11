@@ -14,7 +14,6 @@ import (
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/buildinfo"
-	"sigardapanel/internal/config"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/member"
 	"sigardapanel/internal/store"
@@ -77,17 +76,20 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	registerLimiter := StrictLimiter()
 	e.POST("/api/v1/auth/login", ah.login, loginLimiter.Middleware())
 	e.POST("/api/v1/auth/register", ah.register, registerLimiter.Middleware())
-	// Tells the public /register page whether it can offer a sign-up form at
-	// all (member sign-up needs the member database).
-	e.GET("/api/v1/auth/signup", func(c echo.Context) error {
+	// Public, unauthenticated switches the web needs before anyone signs in:
+	// whether the /register page can offer a sign-up form (member sign-up
+	// needs the member database AND SIGARDAPANEL_ALLOW_MEMBER_SIGNUP) and
+	// whether / and /pricing show the SaaS landing (SIGARDAPANEL_LANDING_PAGE)
+	// or redirect to the login. Same body on both paths.
+	publicConfig := func(c echo.Context) error {
+		c.Response().Header().Set("Cache-Control", "no-store")
 		return c.JSON(http.StatusOK, httpjson.Success{
-			Data: map[string]any{
-				"member_signup": memberDB != nil,
-				"panel_signup":  config.AllowRegistration(),
-			},
+			Data:      publicConfigData(memberDB != nil),
 			RequestID: c.Response().Header().Get(echo.HeaderXRequestID),
 		})
-	})
+	}
+	e.GET("/api/v1/auth/signup", publicConfig)
+	e.GET("/api/v1/public/config", publicConfig)
 
 	// Two-Factor Authentication (2FA) endpoints
 	tfaH := newTwoFactorHandler(s)

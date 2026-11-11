@@ -47,6 +47,14 @@ No account is seeded. In development create one with `sigardapanel init`
 installs get a random password from `install.sh` (or `ADMIN_PASS`), and the
 first account is `super_admin`. Never document or ship a default password.
 
+`users.password_changed_at IS NULL` means "password chosen by someone else"
+(install.sh-generated, admin-created, `init --must-change-password`). While it is
+NULL the API (`RequireAuth`) answers `403 password_change_required` except for
+`GET /auth/me`, `GET /auth/2fa/status`, `PUT /auth/profile`, `POST /auth/logout`;
+the account's API keys are refused; impersonation sessions are exempt. A password
+supplied by the operator (`ADMIN_PASS`, `init` without the flag, self sign-up)
+is final. CLI way out: `sigardapanel passwd`.
+
 ## User-Site Isolation Model
 
 SigardaPanel uses **ownership-based site isolation**:
@@ -82,7 +90,13 @@ hanyawahyu       hanyawahyu      /home/hanyawahyu/htdocs/{domain}
 ```
 
 - **User created** → `useradd -m -s /bin/bash <username>` runs automatically
-- **Site created** → `system_user` set to owner's Linux username
+- **Site created** → `system_user` set to owner's Linux username; the `site.create`
+  job carries it and the agent (panel host or remote server) creates the account
+  with `useradd -m -s /bin/bash` if it is missing (validated name, never root or
+  service accounts; existing UID < 1000 accounts are not used as owner) and
+  `chown -R <user>:` the site root it just created (an existing root keeps its
+  ownership). PHP sites also fail fast (`422`, permanent job error) when the
+  server lacks the PHP-FPM socket/port the vhost would use.
 - **Root path** → `/home/{system_user}/htdocs/{domain}`
 - **File ownership** → `{system_user}:{system_user}` (not www-data!)
 - **PHP-FPM** → pool runs as `www-data` (shared, for now)
@@ -170,6 +184,7 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `PUT /api/v1/auth/profile` — Update profile
 - `POST /api/v1/auth/logout` — Logout
 - `POST /api/v1/auth/stop-impersonation` — Stop impersonation
+- `GET /api/v1/public/config` (alias `GET /api/v1/auth/signup`) — public: `landing_page`, `member_signup`, `panel_signup`
 
 ### Servers (8 endpoints)
 - `GET /api/v1/servers` — List servers
@@ -539,6 +554,9 @@ process are marked failed when the worker starts.
 | SIGARDAPANEL_ENCRYPTION_KEY | - | 32-byte hex AES key for secrets at rest (`openssl rand -hex 32`) |
 | SIGARDAPANEL_ENCRYPTION_KEY_FILE | `<db dir>/encryption.key` | Key file used when the env key is unset |
 | SIGARDAPANEL_WORKER_CONCURRENCY | 3 | Job worker pool size (1-16) |
+| SIGARDAPANEL_ALLOW_REGISTRATION | false | Panel self-registration (`POST /api/v1/auth/register`) |
+| SIGARDAPANEL_LANDING_PAGE | false | `true`: `/` and `/pricing` show the SaaS landing; otherwise they redirect to `/login` (`/dashboard` when signed in). Read by the web via `GET /api/v1/public/config` |
+| SIGARDAPANEL_ALLOW_MEMBER_SIGNUP | false | `true`: `POST /api/v1/member/register` open (needs `MEMBER_DB_*`); otherwise 403 `member_signup_disabled` |
 
 ### Encryption key resolution
 
@@ -598,4 +616,8 @@ Latest: v1.5.0 (always check the releases page; install/update with `install.sh`
 
 Recent security/stability releases: v1.1.1 file-manager upload traversal fix;
 v1.1.2 worker panic recovery + rate-limiter/error hygiene; v1.1.3 site deletion
-drops its MySQL databases; v1.2.0 cookie sessions + `SIGARDAPANEL_ALLOW_REGISTRATION`.
+drops its MySQL databases; v1.2.0 cookie sessions + `SIGARDAPANEL_ALLOW_REGISTRATION`;
+v1.6.1 self-hosted defaults (`SIGARDAPANEL_LANDING_PAGE`, `SIGARDAPANEL_ALLOW_MEMBER_SIGNUP`,
+both default false), API-enforced `password_change_required` + `sigardapanel passwd`,
+503 placeholder for suspended sites, PHP-FPM preflight and site-owner account on
+`site.create`, no fallback-key error from `init`.

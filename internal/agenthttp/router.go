@@ -50,6 +50,8 @@ type Router struct {
 	stubDev      bool
 	testAuth     bool
 	certDir      string // placeholder certificate referenced by generated vhosts
+	phpRunDir    string // PHP-FPM sockets (php<version>-fpm.sock)
+	useraddCmd   string // creates site owners' Linux accounts
 }
 
 // RouterOptions allows overriding router defaults for testing.
@@ -66,6 +68,12 @@ type RouterOptions struct {
 	// DefaultCertDir overrides where the placeholder vhost certificate is
 	// created (default /etc/nginx/ssl).
 	DefaultCertDir string
+	// PHPRunDir overrides where PHP-FPM sockets are looked up (default /run/php).
+	PHPRunDir string
+	// UseraddCommand is run to create a missing site owner. Injected routers
+	// default to a command that does not exist, so tests can never create
+	// real accounts on the machine running them.
+	UseraddCommand string
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -94,6 +102,8 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		allowStubSSL: config.AgentAllowStubSSL(),
 		stubDev:      os.Getenv("SIGARDAPANEL_DEV") == "true",
 		certDir:      defaultSSLCertDir,
+		phpRunDir:    defaultPHPRunDir,
+		useraddCmd:   "useradd",
 	}
 	if opts != nil {
 		// RouterOptions is test/dependency-injection surface. Keep production
@@ -131,6 +141,13 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		r.certDir = filepath.Join(os.TempDir(), "sigardapanel-agent-test-ssl")
 		if opts.DefaultCertDir != "" {
 			r.certDir = opts.DefaultCertDir
+		}
+		if opts.PHPRunDir != "" {
+			r.phpRunDir = opts.PHPRunDir
+		}
+		r.useraddCmd = "sigardapanel-test-useradd-not-configured"
+		if opts.UseraddCommand != "" {
+			r.useraddCmd = opts.UseraddCommand
 		}
 	}
 
@@ -412,6 +429,9 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		DockerEnv      string `json:"docker_env,omitempty"`
 		DockerVolume   string `json:"docker_volume,omitempty"`
 		DockerRestart  string `json:"docker_restart,omitempty"`
+		// SystemUser owns the site files (sent on the initial site.create
+		// only; vhost regenerations leave ownership alone).
+		SystemUser string `json:"system_user,omitempty"`
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
@@ -420,8 +440,34 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 	if !isValidDomain(payload.Domain) || !r.isAllowedSitePath(payload.RootPath) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid domain or path")
 	}
+	if payload.PHPVersion != "" && siteinput.PHPVersion(payload.PHPVersion) != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid php_version")
+	}
+	if payload.SystemUser != "" && siteinput.SystemUser(payload.SystemUser) != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid system_user")
+	}
+
+	// 0. Fail fast, before anything is written, when this server cannot run
+	// the site: a PHP site needs the PHP-FPM its vhost will point at.
+	if payload.Runtime == "php" {
+		if err := r.checkPHPFPM(payload.PHPVersion); err != nil {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
+		}
+	}
+
+	// 0b. The site owner's Linux account must exist on this server (remote
+	// servers do not share the panel host's accounts).
+	var owner *siteOwner
+	if payload.SystemUser != "" {
+		o, err := r.ensureSiteUser(ctx, payload.SystemUser)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		owner = o
+	}
 
 	// 1. Create directory
+	rootExisted, _ := r.executor.Stat(ctx, payload.RootPath)
 	if err := r.executor.Mkdir(ctx, payload.RootPath); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "mkdir failed: "+err.Error())
 	}
@@ -588,6 +634,12 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		if payload.ProxyPassURL == "" {
 			payload.ProxyPassURL = "http://127.0.0.1:" + strings.Split(hostPort, ":")[0]
 		}
+	}
+
+	// 2b. Hand the files to the site owner, like the panel host's
+	// /home/<user>/htdocs/<domain> layout expects.
+	if owner != nil {
+		r.chownNewSiteRoot(ctx, owner, payload.RootPath, rootExisted)
 	}
 
 	// 3. Generate & write nginx config (always regenerate — supports port/command changes)

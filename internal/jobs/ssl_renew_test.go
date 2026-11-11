@@ -25,6 +25,9 @@ func TestIsPermanentJobError(t *testing.T) {
 		{jobmodel.TypeSSLRenew, "do request: connection refused", false},
 		{jobmodel.TypeSSLRenew, "Timeout during connect (likely firewall problem)", false},
 		{jobmodel.TypeSiteDeploy, "No such certificate", false},
+		{jobmodel.TypeSiteCreate, "agent returned 422: PHP-FPM 8.3 is not installed on this server (no /run/php/php8.3-fpm.sock)", true},
+		{jobmodel.TypeSiteCreate, "agent returned 500: nginx test failed", false},
+		{jobmodel.TypeSiteCreate, "No such certificate", false},
 	}
 	for _, c := range cases {
 		if got := isPermanentJobError(c.typ, errors.New(c.msg), nil); got != c.want {

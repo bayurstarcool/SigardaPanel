@@ -36,6 +36,8 @@ contains "$installer" 'SIGARDAPANEL_AGENT_ADDR=127\.0\.0\.1:7710' 'installer bin
 contains "$installer" 'PORT=7720' 'installer web service uses port 7720'
 contains "$installer" 'SIGARDAPANEL_ALLOW_REGISTRATION=false' 'installer closes public sign-up'
 contains "$installer" "role='super_admin'" 'installer makes the first account super_admin'
+contains "$installer" 'ADMIN_PASS_GENERATED=1' 'installer tracks whether it generated the admin password'
+contains "$installer" 'password_changed_at=\$\{pw_changed\}' 'installer records the admin password state (generated: change required; ADMIN_PASS: not)'
 contains "$installer" 'minisign -Vm' 'installer verifies the release signature'
 
 contains "$generated" 'SIGARDAPANEL_AGENT_ADDR=:7710' 'generated installer uses canonical agent port'

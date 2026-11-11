@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"sigardapanel/internal/siteinput"
@@ -44,20 +45,39 @@ type Server struct {
 
 // Store handles persistence of database server configurations.
 type Store struct {
-	db     *sql.DB
-	encKey []byte // AES key for password encryption
+	db *sql.DB
+
+	keyOnce sync.Once
+	keyFunc func() []byte
+	encKey  []byte // AES key for password encryption (resolved on first use)
 }
 
 // NewStore creates a new dbserver store with the given encryption key.
 // The key should be 32 bytes (AES-256) — pass a hash of APP_SECRET or equivalent.
 func NewStore(db *sql.DB, encKey []byte) *Store {
-	key := encKey
-	if len(key) != 32 {
-		// Derive 32-byte key from whatever we have
-		h := sha256Hash(key)
-		key = []byte(h[:32])
-	}
-	return &Store{db: db, encKey: key}
+	return NewStoreWithKeyFunc(db, func() []byte { return encKey })
+}
+
+// NewStoreWithKeyFunc is NewStore with the key resolved on the first
+// encrypt/decrypt instead of at construction. Commands that open the store
+// but never touch database-server secrets (e.g. "sigardapanel init") then do
+// not resolve the panel encryption key at all.
+func NewStoreWithKeyFunc(db *sql.DB, keyFunc func() []byte) *Store {
+	return &Store{db: db, keyFunc: keyFunc}
+}
+
+// key returns the 32-byte AES key, resolving it once.
+func (s *Store) key() []byte {
+	s.keyOnce.Do(func() {
+		key := s.keyFunc()
+		if len(key) != 32 {
+			// Derive 32-byte key from whatever we have
+			h := sha256Hash(key)
+			key = []byte(h[:32])
+		}
+		s.encKey = key
+	})
+	return s.encKey
 }
 
 // GetDefault returns the active default database server (if any).
@@ -112,7 +132,7 @@ func (s *Store) SetServer(ctx context.Context, svr *Server) error {
 
 // EncryptPassword encrypts a plaintext password using AES-256-GCM.
 func (s *Store) EncryptPassword(plaintext string) (string, error) {
-	block, err := aes.NewCipher(s.encKey)
+	block, err := aes.NewCipher(s.key())
 	if err != nil {
 		return "", err
 	}
@@ -134,7 +154,7 @@ func (s *Store) DecryptPassword(encrypted string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	block, err := aes.NewCipher(s.encKey)
+	block, err := aes.NewCipher(s.key())
 	if err != nil {
 		return "", err
 	}

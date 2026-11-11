@@ -18,6 +18,11 @@
   let { active = '', mobileOpen, onCloseMobile }: { active?: string; mobileOpen: boolean; onCloseMobile: () => void } = $props();
 
   type Item = { label: string; href: string; icon: any; pro?: boolean };
+
+  // The API does not limit servers or users by license tier (the free tier's
+  // max_servers is informational), so the badge must not imply a block.
+  const PRO_NOT_ENFORCED =
+    'Listed in the Pro plan. Not restricted on this panel: every license tier can use it.';
   type Group = { title: string; items: Item[] };
 
   const groups = $derived.by((): Group[] => {
@@ -141,7 +146,7 @@
                 >
                   <item.icon size={16} strokeWidth={1.75} class={isActive ? 'text-accent' : 'text-subtle group-hover:text-muted'} />
                   <span class="truncate">{item.label}</span>
-                  {#if item.pro}<span class="ml-auto"><ProBadge tier="pro" small /></span>{/if}
+                  {#if item.pro}<span class="ml-auto"><ProBadge tier="pro" small title={PRO_NOT_ENFORCED} /></span>{/if}
                 </a>
               </li>
             {/each}

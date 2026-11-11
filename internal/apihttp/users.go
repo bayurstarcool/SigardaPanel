@@ -121,6 +121,9 @@ func (h *userHandler) create(c echo.Context) error {
 		CreatedBy:    int64ToNullInt64(sess.UserID),
 		DiskLimit:    int64PtrToNullInt64(body.DiskLimit),
 		MaxSites:     int64PtrToNullInt64(body.MaxSites),
+		// The administrator knows this password: the user must choose their
+		// own before using the panel.
+		MustChangePassword: true,
 	}
 	if err := h.store.Users.Create(c.Request().Context(), user); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
