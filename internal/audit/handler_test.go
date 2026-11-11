@@ -44,6 +44,10 @@ func (m *mockStore) NullifyUser(_ context.Context, _ int64) error {
 	return nil // no-op for mock
 }
 
+func (m *mockStore) PurgeOlderThan(_ context.Context, _ int) (int64, error) {
+	return 0, nil // no-op for mock
+}
+
 func newMockStore(entries []Entry) *mockStore {
 	m := mockStore(entries)
 	return &m

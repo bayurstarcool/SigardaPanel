@@ -47,6 +47,7 @@ type Store struct {
 	Orders             OrdersRepository
 	TwoFactor          *SQLiteTwoFactorStore
 	IPRestrictions     *SQLiteIPRestrictionStore
+	APIKeys            *SQLiteUserAPIKeyStore
 }
 
 // New returns a Store with all repositories backed by the given SQLite database.
@@ -86,6 +87,7 @@ func New(db *sql.DB) *Store {
 		Orders:             NewOrderStore(db),
 		TwoFactor:          NewSQLiteTwoFactorStore(db),
 		IPRestrictions:     NewSQLiteIPRestrictionStore(db),
+		APIKeys:            NewUserAPIKeyStore(db),
 	}
 	// Initialize DBStore with encryption key derived from config
 	encKey := sha256.Sum256(config.EncryptionKey())

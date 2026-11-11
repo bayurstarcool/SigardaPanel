@@ -93,7 +93,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	e.GET("/api/v1/auth/me", ah.me, RequireAuth(s))
 	e.PUT("/api/v1/auth/profile", ah.updateProfile, RequireAuth(s))
-	e.POST("/api/v1/auth/logout", ah.logout, RequireAuth(s))
+	// Logout revokes the session row by ID, so service tokens and API keys
+	// (which carry no session row of their own) are rejected.
+	e.POST("/api/v1/auth/logout", ah.logout, RequireAuth(s), RequireUserSession)
 	e.POST("/api/v1/auth/stop-impersonation", ah.stopImpersonation, RequireAuth(s), RequireUserSession)
 
 	// User management (admin only). Real user sessions only: a service token
@@ -326,6 +328,17 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	auditH := audit.NewHandler(s.AuditLogs, RequireAdmin(s))
 	auditGroup := e.Group("/api/v1", RequireAuth(s))
 	auditH.Register(auditGroup)
+	// Purging old audit entries is global and destructive: super_admin with
+	// an interactive session only.
+	e.DELETE("/api/v1/audit-logs", purgeAuditLogs(s, auditRec), RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+
+	// ─── Personal API keys (scoped to the calling user) ─────
+	// Managed from interactive sessions only, so a leaked key cannot mint
+	// more keys or revoke the owner's others.
+	akH := newAPIKeyHandler(s, auditRec)
+	e.GET("/api/v1/api-keys", akH.list, RequireAuth(s), RequireUserSession)
+	e.POST("/api/v1/api-keys", akH.create, RequireAuth(s), RequireUserSession)
+	e.DELETE("/api/v1/api-keys/:id", akH.revoke, RequireAuth(s), RequireUserSession)
 
 	// ─── Agent Registration ────────────────────────────────
 	agH := newAgentHandler(s, auditRec)

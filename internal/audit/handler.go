@@ -14,6 +14,8 @@ import (
 type AuditLogStore interface {
 	List(ctx context.Context, filter AuditLogFilter) ([]Entry, error)
 	NullifyUser(ctx context.Context, userID int64) error
+	// PurgeOlderThan deletes entries older than days days, returning the count.
+	PurgeOlderThan(ctx context.Context, days int) (int64, error)
 }
 
 // AuditLogFilter holds query parameters for listing audit logs.

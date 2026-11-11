@@ -67,3 +67,17 @@ func (s *SQLiteAuditLogStore) List(ctx context.Context, filter audit.AuditLogFil
 	}
 	return entries, nil
 }
+
+// PurgeOlderThan deletes audit entries created more than days days ago and
+// returns how many rows were removed. days must be positive.
+func (s *SQLiteAuditLogStore) PurgeOlderThan(ctx context.Context, days int) (int64, error) {
+	if days < 1 {
+		return 0, fmt.Errorf("purge audit logs: days must be >= 1")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM audit_logs WHERE created_at < datetime('now', ?)`, fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return 0, fmt.Errorf("purge audit logs: %w", err)
+	}
+	return res.RowsAffected()
+}
