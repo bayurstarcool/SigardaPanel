@@ -1,4 +1,5 @@
 <script lang="ts">
+  import LoadError from '$components/LoadError.svelte';
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -32,9 +33,10 @@
       dbs = dbData?.databases || [];
       sites = siteData?.sites || [];
       allUsers = userData?.users || [];
+      loadError = '';
     } catch (e: any) {
       if (e.message === 'session expired') return;
-      toasts.error(e.message);
+      loadError = e.message || 'Failed to load databases';
     } finally { loading = false; }
   }
 
@@ -52,6 +54,8 @@
     } catch {}
     newPwdVisible = '';
   }
+
+  let loadError = $state('');
 
   onMount(() => { loadDbs(); });
 </script>
@@ -92,7 +96,13 @@
     </button>
   </div>
 
-  <div class={activeDbTab === 'databases' ? '' : 'hidden'}>
+  {#if loadError && !loading}
+    <div class="card">
+      <LoadError title="Could not load databases" message={loadError} onretry={loadDbs} />
+    </div>
+  {/if}
+
+  <div class={activeDbTab === 'databases' && !(loadError && !loading) ? '' : 'hidden'}>
     <DatabasesPanel
       bind:dbs
       bind:createOpen={showCreateDb}
@@ -104,7 +114,7 @@
       onmanageusers={() => (activeDbTab = 'users')} />
   </div>
 
-  <div id="database-users" class={activeDbTab === 'users' ? '' : 'hidden'}>
+  <div id="database-users" class={activeDbTab === 'users' && !(loadError && !loading) ? '' : 'hidden'}>
     <UsersPanel
       bind:allUsers
       bind:createOpen={showCreateUser}

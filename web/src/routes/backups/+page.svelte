@@ -7,6 +7,7 @@
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
   import EmptyState from '$components/EmptyState.svelte';
+  import LoadError from '$components/LoadError.svelte';
   import Modal from '$components/Modal.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import StatusPill from '$components/StatusPill.svelte';
@@ -41,6 +42,8 @@
   let manualProviderId = $state<number>(0);
   let manualBusy = $state(false);
 
+  let loadError = $state('');
+
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
     await load();
@@ -52,8 +55,9 @@
     try {
       const d = await apiFetch(auth.token, 'GET', 'backups');
       backups = d?.backups || [];
+      loadError = '';
     } catch (e: any) {
-      if (e.message !== 'session expired') toasts.error(e.message);
+      if (e.message !== 'session expired') loadError = e.message || 'Failed to load backups';
     } finally { loading = false; }
   }
 
@@ -237,6 +241,10 @@
         <div class="space-y-3 p-4">
           {#each Array(5) as _, i (i)}<div class="skeleton h-9"></div>{/each}
         </div>
+      {:else if loadError}
+        <LoadError title="Could not load backups" message={loadError} onretry={load} />
+      {:else if filtered.length === 0 && backups.length > 0}
+        <EmptyState compact icon={Package as any} title="No {activeTab === 'database' ? 'database' : 'file'} backups" description="Switch the filter to see other backups." />
       {:else if filtered.length === 0}
         <EmptyState compact icon={Package as any} title="No backups yet" description="Create a backup now, or add a schedule under Settings." actionLabel="Create backup" onaction={openManualBackup} />
       {:else}

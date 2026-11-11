@@ -31,7 +31,7 @@
     <h3 class="text-sm font-semibold text-fg">{title}</h3>
   {/if}
   {#if description}
-    <p class="mt-1 max-w-sm text-[13px] text-muted">{description}</p>
+    <p class="mt-1 max-w-sm text-[13px] wrap-anywhere text-muted">{description}</p>
   {/if}
   {#if children}
     <div class="mt-5">{@render children()}</div>

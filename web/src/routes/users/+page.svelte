@@ -1,4 +1,5 @@
 <script lang="ts">
+  import LoadError from '$components/LoadError.svelte';
   import { fmtDate } from '$lib/format';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
@@ -40,13 +41,22 @@
   });
 
 
-  onMount(async () => {
-    if (!auth.user) { loading = false; return; }
+  let loadError = $state('');
+
+  async function loadUsers() {
+    loading = true;
     try {
       const d = await apiFetch(auth.token, 'GET', 'users');
       users = d?.users || [];
-    } catch (e: any) { toasts.error(e.message); }
-    finally { loading = false; }
+      loadError = '';
+    } catch (e: any) {
+      if (e.message !== 'session expired') loadError = e.message || 'Failed to load users';
+    } finally { loading = false; }
+  }
+
+  onMount(async () => {
+    if (!auth.user) { loading = false; return; }
+    await loadUsers();
   });
 
   async function createUser() {
@@ -172,6 +182,8 @@
           </div>
         {/each}
       </div>
+    {:else if loadError}
+      <LoadError title="Could not load users" message={loadError} onretry={loadUsers} />
     {:else if users.length === 0}
       <EmptyState
         icon={Users as any}

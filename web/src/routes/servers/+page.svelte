@@ -1,4 +1,5 @@
 <script lang="ts">
+  import LoadError from '$components/LoadError.svelte';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtDate } from '$lib/format';
@@ -17,12 +18,14 @@
   let editOpen = $state(false);
   let canManage = $derived(hasRole(auth.user?.role, 'admin'));
 
+  let loadError = $state('');
+
   function loadServers() {
     if (!auth.user) { window.location.href = '/login'; return; }
     loading = true;
     apiFetch(auth.token, 'GET', 'servers')
-      .then((d: any) => servers = d?.servers ?? [])
-      .catch((e) => { if (e.message !== 'session expired') {} })
+      .then((d: any) => { servers = d?.servers ?? []; loadError = ''; })
+      .catch((e) => { if (e.message !== 'session expired') loadError = e.message || 'Failed to load servers'; })
       .finally(() => loading = false);
   }
 
@@ -55,6 +58,8 @@
       <div class="space-y-3 p-4">
         {#each Array(4) as _, i (i)}<div class="skeleton h-9"></div>{/each}
       </div>
+    {:else if loadError}
+      <LoadError title="Could not load servers" message={loadError} onretry={loadServers} />
     {:else if servers.length === 0}
       <EmptyState icon={ServerIcon as any} title="No servers yet" description="Add your first server to start managing sites.">
         <AddServerButton oncreated={() => loadServers()} />

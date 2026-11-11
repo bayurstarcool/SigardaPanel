@@ -5,6 +5,7 @@
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
   import EmptyState from '$components/EmptyState.svelte';
+  import LoadError from '$components/LoadError.svelte';
   import Modal from '$components/Modal.svelte';
   import { ShieldCheck, Plus, RefreshCw, ShieldAlert, ShieldOff, ShieldQuestion, Search } from 'lucide-svelte';
   import { onMount } from 'svelte';
@@ -15,6 +16,7 @@
 
   let allSites = $state<any[]>([]);
   let loading = $state(true);
+  let loadError = $state('');
   let showIssue = $state(false);
   let issueSiteId = $state<number | ''>('');
   let issuing = $state(false);
@@ -35,9 +37,10 @@
     try {
       const d = await apiFetch(auth.token, 'GET', 'sites?limit=500');
       allSites = d?.sites || [];
+      loadError = '';
     } catch (e: any) {
       if (e.message === 'session expired') return;
-      toasts.error(e.message);
+      loadError = e.message || 'Failed to load certificates';
     } finally {
       loading = false;
     }
@@ -174,6 +177,8 @@
       <div class="space-y-3 p-4">
         {#each Array(5) as _, i (i)}<div class="skeleton h-9"></div>{/each}
       </div>
+    {:else if loadError}
+      <LoadError title="Could not load certificates" message={loadError} onretry={loadData} />
     {:else if visible.length === 0}
       <EmptyState compact icon={ShieldCheck} title="No certificates match" description="Try another filter, or issue a certificate for one of your sites." />
     {:else}

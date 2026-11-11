@@ -1,4 +1,5 @@
 <script lang="ts">
+  import LoadError from '$components/LoadError.svelte';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtRelative, fmtDateTime } from '$lib/format';
@@ -74,6 +75,8 @@
     } catch {}
   }
 
+  let loadError = $state('');
+
   async function loadLogs() {
     loading = true;
     expanded = null;
@@ -86,8 +89,9 @@
       const list: Entry[] = d?.entries || [];
       hasNext = list.length > PAGE_SIZE;
       entries = list.slice(0, PAGE_SIZE);
+      loadError = '';
     } catch (e: any) {
-      if (e.message !== 'session expired') toasts.error(e.message);
+      if (e.message !== 'session expired') loadError = e.message || 'Failed to load audit log';
     } finally {
       loading = false;
     }
@@ -205,6 +209,8 @@
         <div class="space-y-3 p-4">
           {#each Array(8) as _, i (i)}<div class="skeleton h-9"></div>{/each}
         </div>
+      {:else if loadError}
+        <LoadError title="Could not load the audit log" message={loadError} onretry={loadLogs} />
       {:else if entries.length === 0}
         <EmptyState
           compact
