@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"sigardapanel/internal/auth"
+	"sigardapanel/internal/jobmodel"
 )
 
 // Site represents a website / application deployed on a server.
@@ -565,6 +566,13 @@ func (s *SQLiteSiteStore) Delete(ctx context.Context, id int64) error {
 	// Delete related records
 	if _, err := tx.ExecContext(ctx, `DELETE FROM user_sites WHERE site_id = ?`, id); err != nil {
 		return fmt.Errorf("delete site user_sites: %w", err)
+	}
+	// The site.delete / database.delete jobs queued by the delete handler do
+	// the cleanup on the agent (vhost, files, certificates, databases). They
+	// must outlive the site row, so detach them instead of deleting them.
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET site_id = NULL WHERE site_id = ? AND type IN (?, ?) AND status IN (?, ?)`,
+		id, jobmodel.TypeSiteDelete, jobmodel.TypeDatabaseDelete, jobmodel.StatusQueued, jobmodel.StatusRunning); err != nil {
+		return fmt.Errorf("detach site cleanup jobs: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM jobs WHERE site_id = ?`, id); err != nil {
 		return fmt.Errorf("delete site jobs: %w", err)
