@@ -1,12 +1,14 @@
 package config
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,14 +100,93 @@ func DBPath() string {
 // process instead of on every encrypt/decrypt call.
 var warnDerivedEncryptionKeyOnce sync.Once
 
-// EncryptionKey returns the AES-256 key for encrypting sensitive data (e.g. DB passwords).
-// Must be 32 bytes hex-encoded, or defaults to a hash of the DB path + agent token.
-func EncryptionKey() []byte {
+// EncryptionKeySource values reported by EncryptionKeySource.
+const (
+	KeySourceEnv      = "env"
+	KeySourceFile     = "file"
+	KeySourceFallback = "fallback"
+)
+
+var (
+	keyFileMu    sync.Mutex
+	keyFileCache = map[string][]byte{}
+)
+
+// EncryptionKeyFile is where a generated encryption key is persisted:
+// SIGARDAPANEL_ENCRYPTION_KEY_FILE, or "encryption.key" next to the database.
+func EncryptionKeyFile() string {
+	if p := env("SIGARDAPANEL_ENCRYPTION_KEY_FILE", ""); p != "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(DBPath()), "encryption.key")
+}
+
+func envEncryptionKey() ([]byte, bool) {
 	keyHex := env("SIGARDAPANEL_ENCRYPTION_KEY", "")
-	if keyHex != "" {
-		if key, err := hex.DecodeString(keyHex); err == nil && len(key) == 32 {
-			return key
-		}
+	if keyHex == "" {
+		return nil, false
+	}
+	key, err := hex.DecodeString(strings.TrimSpace(keyHex))
+	if err != nil || len(key) != 32 {
+		return nil, false
+	}
+	return key, true
+}
+
+// fileEncryptionKey loads (and caches) the 32-byte hex key from the key file.
+func fileEncryptionKey() ([]byte, bool) {
+	path := EncryptionKeyFile()
+	keyFileMu.Lock()
+	defer keyFileMu.Unlock()
+	if k, ok := keyFileCache[path]; ok {
+		return k, true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	key, err := hex.DecodeString(strings.TrimSpace(string(data)))
+	if err != nil || len(key) != 32 {
+		slog.Error("encryption key file is invalid (want 32 bytes hex); ignoring it", "path", path)
+		return nil, false
+	}
+	keyFileCache[path] = key
+	return key, true
+}
+
+// derivedEncryptionKey is the legacy fallback: sha256(DB path + ":" + agent
+// token). Anyone who knows (or guesses) the DB path and can read the agent
+// token can derive it. Kept only so data already encrypted with it still
+// decrypts.
+func derivedEncryptionKey() []byte {
+	material := DBPath() + ":" + AgentToken()
+	h := sha256.Sum256([]byte(material))
+	return h[:]
+}
+
+// EncryptionKeySource reports which key EncryptionKey will return.
+func EncryptionKeySource() string {
+	if _, ok := envEncryptionKey(); ok {
+		return KeySourceEnv
+	}
+	if _, ok := fileEncryptionKey(); ok {
+		return KeySourceFile
+	}
+	return KeySourceFallback
+}
+
+// EncryptionKey returns the AES-256 key for encrypting sensitive data (e.g. DB
+// passwords, TOTP secrets). In order of preference:
+//  1. SIGARDAPANEL_ENCRYPTION_KEY (32 bytes hex),
+//  2. the key file (EncryptionKeyFile), generated on new installs by
+//     GenerateEncryptionKeyFile,
+//  3. the legacy derived fallback (weak; logged loudly).
+func EncryptionKey() []byte {
+	if key, ok := envEncryptionKey(); ok {
+		return key
+	}
+	if key, ok := fileEncryptionKey(); ok {
+		return key
 	}
 	// The derived key is deployment-local: secrets encrypted with it become
 	// unreadable after a reinstall, and the derivation is weaker than an
@@ -113,10 +194,46 @@ func EncryptionKey() []byte {
 	warnDerivedEncryptionKeyOnce.Do(func() {
 		slog.Error("SIGARDAPANEL_ENCRYPTION_KEY missing or invalid: using derived fallback key. Set it to 32 bytes hex (openssl rand -hex 32) before storing secrets")
 	})
-	// Derive from DB path + agent token
-	material := DBPath() + ":" + AgentToken()
-	h := sha256.Sum256([]byte(material))
-	return h[:]
+	return derivedEncryptionKey()
+}
+
+// DerivedEncryptionKey exposes the legacy fallback key (for re-encryption
+// tooling and tests).
+func DerivedEncryptionKey() []byte { return derivedEncryptionKey() }
+
+// GenerateEncryptionKeyFile creates EncryptionKeyFile with a fresh random key
+// (mode 0600). It never overwrites an existing file.
+func GenerateEncryptionKeyFile() (string, error) {
+	path := EncryptionKeyFile()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return path, fmt.Errorf("generate encryption key: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return path, fmt.Errorf("create key dir: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return path, fmt.Errorf("create key file: %w", err)
+	}
+	if _, err := f.WriteString(hex.EncodeToString(key) + "\n"); err != nil {
+		f.Close()
+		os.Remove(path)
+		return path, fmt.Errorf("write key file: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(path)
+		return path, fmt.Errorf("sync key file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return path, fmt.Errorf("close key file: %w", err)
+	}
+	keyFileMu.Lock()
+	delete(keyFileCache, path)
+	keyFileMu.Unlock()
+	return path, nil
 }
 
 // MySQLRootPassword returns the MySQL root password used for direct database management.

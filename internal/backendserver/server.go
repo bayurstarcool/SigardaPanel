@@ -20,6 +20,7 @@ import (
 	"sigardapanel/internal/dbserver"
 	sjobs "sigardapanel/internal/jobs"
 	"sigardapanel/internal/migrations"
+	"sigardapanel/internal/secrets"
 	"sigardapanel/internal/store"
 )
 
@@ -41,6 +42,10 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	slog.Info("migrations applied")
+
+	// Pick the encryption key before anything is encrypted: generates a key
+	// file on new installs, warns loudly when the weak fallback is in use.
+	secrets.InitEncryptionKey(ctx, database)
 
 	// Initialize store
 	s := store.New(database)

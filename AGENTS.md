@@ -512,6 +512,21 @@ process are marked failed when the worker starts.
 | SIGARDAPANEL_TOKEN | - | API token from login |
 | SIGARDAPANEL_OUTPUT | table | Output format (table|json|yaml) |
 | SIGARDAPANEL_DEV | false | Dev mode (enables hot reload, disables rate limiters) |
+| SIGARDAPANEL_ENCRYPTION_KEY | - | 32-byte hex AES key for secrets at rest (`openssl rand -hex 32`) |
+| SIGARDAPANEL_ENCRYPTION_KEY_FILE | `<db dir>/encryption.key` | Key file used when the env key is unset |
+| SIGARDAPANEL_WORKER_CONCURRENCY | 3 | Job worker pool size (1-16) |
+
+### Encryption key resolution
+
+1. `SIGARDAPANEL_ENCRYPTION_KEY` (if valid).
+2. The key file (`SIGARDAPANEL_ENCRYPTION_KEY_FILE`, default `encryption.key` next to the DB).
+3. Legacy derived fallback `sha256(db path + ":" + agent token)` — weak.
+
+On API start, if neither 1 nor 2 exists **and nothing is encrypted yet** (new
+install), a random key is generated into the key file (mode 0600). Back it up
+with the database. If data is already encrypted with the fallback, the panel
+keeps using the fallback (so it still decrypts) and logs a loud warning;
+switching requires re-encrypting those values.
 
 ## Rate Limiting
 
