@@ -224,3 +224,51 @@ func TestServerDoctor_Healthy(t *testing.T) {
 		t.Errorf("expected ok in output: %s", stdout.String())
 	}
 }
+func TestServerGetHidesTokenAndHealth(t *testing.T) {
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/servers/1":
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": 1, "name": "local", "agent_token": "SECRET", "status": "online"}})
+		case "/api/v1/servers/health":
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"servers": []map[string]any{
+				{"id": 1, "name": "local", "health_status": "healthy", "health_latency_ms": 3, "last_health_check": map[string]any{"Time": "2026-11-11T10:00:00Z", "Valid": true}},
+			}}})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	})
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	if code := app.Run([]string{"server", "get", "1", "-o", "json"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "SECRET") {
+		t.Errorf("agent token leaked: %s", stdout.String())
+	}
+	stdout.Reset()
+	if code := app.Run([]string{"server", "health"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "healthy") || !strings.Contains(stdout.String(), "2026-11-11T10:00:00Z") {
+		t.Errorf("health output: %s", stdout.String())
+	}
+}
+
+func TestServerUpdate_SendsOnlySupportedFields(t *testing.T) {
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if r.Method != "PATCH" || body["ssh_port"] != float64(2222) || body["name"] != "web1" {
+			t.Errorf("unexpected %s body %v", r.Method, body)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": 2, "name": "web1"}})
+	})
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+	if code := app.Run([]string{"server", "update", "2", "--name", "web1", "--ssh-port", "2222"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if code := app.Run([]string{"server", "update", "2", "--status", "active"}); code != 2 {
+		t.Fatalf("--status is not supported by the API; expected 2, got %d", code)
+	}
+}
