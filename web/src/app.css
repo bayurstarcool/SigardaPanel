@@ -229,7 +229,9 @@ html.light {
 
   /* --- Tables --- */
   .table-wrap {
-    @apply overflow-x-auto;
+    /* relative: absolutely positioned descendants (sr-only header labels,
+       row menus) must be clipped by this scroller, not widen the page. */
+    @apply relative overflow-x-auto;
   }
   .table {
     @apply w-full border-collapse text-sm;

@@ -17,6 +17,9 @@ const (
 	userIDKey             = "user_id"
 	roleKey               = "role"
 	serviceTokenScopesKey = "service_token_scopes"
+	// apiKeyIDKey is set (to the key's ID) when the request authenticated
+	// with a personal API key instead of a login session.
+	apiKeyIDKey = "api_key_id"
 )
 
 // RequireAuth returns Echo middleware that validates a Bearer token.
@@ -59,6 +62,25 @@ func RequireAuth(s *store.Store) echo.MiddlewareFunc {
 				c.Set(serviceTokenScopesKey, serviceToken.Scopes)
 				c.Set(sessionKey, &store.Session{ID: serviceToken.ID, UserID: 0})
 				c.Set(userIDKey, int64(0))
+				return next(c)
+			}
+
+			// Then: personal API keys. They act as their owner, but carry a
+			// synthetic session with ID 0 so session-ID based operations
+			// (logout, impersonation stop) can never touch a real session row.
+			apiKey, err := s.APIKeys.GetByKeyHash(c.Request().Context(), tokenHash)
+			if err != nil {
+				slog.Error("api: api key lookup failed", "route", c.Path(), "error", err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+			}
+			if apiKey != nil {
+				if apiKey.ExpiresAt.Valid && time.Now().After(apiKey.ExpiresAt.Time) {
+					return echo.NewHTTPError(http.StatusUnauthorized, "api key expired")
+				}
+				go s.APIKeys.UpdateLastUsed(context.Background(), apiKey.ID)
+				c.Set(apiKeyIDKey, apiKey.ID)
+				c.Set(sessionKey, &store.Session{ID: 0, UserID: apiKey.UserID})
+				c.Set(userIDKey, apiKey.UserID)
 				return next(c)
 			}
 
@@ -158,7 +180,15 @@ func RequireAdmin(s *store.Store) echo.MiddlewareFunc {
 	return RequireRole(s, auth.RoleAdmin)
 }
 
-// RequireUserSession returns Echo middleware that rejects service tokens.
+// isAPIKeyRequest reports whether the request authenticated with a personal
+// API key rather than an interactive login session.
+func isAPIKeyRequest(c echo.Context) bool {
+	_, ok := c.Get(apiKeyIDKey).(int64)
+	return ok
+}
+
+// RequireUserSession returns Echo middleware that rejects service tokens and
+// personal API keys: only interactive login sessions pass.
 // Use this on endpoints that must only be accessed by real user sessions
 // (e.g., impersonation, service token management).
 func RequireUserSession(next echo.HandlerFunc) echo.HandlerFunc {
@@ -169,6 +199,9 @@ func RequireUserSession(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 		if sess.UserID == 0 {
 			return echo.NewHTTPError(http.StatusForbidden, "service token cannot access this endpoint")
+		}
+		if isAPIKeyRequest(c) {
+			return echo.NewHTTPError(http.StatusForbidden, "api key cannot access this endpoint")
 		}
 		return next(c)
 	}

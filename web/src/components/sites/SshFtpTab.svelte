@@ -31,7 +31,7 @@
   async function loadSSH() {
     sshLoading = true;
     try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/ssh-ftp`); sshUsers = d?.users || []; }
-    catch {} finally { sshLoading = false; }
+    catch (e: any) { if (e?.message !== 'session expired' && !/permission|forbidden/i.test(e?.message || '')) toasts.error(e?.message || 'Failed to load'); } finally { sshLoading = false; }
   }
   async function createSSH() {
     sshBusy = true;

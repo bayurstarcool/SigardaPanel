@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { fmtDate } from '$lib/format';
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import EmptyState from '$components/EmptyState.svelte';
+  import LoadError from '$components/LoadError.svelte';
   import Pagination from '$components/Pagination.svelte';
   import StatusPill from '$components/StatusPill.svelte';
   import { Globe, Search, Plus, ArrowUp, ArrowDown, ChevronRight, Star, Download, TriangleAlert, X } from 'lucide-svelte';
@@ -13,6 +15,7 @@
   let sites = $state<any[]>([]);
   let totalCount = $state(0);
   let loading = $state(true);
+  let loadError = $state('');
   let showCreate = $state(false);
   let form = $state({ server_id: 0, name: '', domain: '', runtime: 'static', php_version: '8.3', root_path: '', proxy_pass_url: '', docker_image: '', docker_language: '', docker_name: '', docker_ports: '', docker_env: '', docker_volume: '', docker_restart: 'unless-stopped' });
   let phpVersions = ['8.5', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4'];
@@ -147,9 +150,10 @@
       const d = await apiFetch(auth.token, 'GET', `sites?${buildQuery(params)}`);
       sites = d?.sites || [];
       totalCount = d?.total_count ?? d?.sites?.length ?? 0;
+      loadError = '';
     } catch (e: any) {
       if (e.message === 'session expired') return;
-      toasts.error(e.message);
+      loadError = e.message || 'Failed to load sites';
     }
     finally { loading = false; }
   }
@@ -225,7 +229,7 @@
 </script>
 
 <DashboardLayout active="Sites">
-  <PageHeader title="Sites" description={loading ? 'Loading…' : `${totalCount} site${totalCount === 1 ? '' : 's'} total`}>
+  <PageHeader title="Sites" description={loading ? 'Loading…' : loadError ? 'Sites unavailable' : `${totalCount} site${totalCount === 1 ? '' : 's'} total`}>
     {#snippet actions()}
       <button onclick={() => (showCreate = !showCreate)} class="btn btn-primary btn-sm">
         {#if showCreate}<X size={14} /> Close{:else}<Plus size={14} /> Create site{/if}
@@ -412,6 +416,10 @@
       <div class="space-y-3 p-4">
         {#each Array(5) as _, i (i)}<div class="skeleton h-9"></div>{/each}
       </div>
+    {:else if loadError}
+      <LoadError title="Could not load sites" message={loadError} onretry={fetchSites} />
+    {:else if sites.length === 0 && (searchInput || runtimeFilter || statusFilter)}
+      <EmptyState compact icon={Globe} title="No sites match" description="Try another search or clear the filters." />
     {:else if sites.length === 0}
       <EmptyState icon={Globe} title="No sites" description="Create your first site to get started." actionLabel="Create site" onaction={() => (showCreate = true)} />
     {:else}
@@ -472,7 +480,7 @@
                   </div>
                 </td>
                 <td class="whitespace-nowrap text-muted tabular-nums max-md:hidden">
-                  {new Date(s.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  {fmtDate(s.created_at)}
                 </td>
                 <td class="text-right">
                   <a href="/sites/{s.id}" class="btn btn-ghost btn-xs">Manage <ChevronRight size={12} /></a>

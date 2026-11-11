@@ -1,7 +1,7 @@
 <script lang="ts">
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtRelative, fmtBytesFull } from '$lib/format';
+  import { fmtRelative, fmtBytesFull, expiryTone } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
@@ -10,6 +10,7 @@
   import {
     Globe, Zap, Server, ArrowRight, Plus, RefreshCw, ShieldAlert, Shield, ShieldCheck, Box, Database,
     Terminal, Archive, Lock, AlertTriangle, CheckCircle2, WifiOff, Activity,
+    TriangleAlert,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
@@ -78,8 +79,12 @@
 
   // Each source renders as soon as it arrives; per-server metrics and the
   // security overview start right after the server list, in parallel.
+  let loadErrors = $state<string[]>([]);
+
   async function loadDashboard() {
     refreshing = true;
+    const errs: string[] = [];
+    const fail = (what: string) => (e: any) => { if (!isExpired(e)) errs.push(`${what}: ${e?.message || 'failed'}`); };
     await Promise.allSettled([
       apiFetch(auth.token, 'GET', 'servers')
         .then(async (d) => {
@@ -91,17 +96,18 @@
             isAdmin && withId[0] ? loadSecurity(withId[0]) : Promise.resolve(),
           ]);
         })
-        .catch((e) => { if (!isExpired(e)) servers = []; })
+        .catch((e) => { if (!isExpired(e)) servers = []; fail('Servers')(e); })
         .finally(() => (loadingServers = false)),
       apiFetch(auth.token, 'GET', 'sites?limit=500')
         .then((d) => (sites = d?.sites || []))
-        .catch((e) => { if (!isExpired(e)) sites = []; })
+        .catch((e) => { if (!isExpired(e)) sites = []; fail('Sites')(e); })
         .finally(() => (loadingSites = false)),
       apiFetch(auth.token, 'GET', 'jobs?limit=50')
         .then((d) => (jobs = d?.jobs || []))
-        .catch((e) => { if (!isExpired(e)) jobs = []; })
+        .catch((e) => { if (!isExpired(e)) jobs = []; fail('Jobs')(e); })
         .finally(() => (loadingJobs = false)),
     ]);
+    loadErrors = errs;
     refreshedAt = new Date();
     refreshing = false;
   }
@@ -115,9 +121,9 @@
     let expired = 0;
     for (const s of sites) {
       if (!s.ssl_status || s.ssl_status === 'none' || !s.ssl_expires_at) continue;
-      const ms = new Date(s.ssl_expires_at).getTime() - Date.now();
-      if (ms <= 0) expired++;
-      else if (ms < 14 * 864e5) expiring++;
+      const tone = expiryTone(s.ssl_expires_at);
+      if (tone === 'expired') expired++;
+      else if (tone === 'danger' || tone === 'warn') expiring++;
     }
     return { expiring, expired, total: expiring + expired };
   });
@@ -150,6 +156,17 @@
       <a href="/sites" class="btn btn-primary btn-sm"><Plus size={14} /> New site</a>
     {/snippet}
   </PageHeader>
+
+  {#if loadErrors.length}
+    <div class="card mb-6 flex flex-wrap items-start gap-3 border-danger/30 px-4 py-3" role="alert">
+      <TriangleAlert size={16} class="mt-0.5 shrink-0 text-danger" />
+      <div class="min-w-0 flex-1">
+        <p class="text-sm font-medium text-fg">Some data could not be loaded</p>
+        {#each loadErrors as err (err)}<p class="text-[13px] wrap-anywhere text-muted">{err}</p>{/each}
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick={loadDashboard} disabled={refreshing}>Try again</button>
+    </div>
+  {/if}
 
   <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
     <StatCard

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import LoadError from '$components/LoadError.svelte';
+  import { fmtDate } from '$lib/format';
   import { page } from '$app/stores';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
@@ -39,8 +41,16 @@
   let usage = $state<any>(null);
   let usageLoading = $state(false);
 
-  onMount(async () => {
+  let loadError = $state('');
+
+  onMount(() => {
     if (!auth.user) { loading = false; return; }
+    loadUser();
+  });
+
+  async function loadUser() {
+    loading = true;
+    loadError = '';
     try {
       const d = await apiFetch(auth.token, 'GET', 'users');
       user = (d?.users || []).find((u: any) => u.id === userId);
@@ -52,9 +62,10 @@
         fetchUsage();
         checkImpersonation();
       }
-    } catch (e: any) { toasts.error(e.message); }
-    finally { loading = false; }
-  });
+    } catch (e: any) {
+      if (e.message !== 'session expired') loadError = e.message || 'Failed to load user';
+    } finally { loading = false; }
+  }
 
   // ─── Edit user ───
   async function save() {
@@ -218,10 +229,7 @@
   }
 
   function formatDate(dateStr: string) {
-    if (!dateStr) return '—';
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric', month: 'short', day: 'numeric'
-    });
+    return fmtDate(dateStr);
   }
 </script>
 
@@ -465,6 +473,10 @@
           {/if}
         </div>
       </section>
+    </div>
+  {:else if loadError}
+    <div class="card">
+      <LoadError title="Could not load this user" message={loadError} onretry={loadUser} compact={false} />
     </div>
   {:else}
     <div class="card">

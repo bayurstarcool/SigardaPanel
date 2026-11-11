@@ -1,7 +1,7 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtRelative } from '$lib/format';
+  import { fmtRelative, parseDate } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import EmptyState from '$components/EmptyState.svelte';
@@ -159,7 +159,7 @@
     const yesterday = new Date(today.getTime() - 86400000);
     const buckets: Record<string, Notification[]> = { Today: [], Yesterday: [], Older: [] };
     for (const n of filtered) {
-      const d = new Date(n.created_at);
+      const d = parseDate(n.created_at) ?? new Date(0);
       if (d >= today) buckets.Today.push(n);
       else if (d >= yesterday) buckets.Yesterday.push(n);
       else buckets.Older.push(n);

@@ -19,7 +19,7 @@
   async function loadCron() {
     cronLoading = true;
     try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/cron`); cronJobs = d?.jobs || []; }
-    catch {} finally { cronLoading = false; }
+    catch (e: any) { if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load'); } finally { cronLoading = false; }
   }
   async function createCron() {
     if (!newCron.command) return; cronBusy = true;

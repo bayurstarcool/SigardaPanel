@@ -21,7 +21,7 @@
   async function loadSecurity() {
     secLoading = true;
     try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/security`); secEnabled = d?.basic_auth_enabled || false; secUsername = d?.basic_auth_username || ''; secBlockedIPs = d?.blocked_ips || []; }
-    catch {} finally { secLoading = false; secLoaded = true; }
+    catch (e: any) { if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load'); } finally { secLoading = false; secLoaded = true; }
   }
   async function saveSecurity() {
     secSaving = true;

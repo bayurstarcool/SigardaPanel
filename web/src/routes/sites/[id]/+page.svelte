@@ -3,11 +3,12 @@
   import { goto } from '$app/navigation';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtDate } from '$lib/format';
+  import { fmtDate, fmtDaysLeft } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
   import EmptyState from '$components/EmptyState.svelte';
+  import LoadError from '$components/LoadError.svelte';
   import StatusPill from '$components/StatusPill.svelte';
   import {
     Globe, ShieldCheck, Database, Folder, Zap, Settings, Users, Package,
@@ -59,14 +60,23 @@
   let copiedField = $state('');
   function copyText(text: string, field: string) { navigator.clipboard.writeText(text); copiedField = field; setTimeout(() => copiedField = '', 1500); }
 
-  onMount(async () => {
-    if (!auth.user) { window.location.href = '/login'; return; }
+  let loadError = $state('');
+
+  async function loadSite() {
+    loading = true;
+    loadError = '';
     try {
       site = await apiFetch(auth.token, 'GET', `sites/${siteId}`);
     } catch (e: any) {
       if (e.message === 'session expired') return;
-      toasts.error(e.message);
+      // 404/403 render as "not found"; anything else is a load failure worth retrying.
+      if (!/not found|forbidden|access/i.test(e.message || '')) loadError = e.message || 'Failed to load site';
     } finally { loading = false; }
+  }
+
+  onMount(async () => {
+    if (!auth.user) { window.location.href = '/login'; return; }
+    await loadSite();
     // Load db count for stats
     try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbsCount = (d?.databases || []).length; } catch {}
     // Load Docker container info for docker runtime sites
@@ -151,10 +161,12 @@
 
   const appRuntimes = ['node', 'go', 'golang', 'python', 'docker'];
   const tabs = $derived(
-    !site ? allTabs.filter((t) => t.key !== 'app')
+    (!site ? allTabs.filter((t) => t.key !== 'app')
     : site.runtime === 'php' ? allTabs.filter((t) => t.key !== 'app')
     : appRuntimes.includes(site.runtime) ? allTabs
-    : allTabs.filter((t) => t.key !== 'app')
+    : allTabs.filter((t) => t.key !== 'app'))
+      // Site user assignments are admin-only in the API.
+      .filter((t) => isAdmin || t.key !== 'users')
   );
 
   const pendingReason = $derived(
@@ -199,6 +211,11 @@
     </div>
     <div class="mb-6 flex gap-2">{#each Array(6) as _, i (i)}<div class="skeleton h-8 w-20"></div>{/each}</div>
     <div class="skeleton h-64 rounded-xl"></div>
+  {:else if !site && loadError}
+    <PageHeader title="Site" back="/sites" backLabel="Sites" />
+    <div class="card">
+      <LoadError title="Could not load this site" message={loadError} onretry={loadSite} compact={false} />
+    </div>
   {:else if !site}
     <PageHeader title="Site" back="/sites" backLabel="Sites" />
     <div class="card">
@@ -297,7 +314,7 @@
                   <dd><StatusPill status={site.ssl_status} /></dd>
                 </div>
                 {@render row('Issuer', site.ssl_issuer || '—')}
-                {@render row('Expires', site.ssl_expires_at ? fmtDate(site.ssl_expires_at) : '—')}
+                {@render row('Expires', site.ssl_expires_at ? `${fmtDate(site.ssl_expires_at)} · ${fmtDaysLeft(site.ssl_expires_at)}` : '—')}
               </dl>
             {:else}
               <EmptyState compact icon={ShieldCheck} title="No SSL configured" description="Issue a certificate from the SSL tab." actionLabel="Open SSL tab" onaction={() => (activeTab = 'ssl')} />

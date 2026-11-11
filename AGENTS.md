@@ -292,6 +292,12 @@ sigardapanel
 - `POST /api/v1/service-tokens` — Create token
 - `DELETE /api/v1/service-tokens/:id` — Revoke token
 
+### Personal API Keys (3 endpoints)
+- `GET /api/v1/api-keys` — List the caller's keys (name, prefix, created/last used/expiry; never the key)
+- `POST /api/v1/api-keys` — Create `{name, expires_in_days}`; raw key returned once, stored as SHA-256 hash; max 20 per user
+- `DELETE /api/v1/api-keys/:id` — Revoke one of the caller's keys (another user's key is 404)
+- A key authenticates as its owner (Bearer). Interactive-session-only endpoints (`RequireUserSession`: users, impersonation, service tokens, terminal tickets, api-keys, logout) reject it.
+
 ### Alerts (4 endpoints)
 - `POST /api/v1/alert-channels` — Create channel
 - `GET /api/v1/alert-channels` — List channels
@@ -419,6 +425,7 @@ sigardapanel
 - `GET /api/v1/database-server` — DB server info
 - `POST /api/v1/database-server/import` — Import databases
 - `GET /api/v1/audit-logs` — Audit logs
+- `DELETE /api/v1/audit-logs?older_than_days=N` — Purge entries older than N days (super_admin, interactive session; the purge is itself audited)
 
 ## WebSocket Terminal
 

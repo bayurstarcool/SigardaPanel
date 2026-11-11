@@ -54,21 +54,28 @@
     } catch { appStatus = 'stopped'; }
     appLoaded = true;
   }
-  async function startApp() {
+  // Run an app action; when the API queues a job, wait for it and report its
+  // real outcome instead of announcing success unconditionally.
+  async function runAppAction(action: 'start' | 'stop' | 'restart', body: any, queued: string, done: string) {
     appBusy = true;
-    try { const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/app/start`, { command: appEditCmd || undefined }); const jobId = d?.job_id; if (jobId) { toasts.info('App start queued. Waiting...'); await pollJob(jobId); await loadApp(); toasts.success('App started'); } else { await loadApp(); toasts.success('App started'); } }
-    catch (e: any) { toasts.error(e.message || 'Failed'); } finally { appBusy = false; }
+    try {
+      const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/app/${action}`, body);
+      const jobId = d?.job_id;
+      let outcome = 'success';
+      if (jobId) { toasts.info(queued); outcome = await pollJob(jobId); }
+      await loadApp();
+      if (outcome === 'success') toasts.success(done);
+      else if (outcome === 'timeout') toasts.info(`Still running — follow job #${jobId} on the Jobs page.`);
+      else toasts.error(outcome.replace(/^error: /, ''));
+    } catch (e: any) {
+      toasts.error(e.message || 'Failed');
+    } finally {
+      appBusy = false;
+    }
   }
-  async function stopApp() {
-    appBusy = true;
-    try { const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/app/stop`); const jobId = d?.job_id; if (jobId) { toasts.info('App stop queued...'); await pollJob(jobId); await loadApp(); toasts.success('App stopped'); } else { await loadApp(); toasts.success('App stopped'); } }
-    catch (e: any) { toasts.error(e.message || 'Failed'); } finally { appBusy = false; }
-  }
-  async function restartApp() {
-    appBusy = true;
-    try { const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/app/restart`); const jobId = d?.job_id; if (jobId) { toasts.info('App restart queued...'); await pollJob(jobId); await loadApp(); toasts.success('App restarted'); } else { await loadApp(); toasts.success('App restarted'); } }
-    catch (e: any) { toasts.error(e.message || 'Failed'); } finally { appBusy = false; }
-  }
+  const startApp = () => runAppAction('start', { command: appEditCmd || undefined }, 'App start queued. Waiting…', 'App started');
+  const stopApp = () => runAppAction('stop', undefined, 'App stop queued…', 'App stopped');
+  const restartApp = () => runAppAction('restart', undefined, 'App restart queued…', 'App restarted');
   async function saveAppConfig() {
     appBusy = true;
     try { await apiFetch(auth.token, 'PUT', `sites/${siteId}/app/config`, { command: appEditCmd, port: appEditPort, memory_max_mb: appEditMem }); await loadApp(); appEditing = false; toasts.success('App config saved. Click Start to apply.'); }

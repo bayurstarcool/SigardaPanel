@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fmtDate } from '$lib/format';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
@@ -317,7 +318,7 @@
           </div>
           <div>
             <dt class="stat-label">Created</dt>
-            <dd class="mt-1 text-sm text-fg">{detailPlan.created_at ? new Date(detailPlan.created_at).toLocaleDateString('id-ID') : '—'}</dd>
+            <dd class="mt-1 text-sm text-fg">{fmtDate(detailPlan.created_at)}</dd>
           </div>
         </dl>
         {#if fc.length > 0}

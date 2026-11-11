@@ -1,7 +1,7 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtDate } from '$lib/format';
+  import { fmtDate, fmtDaysLeft, expiryTone } from '$lib/format';
   import StatusPill from '$components/StatusPill.svelte';
   import EmptyState from '$components/EmptyState.svelte';
   import { ShieldCheck, Lock, RefreshCw, LoaderCircle, Globe } from 'lucide-svelte';
@@ -38,13 +38,24 @@
         const st = d?.status || '';
         if (st === 'succeeded') return 'success';
         if (st === 'failed') return `error: ${d?.error || 'Job failed'}`;
+        if (st === 'canceled') return 'error: Job was canceled';
       } catch {}
     }
     return 'timeout: Job still processing, check later';
   }
 
+  // Last failed SSL job: certbot output can be long, so it is shown inline
+  // (collapsible) rather than in a five-second toast.
+  let lastError = $state<{ jobId: number; text: string } | null>(null);
+
+  function reportJobError(jobId: number, result: string, what: string) {
+    lastError = { jobId, text: result.replace(/^error: /, '') };
+    toasts.error(`${what} failed — see details in the SSL tab.`);
+  }
+
   async function issueSSL() {
     sslBusy = true;
+    lastError = null;
     try {
       const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/ssl/issue`);
       const jobId = d?.job_id;
@@ -57,7 +68,7 @@
         await loadSSL();
         toasts.success('SSL certificate issued successfully!');
       } else if (result.startsWith('error')) {
-        toasts.error(result.replace(/^error: /, ''));
+        reportJobError(jobId, result, 'SSL issue');
       } else {
         toasts.info(result.replace(/^(timeout|info): /, ''));
       }
@@ -68,6 +79,7 @@
 
   async function renewSSL() {
     sslBusy = true;
+    lastError = null;
     try {
       const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/ssl/renew`);
       const jobId = d?.job_id;
@@ -79,7 +91,7 @@
         await loadSSL();
         toasts.success('SSL certificate renewed successfully!');
       } else if (result.startsWith('error')) {
-        toasts.error(result.replace(/^error: /, ''));
+        reportJobError(jobId, result, 'SSL renewal');
       } else {
         toasts.info(result.replace(/^(timeout|info): /, ''));
       }
@@ -116,7 +128,7 @@
       <dl class="divide-y divide-line px-5">
         <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Status</dt><dd><StatusPill status={sslStatus.ssl_status || 'none'} /></dd></div>
         <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Issuer</dt><dd class="truncate text-sm text-fg">{sslStatus.ssl_issuer || '—'}</dd></div>
-        <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Expires</dt><dd class="text-sm text-fg tabular-nums">{sslStatus.ssl_expires_at ? fmtDate(sslStatus.ssl_expires_at) : '—'}</dd></div>
+        <div class="flex items-center justify-between gap-4 py-2.5"><dt class="text-[13px] text-muted">Expires</dt><dd class="flex items-center gap-2 text-sm text-fg tabular-nums">{#if sslStatus.ssl_expires_at && expiryTone(sslStatus.ssl_expires_at)}{@const tone = expiryTone(sslStatus.ssl_expires_at)}<span class="badge {tone === 'ok' ? 'badge-success' : tone === 'warn' ? 'badge-warning' : 'badge-danger'}">{fmtDaysLeft(sslStatus.ssl_expires_at)}</span>{fmtDate(sslStatus.ssl_expires_at)}{:else}—{/if}</dd></div>
       </dl>
     {:else}
       <EmptyState compact icon={ShieldCheck} title="No SSL status available" description="Issue a certificate below." />
@@ -131,6 +143,20 @@
           <RefreshCw size={14} class={sslBusy ? 'animate-spin' : ''} /> Renew
         </button>
       </div>
+      {#if lastError}
+        {@const firstLine = lastError.text.split('\n').find((l) => l.trim()) ?? lastError.text}
+        <div class="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3" role="alert">
+          <p class="text-[13px] font-medium text-danger">Job #{lastError.jobId} failed</p>
+          <p class="mt-0.5 font-mono text-xs wrap-anywhere text-fg">{firstLine}</p>
+          {#if lastError.text.trim() !== firstLine.trim()}
+            <details class="mt-2">
+              <summary class="cursor-pointer text-xs font-medium text-muted hover:text-fg">Full output</summary>
+              <pre class="mt-2 max-h-72 overflow-auto rounded-lg border border-line bg-surface p-3 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-fg">{lastError.text}</pre>
+            </details>
+          {/if}
+          <a href="/jobs" class="link mt-2 inline-block text-xs">Open jobs</a>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}

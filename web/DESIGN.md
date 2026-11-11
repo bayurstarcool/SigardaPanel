@@ -48,6 +48,7 @@ glow shadows (`shadow-[0_0_…]`, colored shadows), `transition-all`, `hover:-tr
 - `PageHeader` — `title`, `description`, `back` (href), snippets `meta` (badges next to title) and `actions` (buttons).
 - `StatCard` — `label`, `value`, `hint`, `icon`, `tone`, `href`.
 - `EmptyState` — `icon`, `title`, `description`, `actionLabel` + `onaction`, `compact`.
+- `LoadError` — `message`, `title`, `onretry`, `compact`. Use when a list/detail load fails, so an API error never renders as the empty state.
 - `Modal` — `bind:open`, `title`, `maxWidth` (`sm|md|lg|xl`), `onclose`, children + `footer` snippet.
 - `ConfirmDialog` — `bind:open`, `title`, `message`, `confirmLabel`, `destructive`, `onconfirm`.
 - `StatusPill` — `status` (+ optional `label`); maps common statuses to badge tones.
@@ -60,6 +61,7 @@ glow shadows (`shadow-[0_0_…]`, colored shadows), `transition-all`, `hover:-tr
 - Lists: a `card` with an optional toolbar row (`border-b border-line px-4 py-3`: segmented filter + search input `input h-8 pl-8`), then `table-wrap` > `table`.
 - Text: body `text-sm`; secondary 13px `text-[13px] text-muted`; meta `text-xs text-subtle`; section titles `text-sm font-semibold text-fg`; numbers `tabular-nums`; paths/commands `font-mono text-[13px]`.
 - Icons: `lucide-svelte`, 14–16px in buttons/rows, 16px in cards.
+- Dates from the API: always format through `$lib/format` (`fmtDate`, `fmtDateTime`, `fmtRelative`, `parseDate`); never `new Date(apiValue)` directly — the API emits RFC 3339, SQLite and Go `time.String()` shapes.
 - Loading: `skeleton` rows shaped like the content, not spinners filling the page. Spinners only inside buttons (`animate-spin` on a `RefreshCw`/`LoaderCircle` icon).
 - Mobile (390px) must work: tables inside `table-wrap`, secondary columns `max-sm:hidden`, header actions wrap, modals become bottom sheets automatically.
 

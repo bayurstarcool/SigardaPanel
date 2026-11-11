@@ -93,6 +93,7 @@ var AllMigrations = []Migration{
 	RepairBackupsSchema,
 	BackupStartedAtSchema,
 	NormalizeSSLExpiresAtSchema,
+	UserAPIKeysSchema,
 }
 
 func Down(db *sql.DB) error {

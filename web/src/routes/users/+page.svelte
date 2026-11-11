@@ -1,4 +1,6 @@
 <script lang="ts">
+  import LoadError from '$components/LoadError.svelte';
+  import { fmtDate } from '$lib/format';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -39,13 +41,22 @@
   });
 
 
-  onMount(async () => {
-    if (!auth.user) { loading = false; return; }
+  let loadError = $state('');
+
+  async function loadUsers() {
+    loading = true;
     try {
       const d = await apiFetch(auth.token, 'GET', 'users');
       users = d?.users || [];
-    } catch (e: any) { toasts.error(e.message); }
-    finally { loading = false; }
+      loadError = '';
+    } catch (e: any) {
+      if (e.message !== 'session expired') loadError = e.message || 'Failed to load users';
+    } finally { loading = false; }
+  }
+
+  onMount(async () => {
+    if (!auth.user) { loading = false; return; }
+    await loadUsers();
   });
 
   async function createUser() {
@@ -123,9 +134,6 @@
     return role === 'super_admin' ? 'Super Admin' : role === 'admin' ? 'Admin' : 'User';
   }
 
-  function fmtDate(d: string | null | undefined) {
-    return d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
-  }
 
   const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
 </script>
@@ -174,6 +182,8 @@
           </div>
         {/each}
       </div>
+    {:else if loadError}
+      <LoadError title="Could not load users" message={loadError} onretry={loadUsers} />
     {:else if users.length === 0}
       <EmptyState
         icon={Users as any}

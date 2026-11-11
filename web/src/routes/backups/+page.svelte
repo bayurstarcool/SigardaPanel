@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtRelative } from '$lib/format';
+  import { fmtRelative, fmtDateTime } from '$lib/format';
   import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
   import EmptyState from '$components/EmptyState.svelte';
+  import LoadError from '$components/LoadError.svelte';
   import Modal from '$components/Modal.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import StatusPill from '$components/StatusPill.svelte';
@@ -22,6 +23,7 @@
   let configs = $state<any[]>([]);
   let loading = $state(true);
   let view = $state<'history' | 'settings'>('history');
+  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
   let activeTab = $state<'all' | 'files' | 'database'>('all');
   let allSites = $state<any[]>([]);
   let allDatabases = $state<any[]>([]);
@@ -41,10 +43,13 @@
   let manualProviderId = $state<number>(0);
   let manualBusy = $state(false);
 
+  let loadError = $state('');
+
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
     await load();
-    await Promise.all([loadProviders(), loadConfigs(), loadSites(), loadDatabases()]);
+    // Providers and schedules are admin-only endpoints.
+    await Promise.all([isAdmin ? loadProviders() : null, isAdmin ? loadConfigs() : null, loadSites(), loadDatabases()]);
   });
 
   async function load() {
@@ -52,8 +57,9 @@
     try {
       const d = await apiFetch(auth.token, 'GET', 'backups');
       backups = d?.backups || [];
+      loadError = '';
     } catch (e: any) {
-      if (e.message !== 'session expired') toasts.error(e.message);
+      if (e.message !== 'session expired') loadError = e.message || 'Failed to load backups';
     } finally { loading = false; }
   }
 
@@ -128,7 +134,7 @@
   function openManualBackup() {
     showManualBackup = true;
     loadSites();
-    loadProviders();
+    if (isAdmin) loadProviders();
   }
 
   async function triggerManualBackup() {
@@ -194,10 +200,12 @@
     {/snippet}
   </PageHeader>
 
-  <div class="tabs mb-6" role="tablist">
-    <button role="tab" aria-selected={view === 'history'} class="tab {view === 'history' ? 'tab-active' : ''}" onclick={() => (view = 'history')}>History</button>
-    <button role="tab" aria-selected={view === 'settings'} class="tab {view === 'settings' ? 'tab-active' : ''}" onclick={() => (view = 'settings')}>Settings</button>
-  </div>
+  {#if isAdmin}
+    <div class="tabs mb-6" role="tablist">
+      <button role="tab" aria-selected={view === 'history'} class="tab {view === 'history' ? 'tab-active' : ''}" onclick={() => (view = 'history')}>History</button>
+      <button role="tab" aria-selected={view === 'settings'} class="tab {view === 'settings' ? 'tab-active' : ''}" onclick={() => (view = 'settings')}>Settings</button>
+    </div>
+  {/if}
 
   {#if view === 'history'}
     <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -237,6 +245,10 @@
         <div class="space-y-3 p-4">
           {#each Array(5) as _, i (i)}<div class="skeleton h-9"></div>{/each}
         </div>
+      {:else if loadError}
+        <LoadError title="Could not load backups" message={loadError} onretry={load} />
+      {:else if filtered.length === 0 && backups.length > 0}
+        <EmptyState compact icon={Package as any} title="No {activeTab === 'database' ? 'database' : 'file'} backups" description="Switch the filter to see other backups." />
       {:else if filtered.length === 0}
         <EmptyState compact icon={Package as any} title="No backups yet" description="Create a backup now, or add a schedule under Settings." actionLabel="Create backup" onaction={openManualBackup} />
       {:else}
@@ -274,7 +286,7 @@
                     </span>
                   </td>
                   <td class="text-muted tabular-nums max-sm:hidden">{b.size_bytes ? fmtBytes(b.size_bytes) : '—'}</td>
-                  <td class="whitespace-nowrap text-muted max-sm:hidden" title={b.created_at ? new Date(b.created_at).toLocaleString('id-ID') : ''}>{fmtRelative(b.created_at)}</td>
+                  <td class="whitespace-nowrap text-muted max-sm:hidden" title={fmtDateTime(b.created_at)}>{fmtRelative(b.created_at)}</td>
                   <td class="text-right">
                     <div class="flex items-center justify-end gap-0.5">
                       <a href="/api/proxy/backups/{b.id}/download" download data-sveltekit-reload class="btn btn-ghost btn-icon btn-xs" title="Download" aria-label="Download backup #{b.id}">
@@ -295,7 +307,7 @@
         </div>
       {/if}
     </div>
-  {:else}
+  {:else if isAdmin}
     <SettingsPanel {providers} {providerUsage} {configs} {allSites} {loadProviders} {loadConfigs} />
   {/if}
 
