@@ -273,3 +273,59 @@ func TestServerUpdate_SendsOnlySupportedFields(t *testing.T) {
 		t.Fatalf("--status is not supported by the API; expected 2, got %d", code)
 	}
 }
+
+func TestServerToken_OnlySyncsLocalEnvFiles(t *testing.T) {
+	dir := t.TempDir()
+	orig := localEnvFiles
+	localEnvFiles = []string{dir + "/agent.env", dir + "/panel.env"}
+	t.Cleanup(func() { localEnvFiles = orig })
+	for _, f := range localEnvFiles {
+		os.WriteFile(f, []byte("SIGARDAPANEL_AGENT_TOKEN=old\n"), 0o600)
+	}
+	agentURL := map[string]string{"1": "http://127.0.0.1:7710", "2": "https://10.0.0.9:7710"}
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		id := strings.Split(r.URL.Path, "/")[4]
+		switch {
+		case r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": id, "agent_url": agentURL[id]}})
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/token"):
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"agent_token": "new-" + id}})
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	})
+	var stdout, stderr bytes.Buffer
+	app := New(&stdout, &stderr, strings.NewReader(""))
+
+	// Remote server: env files untouched, instructions printed.
+	if code := app.Run([]string{"server", "token", "2"}); code != 0 {
+		t.Fatalf("remote exit %d: %s", code, stderr.String())
+	}
+	if b, _ := os.ReadFile(localEnvFiles[0]); string(b) != "SIGARDAPANEL_AGENT_TOKEN=old\n" {
+		t.Fatalf("remote token must not touch local env, got %q", b)
+	}
+	if !strings.Contains(stdout.String(), "new-2") || !strings.Contains(stdout.String(), "remote") {
+		t.Errorf("remote output: %s", stdout.String())
+	}
+
+	// Local server: both env files updated.
+	if code := app.Run([]string{"server", "token", "--id", "1"}); code != 0 {
+		t.Fatalf("local exit %d: %s", code, stderr.String())
+	}
+	for _, f := range localEnvFiles {
+		if b, _ := os.ReadFile(f); !strings.Contains(string(b), "SIGARDAPANEL_AGENT_TOKEN=new-1") {
+			t.Errorf("%s not updated: %q", f, b)
+		}
+	}
+}
+
+func TestIsLocalAgentURL(t *testing.T) {
+	for in, want := range map[string]bool{
+		"http://127.0.0.1:7710": true, "http://localhost:7710/": true, "http://[::1]:7710": true,
+		"https://10.0.0.9:7710": false, "http://agent.example.com": false, "": false,
+	} {
+		if got := isLocalAgentURL(in); got != want {
+			t.Errorf("isLocalAgentURL(%q)=%v want %v", in, got, want)
+		}
+	}
+}

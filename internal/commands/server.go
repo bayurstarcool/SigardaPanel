@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -382,6 +383,20 @@ func (a *App) serverToken(args []string) int {
 		return exitError
 	}
 
+	// Only the panel host's own agent reads /etc/sigardapanel/*.env on this
+	// machine; writing a remote server's token there would break the local
+	// agent. Decide from the server's agent_url before regenerating.
+	local := false
+	if sresp, ok := a.call(client, http.MethodGet, fmt.Sprintf("/api/v1/servers/%d", id), nil, http.StatusOK); ok {
+		var srv struct {
+			AgentURL string `json:"agent_url"`
+		}
+		a.decode(sresp, &srv)
+		local = isLocalAgentURL(srv.AgentURL)
+	} else {
+		return exitError
+	}
+
 	// 1. Regenerate via API (updates DB servers.agent_token)
 	resp, ok := a.call(client, http.MethodPost, fmt.Sprintf("/api/v1/servers/%d/token", id), nil, http.StatusOK)
 	if !ok {
@@ -397,8 +412,14 @@ func (a *App) serverToken(args []string) int {
 	token := data.AgentToken
 
 	// 2. Sync to local env files so the agent process picks it up on restart
+	if !local {
+		fmt.Fprintf(a.stdout, "agent token regenerated for server %d (remote: local env files left untouched)\n", id)
+		fmt.Fprintf(a.stdout, "agent_token: %s\n", token)
+		fmt.Fprintln(a.stdout, "NOTE: on that server set SIGARDAPANEL_AGENT_TOKEN=<token> in /etc/sigardapanel/agent.env and restart sigardapanel-agent")
+		return exitOK
+	}
 	if !*noSync {
-		for _, ef := range []string{"/etc/sigardapanel/agent.env", "/etc/sigardapanel/panel.env"} {
+		for _, ef := range localEnvFiles {
 			if _, err := os.Stat(ef); err != nil {
 				continue
 			}
@@ -420,6 +441,25 @@ func (a *App) serverToken(args []string) int {
 	fmt.Fprintf(a.stdout, "agent_token: %s\n", token)
 	fmt.Fprintln(a.stdout, "NOTE: restart sigardapanel-agent + sigardapanel-api to apply")
 	return exitOK
+}
+
+// localEnvFiles are the panel host's env files that carry the local agent
+// token (a variable so tests never touch the real files).
+var localEnvFiles = []string{"/etc/sigardapanel/agent.env", "/etc/sigardapanel/panel.env"}
+
+// isLocalAgentURL reports whether an agent URL points at this machine
+// (loopback host), i.e. the panel host's own auto-registered agent.
+func isLocalAgentURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	switch h := u.Hostname(); h {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return strings.HasPrefix(h, "127.")
+	}
 }
 
 // updateEnvToken replaces the SIGARDAPANEL_AGENT_TOKEN value in an env file
@@ -456,8 +496,10 @@ Subcommands:
                         update server settings (admin)
   remove <id>           remove a server (admin; alias: rm, delete)
   token [<id>] [--no-env-sync]
-                        regenerate the agent token (admin; default server 1) and
-                        write it to /etc/sigardapanel/{agent,panel}.env if present
+                        regenerate the agent token (admin; default server 1). For the
+                        local server (agent_url on localhost) it is also written to
+                        /etc/sigardapanel/{agent,panel}.env; for a remote server it is
+                        only printed, to be set in that server's agent.env
   doctor                check that the panel API answers
 `)
 }

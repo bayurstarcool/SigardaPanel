@@ -360,7 +360,7 @@ func (a *App) Version(args []string) int {
 	}
 	out := map[string]any{"client": buildinfo.Version}
 	client, _ := a.apiClient()
-	client.HTTP = &http.Client{Timeout: 5 * time.Second}
+	client.HTTP = &http.Client{Timeout: 3 * time.Second}
 	out["api_url"] = client.BaseURL
 	resp, status, err := client.Get("/api/v1/version")
 	switch {

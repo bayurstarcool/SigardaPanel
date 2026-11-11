@@ -24,6 +24,8 @@ func TestMain(m *testing.M) {
 	// Never fall through to the default http://localhost:7700, which on a
 	// panel host is the live API. Port 9 (discard) is not listening.
 	os.Setenv("SIGARDAPANEL_API_URL", "http://127.0.0.1:9")
+	// server token must never rewrite the real /etc/sigardapanel env files.
+	localEnvFiles = []string{dir + "/agent.env", dir + "/panel.env"}
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
