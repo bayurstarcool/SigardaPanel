@@ -14,10 +14,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"unicode/utf8"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // MaxReadSize is the largest file Read returns (the editor is for text).
@@ -665,7 +665,7 @@ func (f *FS) OpenDownload(rel string) (*os.File, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	defer r.Close() // an open file stays usable after its Root is closed
+	defer r.Close()                              // an open file stays usable after its Root is closed
 	fh, err := r.OpenFile(clean, os.O_RDONLY, 0) // links resolve only beneath the root
 	if err != nil {
 		return nil, nil, pathErr(err, http.StatusNotFound, "file not found")
