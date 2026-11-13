@@ -1,20 +1,31 @@
-# Builds, signs and publishes a release when a vX.Y.Z tag is pushed.
+# Builds, signs and publishes a release.
+#
+# Two ways to start it:
+#   - push a vX.Y.Z tag that points at a commit on main, or
+#   - run the workflow manually (Actions -> Release -> Run workflow) on main
+#     with the version (e.g. 1.7.0); the release and its tag are created on
+#     the current main commit.
 #
 # Setup (once, repository Settings):
 #   - Environments -> "release": add the secrets below and, recommended,
-#     required reviewers and a "Deployment branches and tags" rule limited
-#     to tags matching v*.*.* so only approved runs can use the key.
+#     required reviewers. If you restrict "Deployment branches and tags",
+#     allow the branch main (manual runs) and tags matching v*.*.*.
 #   - MINISIGN_SECRET_KEY: the full contents of the minisign secret key file
 #     (the key whose public half is PUBKEY in installer/install.sh).
 #   - MINISIGN_PASSWORD: the key's password (omit for an unencrypted key).
 #
-# Release: put the notes in docs/releases/vX.Y.Z.md on main, then
-#   git tag vX.Y.Z <commit on main> && git push origin vX.Y.Z
+# Release notes are read from docs/releases/vX.Y.Z.md on main.
 name: Release
 
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 1.7.0 (run on main)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -29,25 +40,44 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: write # create the GitHub release
+      contents: write # create the GitHub release (and, for manual runs, its tag)
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: The tag must point at a commit on main
+      - name: Resolve the release tag
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            [ "$GITHUB_REF" = "refs/heads/main" ] \
+              || { echo "::error::run the workflow on main (got $GITHUB_REF)"; exit 1; }
+            v="${INPUT_VERSION#v}"
+            [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              || { echo "::error::version must look like 1.2.3"; exit 1; }
+            tag="v$v"
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "::error::tag $tag already exists"; exit 1
+            fi
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: The release commit must be on main
         run: |
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
-            || { echo "::error::${GITHUB_REF_NAME} is not on main"; exit 1; }
+            || { echo "::error::${TAG} is not on main"; exit 1; }
 
       - name: The release must not exist yet
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::release ${GITHUB_REF_NAME} already exists"; exit 1
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release ${TAG} already exists"; exit 1
           fi
 
       - uses: actions/setup-go@v5
@@ -69,6 +99,8 @@ jobs:
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
           GH_TOKEN: ${{ github.token }}
           PUBLIC_REPO: ${{ github.repository }}
+          # The release (and a missing tag) is created on exactly this commit.
+          RELEASE_TARGET: ${{ github.sha }}
         run: |
           [ -n "$MINISIGN_SECRET_KEY" ] || { echo "::error::MINISIGN_SECRET_KEY is not set"; exit 1; }
           umask 077
@@ -76,4 +108,4 @@ jobs:
           trap 'rm -rf "$keydir"' EXIT
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$keydir/sigardapanel.key"
           MINISIGN_KEY="$keydir/sigardapanel.key" OUT="$RUNNER_TEMP/release-dist" \
-            bash scripts/release.sh "${GITHUB_REF_NAME#v}" --publish
+            bash scripts/release.sh "${TAG#v}" --publish

@@ -64,5 +64,8 @@ if [ "$PUBLISH" = "--publish" ]; then
   NOTES="${RELEASE_NOTES:-}"
   if [ -z "$NOTES" ] && [ -f "docs/releases/${TAG}.md" ]; then NOTES="$(cat "docs/releases/${TAG}.md")"; fi
   NOTES="${NOTES:-SigardaPanel ${TAG}. Install with the script in the repository README; every file is signed (see 'Verifying releases').}"
-  gh release create "$TAG" -R "$PUBLIC_REPO" --title "SigardaPanel ${TAG}" --notes "$NOTES" --latest "$OUT"/*
+  # RELEASE_TARGET (a commit): create the tag there when it does not exist yet
+  # (manual workflow runs); otherwise the existing tag is used.
+  gh release create "$TAG" -R "$PUBLIC_REPO" ${RELEASE_TARGET:+--target "$RELEASE_TARGET"} \
+    --title "SigardaPanel ${TAG}" --notes "$NOTES" --latest "$OUT"/*
 fi
