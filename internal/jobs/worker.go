@@ -370,6 +370,16 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 				}
 			}
 
+			// An agent that predates server-level access rules silently
+			// ignores the allowlist and leaves PHP URLs open to blocked IPs.
+			if result != nil && !result.AccessRules && w.siteHasIPRules(ctx, siteID) {
+				msg := "The agent on this site's server is too old to enforce its IP rules (allowlist, blocks on PHP URLs). Update the agent from Servers."
+				slog.Warn("worker: agent does not apply IP rules", "site_id", siteID)
+				if s, _ := w.store.Sites.GetByID(ctx, siteID); s != nil {
+					w.store.NotifyAdmins(ctx, "agent_outdated", "Agent update needed", s.Domain+": "+msg, "warning", "site", siteID)
+				}
+			}
+
 			// Update conf_file from agent response
 			if result != nil && result.NginxConfig != "" {
 				if err := w.store.Sites.UpdateConfFile(ctx, siteID, result.NginxConfig); err != nil {
@@ -637,6 +647,15 @@ func siteIsNew(site *store.Site) bool {
 		return true
 	}
 	return false
+}
+
+// siteHasIPRules reports whether the site has blocked IPs or IP restrictions.
+func (w *Worker) siteHasIPRules(ctx context.Context, siteID int64) bool {
+	if sec, _ := w.store.Security.GetBySiteID(ctx, siteID); sec != nil && len(sec.BlockedIPs) > 0 {
+		return true
+	}
+	rules, _ := w.store.IPRestrictions.List(ctx, siteID)
+	return len(rules) > 0
 }
 
 // dedupeIPs canonicalises IPs/CIDRs and drops duplicates and invalid entries.

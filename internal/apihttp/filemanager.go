@@ -341,6 +341,9 @@ func (h *fileManagerHandler) downloadFile(c echo.Context) error {
 		if out == nil {
 			out = map[string]any{}
 		}
+		if resp.StatusCode == http.StatusNotFound && agentMessage(out, "Not Found") == "Not Found" {
+			return echo.NewHTTPError(http.StatusBadGateway, "the agent on this server is too old for the file manager; update the agent")
+		}
 		return agentHTTPError(resp.StatusCode, out)
 	}
 	name := filepath.Base(relPath)

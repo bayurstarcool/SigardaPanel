@@ -836,6 +836,10 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		"nginx_config":      nginxConfigPath,
 		"proxy_pass_url":    payload.ProxyPassURL,
 		"nginx_test_output": strings.TrimSpace(output),
+		// access_rules: this agent renders blocked/allowed IPs at server
+		// level (all locations). Older agents only knew "location /" denies
+		// and no allowlist; the panel warns when this flag is missing.
+		"access_rules": true,
 	})
 }
 
