@@ -1,9 +1,12 @@
 package apihttp
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base32"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/pquerna/otp/totp"
@@ -16,6 +19,50 @@ type TwoFactorHandler struct {
 }
 
 // newTwoFactorHandler creates a new TwoFactorHandler.
+// twoFAFailures limits wrong authenticator codes per user on the 2FA
+// management endpoints (a stolen session must not brute-force the 6 digits
+// to disable 2FA or mint recovery codes); twoFAUsed rejects replays.
+var (
+	twoFAFailures = newFailureTracker(5, 15*time.Minute)
+	twoFAUsed     usedTOTP
+)
+
+// checkTOTP validates code for userID with attempt limiting and replay
+// protection. It returns a non-nil *echo.HTTPError to send (never the result
+// of writing a response, which is nil and would let the caller continue),
+// or nil when the code is good.
+func checkTOTP(c echo.Context, userID int64, code, secret string) error {
+	key := "2fa:" + strconv.FormatInt(userID, 10)
+	if twoFAFailures.blocked(key) {
+		return echo.NewHTTPError(http.StatusTooManyRequests, "too many wrong codes; try again in 15 minutes")
+	}
+	if code == "" || secret == "" || !totp.Validate(code, secret) || !twoFAUsed.markUsed(userID, code) {
+		twoFAFailures.fail(key)
+		return echo.NewHTTPError(http.StatusUnauthorized, "invalid TOTP code")
+	}
+	twoFAFailures.reset(key)
+	return nil
+}
+
+// newRecoveryCodes generates and stores a fresh set of 10 recovery codes.
+func (h *TwoFactorHandler) newRecoveryCodes(ctx context.Context, userID int64) ([]string, error) {
+	codes := make([]string, 10)
+	codeHashes := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		raw := make([]byte, 10) // 80 bits of entropy per code
+		if _, err := rand.Read(raw); err != nil {
+			return nil, err
+		}
+		enc := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw) // 16 chars
+		codes[i] = enc[0:4] + "-" + enc[4:8] + "-" + enc[8:12] + "-" + enc[12:16]
+		codeHashes[i] = hashRecoveryCode(codes[i])
+	}
+	if err := h.store.TwoFactor.StoreRecoveryCodes(ctx, userID, codeHashes); err != nil {
+		return nil, err
+	}
+	return codes, nil
+}
+
 func newTwoFactorHandler(s *store.Store) *TwoFactorHandler {
 	return &TwoFactorHandler{store: s}
 }
@@ -116,11 +163,8 @@ func (h *TwoFactorHandler) enable2FA(c echo.Context) error {
 	}
 
 	// Validate the TOTP code
-	valid := totp.Validate(body.Code, secret)
-	if !valid {
-		return c.JSON(http.StatusUnauthorized, map[string]any{
-			"error": "invalid TOTP code",
-		})
+	if err := checkTOTP(c, userID, body.Code, secret); err != nil {
+		return err
 	}
 
 	// Enable 2FA
@@ -130,10 +174,13 @@ func (h *TwoFactorHandler) enable2FA(c echo.Context) error {
 		})
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{
-		"message": "2FA enabled successfully",
-		"enabled": true,
-	})
+	// The first recovery codes come with enabling; replacing them later
+	// needs an authenticator code.
+	resp := map[string]any{"message": "2FA enabled successfully", "enabled": true}
+	if codes, err := h.newRecoveryCodes(c.Request().Context(), userID); err == nil {
+		resp["recovery_codes"] = codes
+	}
+	return c.JSON(http.StatusOK, resp)
 }
 
 // disable2FA verifies a TOTP code and disables 2FA for the user.
@@ -168,11 +215,8 @@ func (h *TwoFactorHandler) disable2FA(c echo.Context) error {
 	}
 
 	// Validate the TOTP code
-	valid := totp.Validate(body.Code, secret)
-	if !valid {
-		return c.JSON(http.StatusUnauthorized, map[string]any{
-			"error": "invalid TOTP code",
-		})
+	if err := checkTOTP(c, userID, body.Code, secret); err != nil {
+		return err
 	}
 
 	// Disable 2FA
@@ -219,12 +263,8 @@ func (h *TwoFactorHandler) verify2FA(c echo.Context) error {
 		})
 	}
 
-	// Validate the TOTP code with a time window
-	valid := totp.Validate(body.Code, secret)
-	if !valid {
-		return c.JSON(http.StatusUnauthorized, map[string]any{
-			"error": "invalid TOTP code",
-		})
+	if err := checkTOTP(c, userID, body.Code, secret); err != nil {
+		return err
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
@@ -271,41 +311,21 @@ func (h *TwoFactorHandler) generateRecoveryCodes(c echo.Context) error {
 		})
 	}
 
-	// The first set is handed out right after enabling 2FA. Replacing an
-	// existing set needs a current authenticator code: a stolen session must
-	// not be able to mint codes that log in without the second factor.
-	if n, _ := h.store.TwoFactor.CountRecoveryCodes(c.Request().Context(), userID); n > 0 {
-		var body struct {
-			Code string `json:"code"`
-		}
-		_ = c.Bind(&body)
-		secret, err := h.store.TwoFactor.GetTOTPSecret(c.Request().Context(), userID)
-		if body.Code == "" || err != nil || secret == "" || !totp.Validate(body.Code, secret) {
-			return c.JSON(http.StatusBadRequest, map[string]any{
-				"error": "enter a current authenticator code to replace your recovery codes",
-			})
-		}
+	// Replacing recovery codes always needs a current authenticator code
+	// (also when all were used): a stolen session must not be able to mint
+	// codes that log in without the second factor.
+	var body struct {
+		Code string `json:"code"`
 	}
-
-	// Generate 10 recovery codes
-	codes := make([]string, 10)
-	codeHashes := make([]string, 10)
-	for i := 0; i < 10; i++ {
-		raw := make([]byte, 10) // 80 bits of entropy per code
-		if _, err := rand.Read(raw); err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]any{
-				"error": "failed to generate recovery codes",
-			})
-		}
-		enc := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw) // 16 chars
-		codes[i] = enc[0:4] + "-" + enc[4:8] + "-" + enc[8:12] + "-" + enc[12:16]
-		codeHashes[i] = hashRecoveryCode(codes[i])
+	_ = c.Bind(&body)
+	secret, _ := h.store.TwoFactor.GetTOTPSecret(c.Request().Context(), userID)
+	if err := checkTOTP(c, userID, body.Code, secret); err != nil {
+		return err
 	}
-
-	// Store hashed recovery codes in database
-	if err := h.store.TwoFactor.StoreRecoveryCodes(c.Request().Context(), userID, codeHashes); err != nil {
+	codes, err := h.newRecoveryCodes(c.Request().Context(), userID)
+	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]any{
-			"error": "failed to store recovery codes",
+			"error": "failed to generate recovery codes",
 		})
 	}
 
