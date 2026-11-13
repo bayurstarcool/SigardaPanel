@@ -10,6 +10,7 @@
   const sections = [
     { id: 'getting-started', title: 'Getting Started' },
     { id: 'servers', title: 'Server Management' },
+    { id: 'stack', title: 'Server Stack' },
     { id: 'sites', title: 'Site Management' },
     { id: 'databases', title: 'Databases' },
     { id: 'backups', title: 'Backup System' },
@@ -219,6 +220,26 @@ sigardapanel server add --name "Production" --hostname prod.example.com --ip 1.2
           <span class="badge badge-danger">Token rejected</span>
         </div>
         <p class="mt-3 text-sm leading-relaxed text-muted"><em>Token rejected</em> means the agent answers but its <code class="code">SIGARDAPANEL_AGENT_TOKEN</code> differs from the panel's (for example after <strong>Edit → Regenerate</strong>). The servers list also flags agents that run a different version than the panel.</p>
+      </section>
+
+      <!-- Stack -->
+      <section id="stack" class="scroll-mt-20 border-b border-line pb-12 mb-12">
+        <h2 class="text-2xl font-semibold tracking-tight text-fg">Server Stack</h2>
+        <p class="mt-1.5 mb-2 text-muted">Install, update, remove and restart the software a server runs (<strong>Stack → server</strong>). Admins only; everyone else sees it read-only.</p>
+        <ul class="mb-4 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-muted">
+          <li><strong>Components</strong>: Nginx, PHP, Node.js, Python, Go, Docker, Certbot, MariaDB, Redis, Memcached, Supervisor. Package installs need Debian or Ubuntu (apt); service actions work everywhere systemd runs.</li>
+          <li><strong>Installs run in the background.</strong> The page shows progress and the log tail, and only reports success after checking the result (binary present, service running, PHP-FPM socket created). A failure shows the apt or systemd error. One package operation runs at a time per server; it keeps running if you leave the page and is picked up again when you come back.</li>
+          <li><strong>PHP</strong>: several versions side by side (7.4 – 8.5), each with its own <code class="code">php&lt;version&gt;-fpm</code> and socket <code class="code">/run/php/php&lt;version&gt;-fpm.sock</code>. Versions the distribution does not ship come from <code class="code">ppa:ondrej/php</code> (Ubuntu) or <code class="code">packages.sury.org</code> (Debian), added automatically. Per version you can start/stop/restart FPM, update, install or remove extensions (<code class="code">php&lt;version&gt;-&lt;ext&gt;</code>, FPM restarts) and choose which version <code class="code">php</code> runs on the command line. Each site picks its version in <strong>Settings → PHP</strong>; the lists there and in the new-site form show the versions installed on that server.</li>
+          <li><strong>Node.js</strong> comes from NodeSource (one major line at a time, installing another replaces it); <strong>Go</strong> is installed in <code class="code">/usr/local/go</code> from go.dev with its SHA-256 checked.</li>
+          <li><strong>Restarting nginx</strong> first runs <code class="code">nginx -t</code> and refuses with the error when the configuration is invalid.</li>
+        </ul>
+        <h3 class="mt-8 mb-3 text-base font-semibold text-fg">Safety checks on uninstall</h3>
+        <ul class="mb-4 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-muted">
+          <li>A PHP version is not removed while a site uses it, or while any nginx vhost on the server still passes PHP to its socket; the message names them. Move those sites to another version first.</li>
+          <li>Nginx is not removed while the server has sites; Node.js and Docker not while sites of that runtime exist (Docker also not while containers run); Certbot not while sites have certificates; MariaDB not while the panel manages databases there (its data directory is kept anyway).</li>
+          <li>Removal never takes other packages with it: when apt would also remove something that depends on the package (for example phpMyAdmin), nothing is removed and the dependants are listed.</li>
+          <li>On the panel's own server nginx cannot be stopped or removed and Certbot cannot be removed; uninstalling or stopping anything there, and running commands there, needs a super_admin.</li>
+        </ul>
       </section>
 
       <!-- Site Management -->

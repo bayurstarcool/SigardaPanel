@@ -145,5 +145,7 @@ File issues privately. Do not disclose publicly until patched.
 - `internal/auth/password.go` — Argon2id implementation
 - `internal/executor/executor.go` — command allowlist
 - `internal/apihttp/filemanager.go` — `safePath()` (path traversal guard)
-- `internal/agenthttp/stack.go` — `managePHP/Nginx/etc` (no shell)
+- `internal/agenthttp/stack*.go` — stack package operations: validated versions/extension names, apt
+  argument arrays (no shell interpolation of input), removal simulated first (`apt-get -s`) so no other
+  package goes with it; `internal/apihttp/stack_manage.go` — site/panel-host guards and audit
 - `internal/agenthttp/router.go` — `requireAgentAuth` (constant-time compare)

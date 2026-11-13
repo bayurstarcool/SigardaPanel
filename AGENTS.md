@@ -363,11 +363,24 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `GET /api/v1/cloudflare/zones/:id/analytics` — Zone analytics
 - `GET /api/v1/cloudflare/zones/:id/analytics/range` — Analytics range
 
-### Stack (4 endpoints)
-- `GET /api/v1/servers/:id/stack` — Stack info
-- `POST /api/v1/servers/:id/stack/action` — Install/manage
+### Stack (6 endpoints)
+- `GET /api/v1/servers/:id/stack` — Stack info (packages, `php_versions`, distro, `is_local`, running `operation`)
+- `POST /api/v1/servers/:id/stack/action` — Install/manage (admin). Package operations
+  (`install`/`uninstall`/`update`/`install-extension`/`uninstall-extension`) answer 202 `{op_id}`
+  and run in the background on the agent (one at a time per agent, 45 min cap, verified result)
+- `GET /api/v1/servers/:id/stack/ops/:op` — Operation progress/result (log tail)
 - `POST /api/v1/servers/:id/stack/restart` — Restart services
-- `POST /api/v1/servers/:id/command` — Execute command
+- `GET /api/v1/servers/:id/php-versions` — Installed PHP-FPM versions (site forms)
+- `POST /api/v1/servers/:id/command` — Execute command (`timeout` 1–300 s; super_admin on the panel host)
+
+Stack code: agent `internal/agenthttp/stack.go` (handlers, operations), `stack_pkgs.go`
+(components), `stack_sys.go` (host access + apt helpers). All host access goes through
+`stackSystem`; routers built with `RouterOptions` get `denyStackSystem` unless a test injects
+a fake (`stack_test.go`), so tests never run apt/systemctl. Guards (sites using a PHP version,
+nginx/node/docker/certbot/mariadb in use, panel-host protections, super_admin for destructive
+actions on the panel host) live in `internal/apihttp/stack_manage.go`; the agent independently
+refuses removing a PHP version referenced by an nginx vhost and any removal that `apt-get -s`
+shows would take other packages with it.
 
 ### Docker (19 endpoints)
 - `GET /api/v1/servers/:id/docker/containers` — List containers
@@ -620,4 +633,13 @@ drops its MySQL databases; v1.2.0 cookie sessions + `SIGARDAPANEL_ALLOW_REGISTRA
 v1.6.1 self-hosted defaults (`SIGARDAPANEL_LANDING_PAGE`, `SIGARDAPANEL_ALLOW_MEMBER_SIGNUP`,
 both default false), API-enforced `password_change_required` + `sigardapanel passwd`,
 503 placeholder for suspended sites, PHP-FPM preflight and site-owner account on
-`site.create`, no fallback-key error from `init`.
+`site.create`, no fallback-key error from `init`;
+v1.6.2 Stack page rework: package installs/removals run as background agent operations
+(202 + `stack/ops/:op` polling, no proxy timeouts) with verified results and the apt/systemd
+log tail on failure; non-interactive apt (dpkg lock wait/retry, confold, interrupted-dpkg repair);
+PHP multi-version via distro / ondrej PPA / sury.org, per-version FPM actions, extensions and
+CLI default; removal guards (PHP versions used by sites or vhosts, nginx/node/docker/certbot/
+mariadb in use, `apt-get -s` collateral check, panel-host protections, super_admin for
+destructive actions and `command` on the panel host); MariaDB core packages removed with it;
+site PHP version lists come from the site's server; Memcached card; agent 401 no longer
+surfaces as a session error.
