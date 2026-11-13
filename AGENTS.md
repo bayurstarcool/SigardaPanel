@@ -769,6 +769,12 @@ switching requires re-encrypting those values.
 
 ## GitHub Releases
 
+Releases are built, signed and published by `.github/workflows/release.yml` when a
+`vX.Y.Z` tag on `main` is pushed (environment `release`, secrets `MINISIGN_SECRET_KEY`
+and `MINISIGN_PASSWORD`). It runs `scripts/release.sh`, which refuses a signature that
+does not verify with the installer's pinned `PUBKEY`. Notes come from
+`docs/releases/vX.Y.Z.md`. The script still works by hand on a machine with the key.
+
 Binary releases: https://github.com/bayurstarcool/SigardaPanel/releases
 Latest: v1.7.0 (always check the releases page; install/update with `install.sh`, see docs/INSTALL.md)
 
