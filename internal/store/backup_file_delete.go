@@ -61,3 +61,35 @@ func (s *SQLiteBackupStore) ListLocalAfterS3(ctx context.Context) ([]ExpiredLoca
 	}
 	return out, rows.Err()
 }
+
+// ProviderIDForS3 finds the storage provider with this bucket, endpoint and
+// access key (what a backup job's s3_config carries); 0 when none matches.
+func (s *Store) ProviderIDForS3(ctx context.Context, bucket, endpoint, accessKey string) int64 {
+	providers, err := s.BackupProviders.List(ctx)
+	if err != nil {
+		return 0
+	}
+	for _, p := range providers {
+		if p.Bucket == bucket && p.Endpoint == endpoint && p.AccessKey == accessKey {
+			return p.ID
+		}
+	}
+	return 0
+}
+
+// BackupProviderFor returns the provider holding a backup's S3 copy: the one
+// recorded with the backup, else (older backups) the site's, else the default.
+func (s *Store) BackupProviderFor(ctx context.Context, b *Backup, site *Site) *BackupStorageProvider {
+	if b != nil && b.ProviderID.Valid {
+		if p, err := s.BackupProviders.GetByID(ctx, b.ProviderID.Int64); err == nil && p != nil {
+			return p
+		}
+	}
+	if site != nil && site.BackupProviderID.Valid && site.BackupProviderID.Int64 > 0 {
+		if p, err := s.BackupProviders.GetByID(ctx, site.BackupProviderID.Int64); err == nil && p != nil {
+			return p
+		}
+	}
+	p, _ := s.BackupProviders.GetDefault(ctx)
+	return p
+}

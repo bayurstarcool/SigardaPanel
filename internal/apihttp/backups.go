@@ -219,13 +219,7 @@ func (h *backupHandler) restore(c echo.Context) error {
 	}
 	// If backup is on S3, include s3_config so agent can download first
 	if strings.HasPrefix(backupPath, "s3://") && backup.StorageType != "local" {
-		var provider *store.BackupStorageProvider
-		if site.BackupProviderID.Valid && site.BackupProviderID.Int64 > 0 {
-			provider, _ = h.store.BackupProviders.GetByID(c.Request().Context(), site.BackupProviderID.Int64)
-		}
-		if provider == nil {
-			provider, _ = h.store.BackupProviders.GetDefault(c.Request().Context())
-		}
+		provider := h.store.BackupProviderFor(c.Request().Context(), backup, site)
 		if provider != nil {
 			payloadMap["s3_config"] = map[string]string{
 				"bucket":     provider.Bucket,
@@ -604,13 +598,7 @@ func (h *backupHandler) download(c echo.Context) error {
 
 	// S3 path — return S3 config for frontend to construct download URL
 	if strings.HasPrefix(path, "s3://") {
-		var provider *store.BackupStorageProvider
-		if site.BackupProviderID.Valid && site.BackupProviderID.Int64 > 0 {
-			provider, _ = h.store.BackupProviders.GetByID(c.Request().Context(), site.BackupProviderID.Int64)
-		}
-		if provider == nil {
-			provider, _ = h.store.BackupProviders.GetDefault(c.Request().Context())
-		}
+		provider := h.store.BackupProviderFor(c.Request().Context(), backup, site)
 		if provider == nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "S3 provider not configured")
 		}
@@ -686,7 +674,7 @@ func (h *backupHandler) delete(c echo.Context) error {
 	// here, which took incompatible flags and silently failed to delete).
 	if backup.S3Path.Valid && backup.S3Path.String != "" {
 		s3Path := backup.S3Path.String
-		provider, _ := h.store.BackupProviders.GetDefault(c.Request().Context())
+		provider := h.store.BackupProviderFor(c.Request().Context(), backup, site)
 		if provider != nil {
 			endpoint, region, nerr := normalizeProviderEndpointRegion(provider.ProviderType, provider.Endpoint, provider.Region)
 			if nerr != nil {

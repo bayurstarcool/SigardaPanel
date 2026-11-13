@@ -609,6 +609,15 @@ func schedConfigDBIDInSlice(val int64, slice []int64) bool {
 // deleted from the DB but the .tar.gz files remain on the VPS forever, filling
 // the disk. Jobs are created before the DB rows are removed by CleanupExpired.
 func enqueueLocalBackupDeletes(ctx context.Context, s *store.Store, keepLast int) {
+	// Their S3 copies go too, from the provider that holds each one (the
+	// rows are deleted right after; the copies used to stay on S3 forever).
+	if expired, err := s.Backups.ListExpiredS3(ctx, keepLast); err == nil {
+		for i := range expired {
+			b := &expired[i]
+			site, _ := s.Sites.GetByID(ctx, b.SiteID)
+			deleteS3Object(ctx, s.BackupProviderFor(ctx, b, site), b.S3Path.String)
+		}
+	}
 	expired, err := s.Backups.ListExpiredLocal(ctx, keepLast)
 	if err != nil {
 		slog.Warn("scheduler: list expired local backups failed", "error", err)

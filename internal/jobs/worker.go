@@ -463,8 +463,17 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 		// Parse backup_id from job payload and persist actual local/S3 path from agent result.
 		var payloadData struct {
 			BackupID int64 `json:"backup_id"`
+			S3Config *struct {
+				Bucket    string `json:"bucket"`
+				Endpoint  string `json:"endpoint"`
+				AccessKey string `json:"access_key"`
+			} `json:"s3_config"`
 		}
-		if err := json.Unmarshal([]byte(job.Payload), &payloadData); err == nil && payloadData.BackupID > 0 {
+		rawPayload := job.Payload
+		if dec, derr := secrets.DecryptPayload(rawPayload); derr == nil {
+			rawPayload = dec // s3_config's keys are stored encrypted
+		}
+		if err := json.Unmarshal([]byte(rawPayload), &payloadData); err == nil && payloadData.BackupID > 0 {
 			localPath := ""
 			s3Path := ""
 			if result != nil {
@@ -493,6 +502,13 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 					slog.Error("worker: update backup s3_path", "id", payloadData.BackupID, "error", err)
 				} else {
 					slog.Info("worker: backup s3_path saved", "id", payloadData.BackupID, "s3_path", s3Path)
+					// Remember which provider holds the copy: deleting or
+					// restoring it later must not follow a changed default.
+					if c := payloadData.S3Config; c != nil {
+						if pid := w.store.ProviderIDForS3(ctx, c.Bucket, c.Endpoint, c.AccessKey); pid > 0 {
+							_ = w.store.Backups.SetProvider(ctx, payloadData.BackupID, pid)
+						}
+					}
 					// The local copy is no longer needed: the site's agent removes
 					// it, and the worker clears storage_path once it is gone.
 					if err := w.store.QueueBackupFileDelete(ctx, payloadData.BackupID, job.SiteID.Int64, localPath, true); err != nil {
@@ -516,15 +532,8 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			} else if len(deleted) > 0 {
 				// Clean up S3 files and local files for the deleted backups
 				site, _ := w.store.Sites.GetByID(ctx, job.SiteID.Int64)
-				var provider *store.BackupStorageProvider
-				if site != nil && site.BackupProviderID.Valid && site.BackupProviderID.Int64 > 0 {
-					provider, _ = w.store.BackupProviders.GetByID(ctx, site.BackupProviderID.Int64)
-				}
-				if provider == nil {
-					provider, _ = w.store.BackupProviders.GetDefault(ctx)
-				}
-
 				for _, b := range deleted {
+					provider := w.store.BackupProviderFor(ctx, &b, site)
 					if b.S3Path.Valid && b.S3Path.String != "" && provider != nil {
 						slog.Info("worker: deleting S3 file for expired backup", "backup_id", b.ID, "s3_path", b.S3Path.String)
 						w.deleteS3Object(ctx, provider, b.S3Path.String)
@@ -582,6 +591,10 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 }
 
 func (w *Worker) deleteS3Object(ctx context.Context, provider *store.BackupStorageProvider, s3Path string) {
+	deleteS3Object(ctx, provider, s3Path)
+}
+
+func deleteS3Object(ctx context.Context, provider *store.BackupStorageProvider, s3Path string) {
 	if provider == nil || s3Path == "" {
 		return
 	}

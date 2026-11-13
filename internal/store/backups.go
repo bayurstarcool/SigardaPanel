@@ -29,6 +29,7 @@ type Backup struct {
 	CreatedAt   time.Time
 	CompletedAt sql.NullTime
 	ExpiresAt   sql.NullTime
+	ProviderID  sql.NullInt64 // storage provider holding the S3 copy
 	SiteName    string
 	SiteDomain  string
 }
@@ -46,6 +47,8 @@ type BackupRepository interface {
 	MarkFailed(ctx context.Context, id int64, errMsg string) error
 	Delete(ctx context.Context, id int64) error
 	DeleteOldest(ctx context.Context, siteID int64, keep int) ([]Backup, error)
+	SetProvider(ctx context.Context, id, providerID int64) error
+	ListExpiredS3(ctx context.Context, keepLast int) ([]Backup, error)
 	CleanupExpired(ctx context.Context, keepLast int) (int64, error)
 	ListExpiredLocal(ctx context.Context, keepLast int) ([]ExpiredLocalBackup, error)
 	ClearStoragePath(ctx context.Context, id int64) error
@@ -118,7 +121,7 @@ func (s *SQLiteBackupStore) Create(ctx context.Context, b *Backup) error {
 // GetByID retrieves a backup by ID. Returns (nil, nil) if not found.
 func (s *SQLiteBackupStore) GetByID(ctx context.Context, id int64) (*Backup, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT b.id, b.site_id, b.status, b.storage_type, b.storage_path, COALESCE(b.backup_type,'files'), COALESCE(b.s3_path,''), COALESCE(b.progress,''), b.size_bytes, b.file_count, b.error, b.created_at, b.completed_at, b.expires_at, COALESCE(s.name,''), COALESCE(s.domain,'') FROM backups b LEFT JOIN sites s ON s.id = b.site_id WHERE b.id = ?`, id)
+		`SELECT b.id, b.site_id, b.status, b.storage_type, b.storage_path, COALESCE(b.backup_type,'files'), COALESCE(b.s3_path,''), COALESCE(b.progress,''), b.size_bytes, b.file_count, b.error, b.created_at, b.completed_at, b.expires_at, b.provider_id, COALESCE(s.name,''), COALESCE(s.domain,'') FROM backups b LEFT JOIN sites s ON s.id = b.site_id WHERE b.id = ?`, id)
 	return scanBackup(row)
 }
 
@@ -128,7 +131,7 @@ func (s *SQLiteBackupStore) ListBySite(ctx context.Context, siteID int64, limit,
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT b.id, b.site_id, b.status, b.storage_type, b.storage_path, COALESCE(b.backup_type,'files'), COALESCE(b.s3_path,''), COALESCE(b.progress,''), b.size_bytes, b.file_count, b.error, b.created_at, b.completed_at, b.expires_at, COALESCE(s.name,''), COALESCE(s.domain,'') FROM backups b LEFT JOIN sites s ON s.id = b.site_id WHERE b.site_id = ? ORDER BY b.created_at DESC LIMIT ? OFFSET ?`,
+		`SELECT b.id, b.site_id, b.status, b.storage_type, b.storage_path, COALESCE(b.backup_type,'files'), COALESCE(b.s3_path,''), COALESCE(b.progress,''), b.size_bytes, b.file_count, b.error, b.created_at, b.completed_at, b.expires_at, b.provider_id, COALESCE(s.name,''), COALESCE(s.domain,'') FROM backups b LEFT JOIN sites s ON s.id = b.site_id WHERE b.site_id = ? ORDER BY b.created_at DESC LIMIT ? OFFSET ?`,
 		siteID, limit, offset,
 	)
 	if err != nil {
@@ -142,7 +145,7 @@ func (s *SQLiteBackupStore) ListBySite(ctx context.Context, siteID int64, limit,
 		if err := rows.Scan(
 			&b.ID, &b.SiteID, &b.Status, &b.StorageType, &b.StoragePath, &b.BackupType, &b.S3Path, &b.Progress,
 			&b.SizeBytes, &b.FileCount,
-			&b.Error, &b.CreatedAt, &b.CompletedAt, &b.ExpiresAt, &b.SiteName, &b.SiteDomain,
+			&b.Error, &b.CreatedAt, &b.CompletedAt, &b.ExpiresAt, &b.ProviderID, &b.SiteName, &b.SiteDomain,
 		); err != nil {
 			return nil, fmt.Errorf("scan backup: %w", err)
 		}
@@ -160,7 +163,7 @@ func (s *SQLiteBackupStore) ListAll(ctx context.Context, limit, offset int) ([]B
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT b.id, b.site_id, b.status, b.storage_type, b.storage_path, COALESCE(b.backup_type,'files'), COALESCE(b.s3_path,''), COALESCE(b.progress,''), b.size_bytes, b.file_count, b.error, b.created_at, b.completed_at, b.expires_at, COALESCE(s.name,''), COALESCE(s.domain,'') FROM backups b LEFT JOIN sites s ON s.id = b.site_id ORDER BY b.created_at DESC LIMIT ? OFFSET ?`,
+		`SELECT b.id, b.site_id, b.status, b.storage_type, b.storage_path, COALESCE(b.backup_type,'files'), COALESCE(b.s3_path,''), COALESCE(b.progress,''), b.size_bytes, b.file_count, b.error, b.created_at, b.completed_at, b.expires_at, b.provider_id, COALESCE(s.name,''), COALESCE(s.domain,'') FROM backups b LEFT JOIN sites s ON s.id = b.site_id ORDER BY b.created_at DESC LIMIT ? OFFSET ?`,
 		limit, offset,
 	)
 	if err != nil {
@@ -174,7 +177,7 @@ func (s *SQLiteBackupStore) ListAll(ctx context.Context, limit, offset int) ([]B
 		if err := rows.Scan(
 			&b.ID, &b.SiteID, &b.Status, &b.StorageType, &b.StoragePath, &b.BackupType, &b.S3Path, &b.Progress,
 			&b.SizeBytes, &b.FileCount,
-			&b.Error, &b.CreatedAt, &b.CompletedAt, &b.ExpiresAt, &b.SiteName, &b.SiteDomain,
+			&b.Error, &b.CreatedAt, &b.CompletedAt, &b.ExpiresAt, &b.ProviderID, &b.SiteName, &b.SiteDomain,
 		); err != nil {
 			return nil, fmt.Errorf("scan backup: %w", err)
 		}
@@ -257,7 +260,7 @@ func (s *SQLiteBackupStore) DeleteOldest(ctx context.Context, siteID int64, keep
 		keep = 1
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT b.id, b.site_id, b.status, b.storage_type, b.storage_path, COALESCE(b.backup_type,'files'), b.s3_path, COALESCE(b.progress,''), b.size_bytes, b.file_count, b.error, b.created_at, b.completed_at, b.expires_at, COALESCE(s.name,''), COALESCE(s.domain,'')
+		`SELECT b.id, b.site_id, b.status, b.storage_type, b.storage_path, COALESCE(b.backup_type,'files'), b.s3_path, COALESCE(b.progress,''), b.size_bytes, b.file_count, b.error, b.created_at, b.completed_at, b.expires_at, b.provider_id, COALESCE(s.name,''), COALESCE(s.domain,'')
 		FROM backups b
 		LEFT JOIN sites s ON s.id = b.site_id
 		WHERE b.site_id = ? AND b.status = 'completed'
@@ -271,7 +274,7 @@ func (s *SQLiteBackupStore) DeleteOldest(ctx context.Context, siteID int64, keep
 	var deleted []Backup
 	for rows.Next() {
 		var b Backup
-		if err := rows.Scan(&b.ID, &b.SiteID, &b.Status, &b.StorageType, &b.StoragePath, &b.BackupType, &b.S3Path, &b.Progress, &b.SizeBytes, &b.FileCount, &b.Error, &b.CreatedAt, &b.CompletedAt, &b.ExpiresAt, &b.SiteName, &b.SiteDomain); err != nil {
+		if err := rows.Scan(&b.ID, &b.SiteID, &b.Status, &b.StorageType, &b.StoragePath, &b.BackupType, &b.S3Path, &b.Progress, &b.SizeBytes, &b.FileCount, &b.Error, &b.CreatedAt, &b.CompletedAt, &b.ExpiresAt, &b.ProviderID, &b.SiteName, &b.SiteDomain); err != nil {
 			continue
 		}
 		key := retentionGroup(b)
@@ -412,7 +415,7 @@ func scanBackup(row *sql.Row) (*Backup, error) {
 	err := row.Scan(
 		&b.ID, &b.SiteID, &b.Status, &b.StorageType, &b.StoragePath, &b.BackupType, &b.S3Path, &b.Progress,
 		&b.SizeBytes, &b.FileCount,
-		&b.Error, &b.CreatedAt, &b.CompletedAt, &b.ExpiresAt, &b.SiteName, &b.SiteDomain,
+		&b.Error, &b.CreatedAt, &b.CompletedAt, &b.ExpiresAt, &b.ProviderID, &b.SiteName, &b.SiteDomain,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -456,4 +459,41 @@ func (s *SQLiteBackupStore) CleanupOrphanedPending(ctx context.Context, olderTha
 		return 0, fmt.Errorf("cleanup orphaned pending backups: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+// SetProvider records the storage provider that holds the backup's S3 copy.
+func (s *SQLiteBackupStore) SetProvider(ctx context.Context, id, providerID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE backups SET provider_id = ? WHERE id = ?`, providerID, id)
+	return err
+}
+
+// ListExpiredS3 returns expired backups (same selection as CleanupExpired)
+// that have a copy on S3.
+func (s *SQLiteBackupStore) ListExpiredS3(ctx context.Context, keepLast int) ([]Backup, error) {
+	if keepLast <= 0 {
+		keepLast = 3
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, site_id, s3_path, provider_id FROM backups
+		WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
+		  AND s3_path IS NOT NULL AND s3_path != ''
+		  AND id NOT IN (
+			SELECT id FROM (
+				SELECT id, ROW_NUMBER() OVER (PARTITION BY site_id ORDER BY COALESCE(completed_at, created_at) DESC, id DESC) AS rn
+				FROM backups WHERE status = 'completed'
+			) ranked WHERE rn <= ?
+		)`, keepLast)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Backup
+	for rows.Next() {
+		var b Backup
+		if err := rows.Scan(&b.ID, &b.SiteID, &b.S3Path, &b.ProviderID); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }
