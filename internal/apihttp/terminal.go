@@ -123,6 +123,11 @@ func (h *terminalHandler) createTicket(c echo.Context) error {
 	if err != nil || server == nil || !server.AgentURL.Valid || server.AgentURL.String == "" || server.AgentToken == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "server has no reachable agent")
 	}
+	// A root shell on the panel host is super_admin power (the panel's
+	// database and keys live there), like the command endpoint.
+	if runAs == "" && isLocalServer(*server) && user.Role != auth.RoleSuperAdmin {
+		return echo.NewHTTPError(http.StatusForbidden, "a root terminal on the panel host requires a super admin")
+	}
 
 	// Agent-side session ids live in the user's own namespace so one account
 	// can never reattach to another's shell.

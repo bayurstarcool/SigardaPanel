@@ -20,11 +20,11 @@ const healthCheckTimeout = 10 * time.Second
 
 // HealthChecker periodically pings all registered agents and updates server health status.
 type HealthChecker struct {
-	store    *store.Store
-	client   *http.Client
-	wg       sync.WaitGroup
-	stopCh   chan struct{}
-	stopped  chan struct{}
+	store   *store.Store
+	client  *http.Client
+	wg      sync.WaitGroup
+	stopCh  chan struct{}
+	stopped chan struct{}
 }
 
 // NewHealthChecker creates a new HealthChecker.
@@ -94,7 +94,7 @@ func (hc *HealthChecker) checkAll(ctx context.Context) {
 }
 
 func (hc *HealthChecker) checkServer(ctx context.Context, srv store.Server) {
-	healthURL := srv.AgentURL.String + "/health"
+	healthURL := strings.TrimRight(srv.AgentURL.String, "/") + "/health"
 
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
@@ -194,13 +194,13 @@ func (hc *HealthChecker) updateAndAlert(ctx context.Context, srv store.Server, s
 	}
 
 	// Promote server status from "pending" to "online" when agent responds
-	if status == "online" && (srv.Status == "pending" || srv.Status == "offline") {
+	if (status == "online" || status == "degraded") && (srv.Status == "pending" || srv.Status == "offline") {
 		if err := hc.store.Servers.UpdateStatus(ctx, srv.ID, "online"); err != nil {
 			slog.Warn("healthcheck: promote status", "server_id", srv.ID, "error", err)
 		}
 	}
 	// Mark server offline when unreachable
-	if status == "offline" && (srv.Status == "online" || srv.Status == "degraded") {
+	if status == "offline" && (srv.Status == "online" || srv.Status == "degraded" || srv.Status == "active") {
 		if err := hc.store.Servers.UpdateStatus(ctx, srv.ID, "offline"); err != nil {
 			slog.Warn("healthcheck: demote status", "server_id", srv.ID, "error", err)
 		}

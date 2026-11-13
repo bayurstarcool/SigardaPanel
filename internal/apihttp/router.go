@@ -420,22 +420,22 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/servers/:id/docker/container/start", stackH.dockerContainerStart, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/servers/:id/docker/container/stop", stackH.dockerContainerStop, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/servers/:id/docker/container/restart", stackH.dockerContainerRestart, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/container/remove", stackH.dockerContainerRemove, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/container/create", stackH.dockerContainerCreate, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/container/remove", stackH.dockerContainerRemove, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/container/create", stackH.dockerContainerCreate, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/container/logs", stackH.dockerContainerLogs, RequireAuth(s))
-	e.POST("/api/v1/servers/:id/docker/container/exec", stackH.dockerContainerExec, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/container/exec", stackH.dockerContainerExec, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/images", stackH.dockerImages, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/:id/docker/images/search", stackH.dockerSearchImages, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/compose/up", stackH.dockerComposeUp, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/compose/down", stackH.dockerComposeDown, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/image/pull", stackH.dockerImagePull, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/image/remove", stackH.dockerImageRemove, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/compose/up", stackH.dockerComposeUp, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/compose/down", stackH.dockerComposeDown, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/image/pull", stackH.dockerImagePull, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/image/remove", stackH.dockerImageRemove, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/volumes", stackH.dockerVolumes, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/volume/create", stackH.dockerVolumeCreate, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/volume/remove", stackH.dockerVolumeRemove, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/volume/create", stackH.dockerVolumeCreate, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/volume/remove", stackH.dockerVolumeRemove, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/networks", stackH.dockerNetworks, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/network/create", stackH.dockerNetworkCreate, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/network/remove", stackH.dockerNetworkRemove, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/network/create", stackH.dockerNetworkCreate, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/network/remove", stackH.dockerNetworkRemove, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/info", stackH.dockerInfo, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/:id/docker/disk-usage", stackH.dockerDiskUsage, RequireAuth(s), RequireAdmin(s))
 
@@ -447,25 +447,25 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// ─── Firewall (UFW) Management ──
 	e.GET("/api/v1/servers/:id/firewall/status", stackH.firewallStatus, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/enable", stackH.firewallEnable, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/disable", stackH.firewallDisable, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/allow", stackH.firewallAllow, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/deny", stackH.firewallDeny, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/delete", stackH.firewallDelete, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/firewall/enable", stackH.firewallEnable, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/disable", stackH.firewallDisable, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/allow", stackH.firewallAllow, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/deny", stackH.firewallDeny, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/delete", stackH.firewallDelete, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/firewall/rules", stackH.firewallRules, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/reset", stackH.firewallReset, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/firewall/reset", stackH.firewallReset, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── PM2 Process Management ──
-	e.POST("/api/v1/servers/:id/pm2/manage", stackH.pm2Manage, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/pm2/manage", stackH.pm2Manage, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Mail server (proxied to the agent) ──
-	e.POST("/api/v1/servers/:id/email/manage", stackH.emailManage, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/email/manage", stackH.emailManage, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Redis Management ──
 	e.GET("/api/v1/servers/:id/redis/stats", stackH.redisStats, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/redis/flush", stackH.redisFlush, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/redis/flush", stackH.redisFlush, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/redis/info", stackH.redisInfo, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/redis/flushdb", stackH.redisFlushDB, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/redis/flushdb", stackH.redisFlushDB, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Threat Monitor (admin only) ──
 	smH := newSecurityMonitorHandler(s, auditRec)
@@ -477,13 +477,13 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/servers/:id/fail2ban/status", stackH.fail2banStatus, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/:id/security/overview", stackH.securityOverview, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/:id/fail2ban/jail", stackH.fail2banJail, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/fail2ban/unban", stackH.fail2banUnban, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/fail2ban/ban", stackH.fail2banBan, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/fail2ban/enable", stackH.fail2banEnable, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/fail2ban/disable", stackH.fail2banDisable, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/fail2ban/unban", stackH.fail2banUnban, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/fail2ban/ban", stackH.fail2banBan, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/fail2ban/enable", stackH.fail2banEnable, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/fail2ban/disable", stackH.fail2banDisable, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Bot Blocker Management ──
-	e.POST("/api/v1/servers/:id/bot-blocker/manage", stackH.botBlockerManage, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/bot-blocker/manage", stackH.botBlockerManage, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Server Specs & Benchmarks ─────────────────────────────
 	e.GET("/api/v1/servers/:id/specs", stackH.serverSpecs, RequireAuth(s))

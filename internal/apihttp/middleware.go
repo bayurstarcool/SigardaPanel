@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sigardapanel/internal/audit"
+	"strconv"
 	"strings"
 	"time"
 
@@ -356,5 +357,55 @@ func scopeAuditLogs(s *store.Store) echo.MiddlewareFunc {
 			}
 			return next(c)
 		})
+	}
+}
+
+// requireSuperAdminOnPanelHost guards actions that are root on the server
+// (container create/exec with host mounts, firewall, fail2ban, pm2, mail):
+// on the panel host they are as good as super_admin power (database,
+// encryption key), so only a super_admin may run them there. Remote servers
+// keep the route's own role check.
+func requireSuperAdminOnPanelHost(s *store.Store) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+			if err != nil || id <= 0 {
+				return next(c)
+			}
+			server, err := s.Servers.GetByID(c.Request().Context(), id)
+			if err != nil || server == nil || !isLocalServer(*server) {
+				return next(c)
+			}
+			if role, _ := c.Get(roleKey).(string); role == auth.RoleSuperAdmin {
+				return next(c)
+			}
+			if sess := sessionFromEcho(c); sess != nil && isSessionSuperAdmin(c.Request().Context(), s, sess) {
+				return next(c)
+			}
+			return echo.NewHTTPError(http.StatusForbidden, "on the panel host this action requires a super admin")
+		}
+	}
+}
+
+// auditServerAction records a successful server-level action (firewall,
+// fail2ban, containers, mail, ...) in the audit log: these change the
+// server for everyone and used to leave no trace.
+func auditServerAction(rec *audit.Recorder) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			err := next(c)
+			if err != nil || c.Response().Status >= 400 {
+				return err
+			}
+			id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+			var uid int64
+			if sess := sessionFromEcho(c); sess != nil {
+				uid = sess.UserID
+			}
+			path := c.Path() // e.g. /api/v1/servers/:id/firewall/deny
+			action := "server." + strings.ReplaceAll(strings.TrimPrefix(path, "/api/v1/servers/:id/"), "/", ".")
+			rec.RecordAction(c.Request().Context(), uid, action, audit.ResourceServer, id, map[string]any{"method": c.Request().Method})
+			return nil
+		}
 	}
 }

@@ -294,6 +294,18 @@ var allowedCommands = map[string]bool{
 	"chown":           true,
 	"journalctl":      true,
 	"test":            true,
+	// Used by agent tasks (site cleanup, fail2ban, mail, templates, PM2);
+	// missing entries made those features fail with "command not allowed".
+	"rm":       true,
+	"chmod":    true,
+	"grep":     true,
+	"ss":       true,
+	"useradd":  true,
+	"pm2":      true,
+	"wp":       true,
+	"composer": true,
+	"doveadm":  true,
+	"postmap":  true,
 }
 
 func isAllowedCommand(name string) bool {

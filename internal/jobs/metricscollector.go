@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"sigardapanel/internal/notify"
@@ -21,6 +22,29 @@ type MetricsCollector struct {
 	store  *store.Store
 	client *http.Client
 	stopCh chan struct{}
+
+	// alertLevel remembers the last alert level per server and metric
+	// ("disk", "gpu"): an alert is sent when the level rises, not on every
+	// collection (that sent ~1,440 identical alerts a day).
+	alertMu    sync.Mutex
+	alertLevel map[string]string
+}
+
+// shouldAlert reports whether level is new for key and records it. "" (no
+// problem) resets the key so the next threshold crossing alerts again.
+func (mc *MetricsCollector) shouldAlert(key, level string) bool {
+	mc.alertMu.Lock()
+	defer mc.alertMu.Unlock()
+	if mc.alertLevel == nil {
+		mc.alertLevel = map[string]string{}
+	}
+	prev := mc.alertLevel[key]
+	mc.alertLevel[key] = level
+	if level == "" {
+		return false
+	}
+	rank := map[string]int{"": 0, "warning": 1, "critical": 2}
+	return rank[level] > rank[prev]
 }
 
 // NewMetricsCollector creates a new metrics collector.
@@ -28,7 +52,7 @@ func NewMetricsCollector(s *store.Store) *MetricsCollector {
 	return &MetricsCollector{
 		store: s,
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
 			Transport: &http.Transport{
 				// Allow self-signed certs for agent TLS
 			},
@@ -114,23 +138,23 @@ func (mc *MetricsCollector) collectFromAgent(ctx context.Context, srv store.Serv
 
 	var apiResp struct {
 		Data struct {
-			CPUPercent   float64 `json:"cpu_percent"`
-			MemUsed      int64   `json:"mem_used"`
-			MemTotal     int64   `json:"mem_total"`
-			DiskUsed     int64   `json:"disk_used"`
-			DiskTotal    int64   `json:"disk_total"`
-			SwapUsed     int64   `json:"swap_used"`
-			SwapTotal    int64   `json:"swap_total"`
-			NetInBytes   int64   `json:"net_in_bytes"`
-			NetOutBytes  int64   `json:"net_out_bytes"`
-			GPUName      string  `json:"gpu_name"`
-			GPUCount     int     `json:"gpu_count"`
-			GPUUtil      float64 `json:"gpu_utilization"`
-			GPUMemUsed   int64   `json:"gpu_memory_used"`
-			GPUMemTotal  int64   `json:"gpu_memory_total"`
-			GPUTemp      float64 `json:"gpu_temperature"`
-			GPUPower     float64 `json:"gpu_power_draw"`
-			GPUFanSpeed  float64 `json:"gpu_fan_speed"`
+			CPUPercent  float64 `json:"cpu_percent"`
+			MemUsed     int64   `json:"mem_used"`
+			MemTotal    int64   `json:"mem_total"`
+			DiskUsed    int64   `json:"disk_used"`
+			DiskTotal   int64   `json:"disk_total"`
+			SwapUsed    int64   `json:"swap_used"`
+			SwapTotal   int64   `json:"swap_total"`
+			NetInBytes  int64   `json:"net_in_bytes"`
+			NetOutBytes int64   `json:"net_out_bytes"`
+			GPUName     string  `json:"gpu_name"`
+			GPUCount    int     `json:"gpu_count"`
+			GPUUtil     float64 `json:"gpu_utilization"`
+			GPUMemUsed  int64   `json:"gpu_memory_used"`
+			GPUMemTotal int64   `json:"gpu_memory_total"`
+			GPUTemp     float64 `json:"gpu_temperature"`
+			GPUPower    float64 `json:"gpu_power_draw"`
+			GPUFanSpeed float64 `json:"gpu_fan_speed"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &apiResp); err != nil {
@@ -170,7 +194,16 @@ func (mc *MetricsCollector) collectFromAgent(ctx context.Context, srv store.Serv
 		diskUsedGB := float64(d.DiskUsed) / (1024 * 1024 * 1024)
 		diskTotalGB := float64(d.DiskTotal) / (1024 * 1024 * 1024)
 
-		if diskPercent >= 90 {
+		level := ""
+		switch {
+		case diskPercent >= 90:
+			level = "critical"
+		case diskPercent >= 80:
+			level = "warning"
+		}
+		if !mc.shouldAlert(fmt.Sprintf("disk:%d", srv.ID), level) {
+			// already alerted at this level (or no problem)
+		} else if diskPercent >= 90 {
 			sender := notify.NewSender(mc.store)
 			sender.Send(ctx, "critical", "Disk Usage Critical",
 				fmt.Sprintf("Server %s disk usage at %.1f%% (%.1fGB / %.1fGB). Immediate action required!", srv.Name, diskPercent, diskUsedGB, diskTotalGB))
@@ -182,6 +215,16 @@ func (mc *MetricsCollector) collectFromAgent(ctx context.Context, srv store.Serv
 	}
 
 	// GPU temperature alerts
+	gpuLevel := ""
+	switch {
+	case d.GPUCount > 0 && d.GPUTemp >= 85:
+		gpuLevel = "critical"
+	case d.GPUCount > 0 && d.GPUTemp >= 75:
+		gpuLevel = "warning"
+	}
+	if !mc.shouldAlert(fmt.Sprintf("gpu:%d", srv.ID), gpuLevel) {
+		return
+	}
 	if d.GPUCount > 0 && d.GPUTemp >= 85 {
 		sender := notify.NewSender(mc.store)
 		sender.Send(ctx, "critical", "GPU Temperature Critical",

@@ -1,10 +1,17 @@
 package agenthttp
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
+
+	"sigardapanel/internal/config"
 
 	"github.com/labstack/echo/v4"
 )
@@ -61,7 +68,9 @@ func (r *Router) firewallStatusTask(c echo.Context) error {
 func (r *Router) firewallEnableTask(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Enable UFW with --force to skip confirmation
+	// Keep SSH, HTTP(S) and the agent reachable, then enable (--force skips
+	// the confirmation prompt).
+	r.ensureProtectedAllows(ctx)
 	output, err := r.executor.RunShell(ctx, "ufw", "--force", "enable")
 	if err != nil {
 		return c.JSON(http.StatusOK, map[string]any{
@@ -100,53 +109,110 @@ func (r *Router) firewallDisableTask(c echo.Context) error {
 
 // firewallAllowTask adds a UFW allow rule.
 func (r *Router) firewallAllowTask(c echo.Context) error {
-	ctx := c.Request().Context()
-	var payload struct {
-		Port     string `json:"port"`
-		Protocol string `json:"protocol"`
-		From     string `json:"from"`
-		Comment  string `json:"comment"`
-	}
-	if err := c.Bind(&payload); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
-	}
-
-	if payload.Port == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "port is required")
-	}
-
-	args := []string{"allow"}
-	if payload.Port != "" {
-		args = append(args, payload.Port)
-	}
-	if payload.Protocol != "" {
-		args = append(args, "/"+payload.Protocol)
-	}
-	if payload.From != "" {
-		args = append(args, "from", payload.From)
-	}
-	if payload.Comment != "" {
-		args = append(args, "comment", payload.Comment)
-	}
-
-	output, err := r.executor.RunShell(ctx, "ufw", args...)
-	if err != nil {
-		return c.JSON(http.StatusOK, map[string]any{
-			"ok":      false,
-			"message": fmt.Sprintf("allow failed: %s", strings.TrimSpace(output)),
-		})
-	}
-
-	slog.Info("agent: firewall allow", "port", payload.Port, "protocol", payload.Protocol, "from", payload.From)
-	return c.JSON(http.StatusOK, map[string]any{
-		"ok":      true,
-		"message": fmt.Sprintf("port %s allowed", payload.Port),
-		"output":  strings.TrimSpace(output),
-	})
+	return r.firewallRuleTask(c, "allow")
 }
 
 // firewallDenyTask adds a UFW deny rule.
 func (r *Router) firewallDenyTask(c echo.Context) error {
+	return r.firewallRuleTask(c, "deny")
+}
+
+var (
+	ufwPortRe    = regexp.MustCompile(`^[0-9]{1,5}(:[0-9]{1,5})?$`)
+	ufwCommentRe = regexp.MustCompile(`^[A-Za-z0-9 ._:/()-]{0,64}$`)
+)
+
+// ufwRuleArgs builds the ufw arguments for an allow/deny rule after
+// validating every value (they go to ufw as separate argv entries, never a
+// shell, but ufw itself rejects malformed rules such as "allow 80 /tcp").
+func ufwRuleArgs(action, port, protocol, from, comment string) ([]string, error) {
+	port, protocol, from, comment = strings.TrimSpace(port), strings.ToLower(strings.TrimSpace(protocol)), strings.TrimSpace(from), strings.TrimSpace(comment)
+	if port == "" {
+		port = "any"
+	}
+	if port != "any" {
+		if !ufwPortRe.MatchString(port) {
+			return nil, fmt.Errorf("invalid port %q (a number 1-65535 or a range like 6000:6010)", port)
+		}
+		for _, part := range strings.Split(port, ":") {
+			if n, _ := strconv.Atoi(part); n < 1 || n > 65535 {
+				return nil, fmt.Errorf("invalid port %q", port)
+			}
+		}
+		if strings.Contains(port, ":") && (protocol != "tcp" && protocol != "udp") {
+			return nil, fmt.Errorf("a port range needs protocol tcp or udp")
+		}
+	}
+	switch protocol {
+	case "", "any":
+		protocol = ""
+	case "tcp", "udp":
+	default:
+		return nil, fmt.Errorf("invalid protocol %q (tcp, udp or any)", protocol)
+	}
+	if from != "" && from != "any" {
+		if strings.Contains(from, "/") {
+			if _, _, err := net.ParseCIDR(from); err != nil {
+				return nil, fmt.Errorf("invalid source %q", from)
+			}
+		} else if net.ParseIP(from) == nil {
+			return nil, fmt.Errorf("invalid source %q", from)
+		}
+	} else {
+		from = ""
+	}
+	if !ufwCommentRe.MatchString(comment) {
+		return nil, fmt.Errorf("invalid comment (letters, digits, spaces and . _ : / ( ) - only, max 64)")
+	}
+
+	var args []string
+	switch {
+	case from == "" && port == "any":
+		return nil, fmt.Errorf("a rule needs a port or a source address")
+	case from == "":
+		// ufw allow 8080/tcp
+		spec := port
+		if protocol != "" {
+			spec += "/" + protocol
+		}
+		args = []string{action, spec}
+	default:
+		// ufw deny from 1.2.3.4 [to any port 22 [proto tcp]]
+		args = []string{action, "from", from}
+		if port != "any" {
+			args = append(args, "to", "any", "port", port)
+			if protocol != "" {
+				args = append(args, "proto", protocol)
+			}
+		}
+	}
+	if comment != "" {
+		args = append(args, "comment", comment)
+	}
+	return args, nil
+}
+
+// protectedPorts are the ports a firewall change must never close for
+// everyone: SSH (22 and any Port from sshd_config), HTTP(S) and the agent.
+func (r *Router) protectedPorts() map[string]string {
+	ports := map[string]string{"22": "SSH", "80": "HTTP", "443": "HTTPS"}
+	if raw, err := os.ReadFile("/etc/ssh/sshd_config"); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			f := strings.Fields(line)
+			if len(f) == 2 && strings.EqualFold(f[0], "Port") {
+				if n, err := strconv.Atoi(f[1]); err == nil && n > 0 && n < 65536 {
+					ports[f[1]] = "SSH"
+				}
+			}
+		}
+	}
+	if _, port, err := net.SplitHostPort(config.AgentServer().Addr); err == nil && port != "" {
+		ports[port] = "SigardaPanel agent"
+	}
+	return ports
+}
+
+func (r *Router) firewallRuleTask(c echo.Context, action string) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Port     string `json:"port"`
@@ -157,39 +223,49 @@ func (r *Router) firewallDenyTask(c echo.Context) error {
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
 	}
-
-	if payload.Port == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "port is required")
+	args, err := ufwRuleArgs(action, payload.Port, payload.Protocol, payload.From, payload.Comment)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-
-	args := []string{"deny"}
-	if payload.Port != "" {
-		args = append(args, payload.Port)
-	}
-	if payload.Protocol != "" {
-		args = append(args, "/"+payload.Protocol)
-	}
-	if payload.From != "" {
-		args = append(args, "from", payload.From)
-	}
-	if payload.Comment != "" {
-		args = append(args, "comment", payload.Comment)
+	port := strings.TrimSpace(payload.Port)
+	from := strings.TrimSpace(payload.From)
+	if action == "deny" && (from == "" || from == "any") {
+		if name, ok := r.protectedPorts()[port]; ok {
+			return echo.NewHTTPError(http.StatusConflict, fmt.Sprintf("refusing to deny port %s (%s) for everyone: it would cut off access to this server", port, name))
+		}
 	}
 
 	output, err := r.executor.RunShell(ctx, "ufw", args...)
 	if err != nil {
 		return c.JSON(http.StatusOK, map[string]any{
 			"ok":      false,
-			"message": fmt.Sprintf("deny failed: %s", strings.TrimSpace(output)),
+			"message": fmt.Sprintf("%s failed: %s", action, strings.TrimSpace(output)),
 		})
 	}
 
-	slog.Info("agent: firewall deny", "port", payload.Port, "protocol", payload.Protocol, "from", payload.From)
+	slog.Info("agent: firewall "+action, "args", strings.Join(args, " "))
+	what := "port " + port
+	if from != "" && from != "any" {
+		what = from
+		if port != "" && port != "any" {
+			what += " on port " + port
+		}
+	}
 	return c.JSON(http.StatusOK, map[string]any{
 		"ok":      true,
-		"message": fmt.Sprintf("port %s denied", payload.Port),
+		"message": fmt.Sprintf("%s %s", what, map[string]string{"allow": "allowed", "deny": "denied"}[action]),
 		"output":  strings.TrimSpace(output),
 	})
+}
+
+// ensureProtectedAllows adds allow rules for the protected ports, so
+// enabling a default-deny firewall never locks the operator out.
+func (r *Router) ensureProtectedAllows(ctx context.Context) {
+	for port, name := range r.protectedPorts() {
+		if out, err := r.executor.RunShell(ctx, "ufw", "allow", port+"/tcp", "comment", name+" (kept open by SigardaPanel)"); err != nil {
+			slog.Warn("agent: firewall keep-open rule", "port", port, "error", err, "output", strings.TrimSpace(out))
+		}
+	}
 }
 
 // firewallDeleteTask deletes a UFW rule by number.
@@ -206,7 +282,27 @@ func (r *Router) firewallDeleteTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "rule number is required")
 	}
 
-	output, err := r.executor.RunShell(ctx, "ufw", "delete", fmt.Sprintf("%d", payload.Number))
+	if listing, err := r.executor.RunShell(ctx, "ufw", "status", "numbered"); err == nil {
+		rules := parseUFWNumbered(listing)
+		protected := r.protectedPorts()
+		for _, rule := range rules {
+			if rule.Number != payload.Number || rule.Action != "ALLOW" {
+				continue
+			}
+			if name, ok := protected[rule.Port]; ok {
+				others := 0
+				for _, o := range rules {
+					if o.Number != rule.Number && o.Action == "ALLOW" && o.Port == rule.Port && strings.EqualFold(o.From, "Anywhere") == strings.EqualFold(rule.From, "Anywhere") {
+						others++
+					}
+				}
+				if others == 0 {
+					return echo.NewHTTPError(http.StatusConflict, fmt.Sprintf("refusing to delete the rule that keeps port %s (%s) open", rule.Port, name))
+				}
+			}
+		}
+	}
+	output, err := r.executor.RunShell(ctx, "ufw", "--force", "delete", fmt.Sprintf("%d", payload.Number))
 	if err != nil {
 		return c.JSON(http.StatusOK, map[string]any{
 			"ok":      false,
@@ -235,6 +331,36 @@ func (r *Router) firewallRulesTask(c echo.Context) error {
 		})
 	}
 
+	rules := parseUFWNumbered(output)
+	return c.JSON(http.StatusOK, map[string]any{
+		"ok":    true,
+		"rules": rules,
+		"total": len(rules),
+	})
+}
+
+// firewallResetTask resets UFW to defaults.
+func (r *Router) firewallResetTask(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	output, err := r.executor.RunShell(ctx, "ufw", "--force", "reset")
+	if err != nil {
+		return c.JSON(http.StatusOK, map[string]any{
+			"ok":      false,
+			"message": fmt.Sprintf("reset failed: %s", strings.TrimSpace(output)),
+		})
+	}
+
+	slog.Info("agent: firewall reset")
+	return c.JSON(http.StatusOK, map[string]any{
+		"ok":      true,
+		"message": "UFW reset to defaults",
+		"output":  strings.TrimSpace(output),
+	})
+}
+
+// parseUFWNumbered parses "ufw status numbered".
+func parseUFWNumbered(output string) []UFWRule {
 	var rules []UFWRule
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		line = strings.TrimSpace(line)
@@ -348,29 +474,5 @@ func (r *Router) firewallRulesTask(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{
-		"ok":    true,
-		"rules": rules,
-		"total": len(rules),
-	})
-}
-
-// firewallResetTask resets UFW to defaults.
-func (r *Router) firewallResetTask(c echo.Context) error {
-	ctx := c.Request().Context()
-
-	output, err := r.executor.RunShell(ctx, "ufw", "--force", "reset")
-	if err != nil {
-		return c.JSON(http.StatusOK, map[string]any{
-			"ok":      false,
-			"message": fmt.Sprintf("reset failed: %s", strings.TrimSpace(output)),
-		})
-	}
-
-	slog.Info("agent: firewall reset")
-	return c.JSON(http.StatusOK, map[string]any{
-		"ok":      true,
-		"message": "UFW reset to defaults",
-		"output":  strings.TrimSpace(output),
-	})
+	return rules
 }

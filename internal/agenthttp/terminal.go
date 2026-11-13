@@ -57,6 +57,39 @@ type ptySession struct {
 	// Pending output buffer for reconnect: captures recent PTY output
 	pendingMu sync.Mutex
 	pending   []byte
+
+	// writeMu serializes every write to the websocket: gorilla/websocket
+	// panics on concurrent writers (the PTY reader and the handler both
+	// write), and that panic took the whole agent down.
+	writeMu sync.Mutex
+
+	// runAs is the unix user the shell runs as ("" = root). A session is
+	// only ever reattached for the same user.
+	runAs string
+
+	closeOnce sync.Once
+}
+
+// write sends one message to ws under the session's write lock.
+func (s *ptySession) write(ws *websocket.Conn, messageType int, data []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return ws.WriteMessage(messageType, data)
+}
+
+// close stops the shell and reaps it (no zombie processes).
+func (s *ptySession) close() {
+	s.closeOnce.Do(func() {
+		s.cancel()
+		if s.ptmx != nil {
+			s.ptmx.Close()
+		}
+		if s.cmd != nil && s.cmd.Process != nil {
+			s.cmd.Process.Kill()
+			go s.cmd.Wait()
+		}
+	})
 }
 
 const (
@@ -114,13 +147,7 @@ func cleanIdleSessions() {
 	for _, s := range sessions {
 		if now.Sub(s.lastActive) > ptyIdleTimeout {
 			slog.Info("terminal: closing idle session", "session", s.id, "idle_since", s.lastActive)
-			s.sess.cancel()
-			if s.sess.ptmx != nil {
-				s.sess.ptmx.Close()
-			}
-			if s.sess.cmd.Process != nil {
-				s.sess.cmd.Process.Kill()
-			}
+			s.sess.close()
 			delete(ptySessions, s.id)
 		}
 	}
@@ -150,13 +177,7 @@ func cleanIdleSessions() {
 		for i := 0; i < excess; i++ {
 			s := remaining[i]
 			slog.Info("terminal: evicting session (over limit)", "session", s.id)
-			s.sess.cancel()
-			if s.sess.ptmx != nil {
-				s.sess.ptmx.Close()
-			}
-			if s.sess.cmd.Process != nil {
-				s.sess.cmd.Process.Kill()
-			}
+			s.sess.close()
 			delete(ptySessions, s.id)
 		}
 	}
@@ -178,16 +199,28 @@ func saveSession(sessionID string, sess *ptySession) {
 func removeSession(sessionID string) {
 	ptySessionsMu.Lock()
 	if sess, ok := ptySessions[sessionID]; ok {
-		sess.cancel()
-		if sess.ptmx != nil {
-			sess.ptmx.Close()
-		}
-		if sess.cmd.Process != nil {
-			sess.cmd.Process.Kill()
-		}
+		sess.close()
 		delete(ptySessions, sessionID)
 	}
 	ptySessionsMu.Unlock()
+}
+
+// endSession removes sess (only if sessionID still maps to it), stops the
+// shell and closes the attached websocket so the browser sees the end.
+func endSession(sessionID string, sess *ptySession) {
+	ptySessionsMu.Lock()
+	if cur, ok := ptySessions[sessionID]; ok && cur == sess {
+		delete(ptySessions, sessionID)
+	}
+	ptySessionsMu.Unlock()
+	sess.close()
+	sess.wsMu.RLock()
+	ws := sess.ws
+	sess.wsMu.RUnlock()
+	if ws != nil {
+		_ = sess.write(ws, websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shell exited"))
+		ws.Close()
+	}
 }
 
 // ptyReader runs for the lifetime of a session.
@@ -211,7 +244,10 @@ func ptyReader(ctx context.Context, sess *ptySession, sessionID string) {
 			if ne, ok := err.(interface{ Timeout() bool }); ok && ne.Timeout() {
 				continue
 			}
-			slog.Info("terminal: pty read error", "session", sessionID, "error", err)
+			// The shell exited (EOF/EIO): end the session instead of leaving a
+			// dead shell attached and a zombie process behind.
+			slog.Info("terminal: shell ended", "session", sessionID, "error", err)
+			endSession(sessionID, sess)
 			return
 		}
 
@@ -230,7 +266,7 @@ func ptyReader(ctx context.Context, sess *ptySession, sessionID string) {
 
 		if ws != nil {
 			// Send directly to ws
-			if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
+			if err := sess.write(ws, websocket.BinaryMessage, data); err != nil {
 				slog.Debug("terminal: ws write failed", "session", sessionID, "error", err)
 				// Buffer for reconnect
 				sess.pendingMu.Lock()
@@ -277,6 +313,13 @@ func (r *Router) terminalWebSocket(c echo.Context) error {
 	}
 
 	sess, exists := getOrCreateSession(sessionID)
+	if exists && sess.runAs != runAsUser {
+		// The id names another shell user's session (e.g. a root shell from
+		// an earlier admin ticket): never hand it to this ticket.
+		slog.Warn("terminal: session user mismatch, starting a new shell", "session", sessionID)
+		removeSession(sessionID)
+		exists = false
+	}
 	if !exists {
 		// New session
 		shell := os.Getenv("SHELL")
@@ -309,6 +352,7 @@ func (r *Router) terminalWebSocket(c echo.Context) error {
 			cmd:    cmd,
 			cancel: cancel,
 			ws:     ws,
+			runAs:  runAsUser,
 		}
 		saveSession(sessionID, sess)
 		slog.Info("terminal: new session", "session", sessionID, "pid", cmd.Process.Pid, "shell", shell, "user", runAsUser)
@@ -318,10 +362,17 @@ func (r *Router) terminalWebSocket(c echo.Context) error {
 		// Reattach
 		slog.Info("terminal: reattached to session", "session", sessionID, "pid", sess.cmd.Process.Pid)
 
-		// Swap ws
+		// Swap ws; the previous connection is closed so only one client is
+		// attached (its handler then returns).
 		sess.wsMu.Lock()
+		old := sess.ws
 		sess.ws = ws
 		sess.wsMu.Unlock()
+		if old != nil && old != ws {
+			sess.writeMu.Lock()
+			old.Close()
+			sess.writeMu.Unlock()
+		}
 
 		// Flush any pending buffered output to new ws
 		sess.pendingMu.Lock()
@@ -329,7 +380,7 @@ func (r *Router) terminalWebSocket(c echo.Context) error {
 			pending := sess.pending
 			sess.pending = nil
 			sess.pendingMu.Unlock()
-			ws.WriteMessage(websocket.BinaryMessage, pending)
+			sess.write(ws, websocket.BinaryMessage, pending)
 			slog.Info("terminal: flushed pending output", "session", sessionID, "bytes", len(pending))
 		} else {
 			sess.pendingMu.Unlock()
@@ -345,7 +396,7 @@ func (r *Router) terminalWebSocket(c echo.Context) error {
 
 	// Send session ID
 	sessionMsg, _ := json.Marshal(map[string]string{"type": "session", "id": sessionID})
-	ws.WriteMessage(websocket.TextMessage, sessionMsg)
+	sess.write(ws, websocket.TextMessage, sessionMsg)
 
 	// WS → PTY loop
 	for {

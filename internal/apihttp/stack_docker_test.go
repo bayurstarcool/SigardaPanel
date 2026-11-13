@@ -59,7 +59,7 @@ func setupDockerTest(t *testing.T, agent *mockAgent) (*httptest.Server, string) 
 		Username:     "admin",
 		Email:        "admin@test.com",
 		PasswordHash: "hash",
-		Role:         auth.RoleAdmin,
+		Role:         auth.RoleSuperAdmin, // the mock agent is on loopback = the panel host
 	}
 	if err := s.Users.Create(ctx, user); err != nil {
 		t.Fatal(err)
