@@ -142,7 +142,7 @@
       <button onclick={loadData} class="btn btn-secondary btn-sm" disabled={loading}>
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
-      {#if isAdmin}
+      {#if hasRole(auth.user?.role, 'super_admin')}
         <button onclick={renewAll} class="btn btn-secondary btn-sm" disabled={renewingAll || counts.expiring_soon + counts.expired === 0}>
           <RefreshCw size={14} class={renewingAll ? 'animate-spin' : ''} /> Renew expiring
         </button>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtRelative } from '$lib/format';
   import { toasts } from '$lib/toast.svelte';
@@ -132,6 +132,8 @@
     {/if}
   </section>
 
+  <!-- Backup configs act on every site: super_admin only (the API enforces it). -->
+  {#if hasRole(auth.user?.role, 'super_admin')}
   <section class="card">
     <div class="card-header">
       <h2 class="card-title">Backup configs</h2>
@@ -170,6 +172,7 @@
       </ul>
     {/if}
   </section>
+  {/if}
 </div>
 
 <ProviderModal bind:open={showProviderForm} bind:provider={editingProvider} onsaved={loadProviders} />

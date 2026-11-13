@@ -521,6 +521,43 @@ location /api/ws/ {
 }
 ```
 
+## Security Rules (feature audit, Nov 2026)
+
+These are enforced in code and covered by tests; keep them when changing handlers.
+
+- **super_admin only**: service tokens, backup configs, exec-sql, phpMyAdmin password
+  reset, SSL renew-all, panel update/rollback, agent updates. Non-super admins see only
+  their own audit entries and the site mappings of users they created, and can change or
+  delete only `user`-role accounts they created.
+- **Panel host = super_admin**: on the local server (loopback agent) container
+  create/exec/compose/images/volumes/networks, firewall, fail2ban, bot blocker, pm2,
+  mail, redis flush and the root terminal need super_admin
+  (`requireSuperAdminOnPanelHost`); these server actions are audited (`auditServerAction`).
+- **Agent errors are errors**: proxied agent calls go through `agentProxyResponse`
+  (agent status >= 400, or `ok:false` on non-GET, becomes an API error); `apiFetch`
+  throws on any non-2xx; job results with an explicit `ok:false` fail the job.
+- **Sessions**: a password change revokes the user's other sessions; an admin reset
+  revokes all and sets `password_changed_at = NULL`. 2FA management rejects API keys and
+  impersonation; replacing recovery codes needs a TOTP code; disabling 2FA deletes them.
+  Cookie-authenticated unsafe requests need a same-site Origin/Sec-Fetch-Site
+  (`cookieCSRFGuard`).
+- **Vhosts**: security settings (blocked IPs = IP/CIDR only, basic-auth user
+  `[A-Za-z0-9._-]`) are applied by the site's agent via a `site.create` regeneration; the
+  worker adds stored settings (security, port, proxy URL, PHP) to every `site.create`
+  payload and sets `vhost_regen` for existing sites (no status change, no `ssl.issue`,
+  refused for suspended sites). `nginx.GenerateVhost` re-validates everything; issued
+  Let's Encrypt certificates are installed in the vhost; `/backups/` is denied.
+- **Agent URLs**: `scheme://host[:port]` only; loopback and link-local refused, private
+  addresses need `SIGARDAPANEL_ALLOW_PRIVATE_AGENTS`.
+- **MySQL accounts are global**: site writers may only grant accounts the panel manages
+  for sites they can manage; system accounts are never grantable; granting never changes
+  a password; privileges/host are validated.
+- **Backups**: downloads refuse symlinks/paths outside the backup dirs; retention counts
+  only completed backups (per database); excludes are top-level only and restore keeps
+  `.env`/`vendor`/`backups` from the current root.
+- **Firewall**: rules are validated and built in ufw syntax; enable keeps SSH/80/443/agent
+  open; deny-for-everyone or deleting the last allow of those ports is refused.
+
 ## Panel Self-Update
 
 Settings → **Panel update** (super_admin). `internal/selfupdate` looks up the latest
