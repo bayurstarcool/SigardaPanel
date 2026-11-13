@@ -68,8 +68,13 @@ func (h *stackHandler) tenantContainerNames(c echo.Context) (allowed map[string]
 	add := func(site *store.Site) {
 		if site != nil {
 			allowed[fmt.Sprintf("sp-site-%d", site.ID)] = true
-			// Containers created before names carried the site id.
-			allowed["site-"+strings.ReplaceAll(site.Name, " ", "-")] = true
+			// Containers created before names carried the site id were named
+			// after the site; only a name no other site shares identifies one.
+			var same int
+			_ = h.store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sites WHERE name = ?`, site.Name).Scan(&same)
+			if same == 1 {
+				allowed["site-"+strings.ReplaceAll(site.Name, " ", "-")] = true
+			}
 		}
 	}
 	if owned, err := h.store.Sites.List(ctx, store.SiteListFilter{OwnerID: sess.UserID}); err == nil {

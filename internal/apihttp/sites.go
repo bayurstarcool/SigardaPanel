@@ -993,6 +993,10 @@ func (h *siteHandler) transfer(c echo.Context) error {
 	if accts, _ := h.store.SSH.ListBySiteID(c.Request().Context(), id); len(accts) > 0 {
 		return echo.NewHTTPError(http.StatusConflict, "remove the site's SSH/FTP accounts before transferring it")
 	}
+	// A container bind-mounts the current root; it is not re-created by the move.
+	if site.Runtime == "docker" {
+		return echo.NewHTTPError(http.StatusConflict, "docker sites cannot be transferred")
+	}
 	// Cron jobs run as the current owner's Linux user from the current root.
 	if jobs, _ := h.store.Cron.ListBySiteID(c.Request().Context(), id); len(jobs) > 0 {
 		return echo.NewHTTPError(http.StatusConflict, "remove the site's cron jobs before transferring it")
