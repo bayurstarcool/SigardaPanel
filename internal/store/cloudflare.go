@@ -2,11 +2,13 @@ package store
 
 import (
 	"database/sql"
+
+	"sigardapanel/internal/secrets"
 )
 
 // CloudflareConfig represents the stored Cloudflare API settings.
 type CloudflareConfig struct {
-	UserID  int64  `json:"user_id,omitempty"`
+	UserID   int64  `json:"user_id,omitempty"`
 	APIToken string `json:"api_token"`
 	Email    string `json:"email,omitempty"`
 }
@@ -35,7 +37,12 @@ func (s *CloudflareStore) GetConfig(userID int64) (*CloudflareConfig, error) {
 	}
 	cfg := &CloudflareConfig{UserID: userID}
 	if apiToken.Valid {
-		cfg.APIToken = apiToken.String
+		// Stored encrypted; tokens saved before encryption read as-is.
+		tok, err := secrets.Decrypt(apiToken.String)
+		if err != nil {
+			return nil, err
+		}
+		cfg.APIToken = tok
 	}
 	if email.Valid {
 		cfg.Email = email.String
@@ -50,7 +57,7 @@ func (s *CloudflareStore) GetConfigByDomain(domain string) (*CloudflareConfig, e
 	err := s.db.QueryRow(`
 		SELECT cf.api_token, cf.email, cf.user_id
 		FROM cloudflare_config cf
-		JOIN sites s ON s.owner = cf.user_id
+		JOIN sites s ON s.owner_id = cf.user_id
 		WHERE s.domain = ?
 		LIMIT 1
 	`, domain).Scan(&apiToken, &email, &userID)
@@ -62,7 +69,12 @@ func (s *CloudflareStore) GetConfigByDomain(domain string) (*CloudflareConfig, e
 	}
 	cfg := &CloudflareConfig{UserID: userID}
 	if apiToken.Valid {
-		cfg.APIToken = apiToken.String
+		// Stored encrypted; tokens saved before encryption read as-is.
+		tok, err := secrets.Decrypt(apiToken.String)
+		if err != nil {
+			return nil, err
+		}
+		cfg.APIToken = tok
 	}
 	if email.Valid {
 		cfg.Email = email.String
@@ -72,15 +84,19 @@ func (s *CloudflareStore) GetConfigByDomain(domain string) (*CloudflareConfig, e
 
 // SaveConfig upserts the Cloudflare configuration for a specific user.
 func (s *CloudflareStore) SaveConfig(userID int64, cfg CloudflareConfig) error {
+	token, err := secrets.Encrypt(cfg.APIToken)
+	if err != nil {
+		return err
+	}
 	// Delete existing config for this user first, then insert
-	_, err := s.db.Exec("DELETE FROM cloudflare_config WHERE user_id = ?", userID)
+	_, err = s.db.Exec("DELETE FROM cloudflare_config WHERE user_id = ?", userID)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.Exec(`
 		INSERT INTO cloudflare_config (user_id, api_token, email, updated_at)
 		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-	`, userID, cfg.APIToken, nullableEmail(cfg.Email))
+	`, userID, token, nullableEmail(cfg.Email))
 	return err
 }
 

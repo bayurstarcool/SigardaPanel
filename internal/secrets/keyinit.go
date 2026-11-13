@@ -18,6 +18,7 @@ var encryptedDataQueries = []string{
 	`SELECT COUNT(*) FROM db_users WHERE COALESCE(encrypted_password, '') != ''`,
 	`SELECT COUNT(*) FROM jobs WHERE payload LIKE '%` + prefix + `%'`,
 	`SELECT COUNT(*) FROM users WHERE COALESCE(totp_secret, '') LIKE '` + prefix + `%'`,
+	`SELECT COUNT(*) FROM cloudflare_config WHERE COALESCE(api_token, '') LIKE '` + prefix + `%'`,
 }
 
 // hasEncryptedData reports whether any encrypted value is stored. Any query
