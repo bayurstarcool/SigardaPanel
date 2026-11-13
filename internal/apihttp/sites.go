@@ -713,8 +713,27 @@ func (h *siteHandler) updateConfig(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 			}
 		}
+		changed := *body.ProxyPassURL != site.ProxyPassURL.String
+		if changed && site.Runtime == "proxy" {
+			if *body.ProxyPassURL == "" {
+				return echo.NewHTTPError(http.StatusBadRequest, "a proxy site needs a proxy_pass_url")
+			}
+			if site.Status == "suspended" {
+				return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+			}
+		}
 		if err := h.store.Sites.UpdateProxyPassURL(c.Request().Context(), id, *body.ProxyPassURL); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		// The vhost carries the upstream: regenerate it, or the change
+		// would only show in the panel.
+		if changed && site.Runtime == "proxy" {
+			fresh, _ := h.store.Sites.GetByID(c.Request().Context(), id)
+			if fresh != nil {
+				if _, err := h.enqueueVhostRegen(c.Request().Context(), fresh, "Point "+fresh.Domain+" at its new upstream"); err != nil {
+					slog.Warn("api: queue vhost regen after proxy change", "site_id", id, "error", err)
+				}
+			}
 		}
 	}
 

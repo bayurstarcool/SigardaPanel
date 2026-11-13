@@ -158,6 +158,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.DELETE("/api/v1/sites/:id", sitesH.delete, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/deploy", sitesH.deploy, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/config", sitesH.updateConfig, RequireAuth(s))
+	e.GET("/api/v1/sites/:id/webhook", sitesH.webhookSecret, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/webhook/rotate", sitesH.webhookSecret, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/reload-nginx", sitesH.reloadNginx, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/suspend", sitesH.suspend, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/sites/:id/resume", sitesH.resume, RequireAuth(s), RequireAdmin(s))
