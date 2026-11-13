@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	github.com/creack/pty v1.1.24
-	github.com/go-sql-driver/mysql v1.10.0
+	github.com/go-sql-driver/mysql v1.10.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/labstack/echo/v5 v5.4.5
 	github.com/lib/pq v1.12.3
