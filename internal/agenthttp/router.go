@@ -516,6 +516,7 @@ func capabilitiesHandler(c echo.Context) error {
 }
 
 func (r *Router) siteCreateTask(c echo.Context) error {
+	defer readNginxLock()()
 	ctx := c.Request().Context()
 	var payload struct {
 		SiteID         int64  `json:"site_id"`
@@ -1088,6 +1089,7 @@ func dockerDefaultCmd(lang string) string {
 func siteContainerName(siteID int64) string { return fmt.Sprintf("sp-site-%d", siteID) }
 
 func (r *Router) siteDeleteTask(c echo.Context) error {
+	defer readNginxLock()()
 	ctx := c.Request().Context()
 	var payload struct {
 		SiteID   int64  `json:"site_id"`
@@ -1345,6 +1347,7 @@ func (r *Router) siteDeployTask(c echo.Context) error {
 }
 
 func (r *Router) nginxReloadTask(c echo.Context) error {
+	defer readNginxLock()()
 	ctx := c.Request().Context()
 	slog.Info("agent: nginx.reload requested")
 	output, err := r.executor.RunShell(ctx, "systemctl", "reload", "nginx")
@@ -1388,6 +1391,7 @@ func acmeContactUsable(email string) bool {
 }
 
 func (r *Router) sslIssueTask(c echo.Context) error {
+	defer readNginxLock()()
 	var payload struct {
 		SiteID int64  `json:"site_id"`
 		Domain string `json:"domain"`
@@ -1466,6 +1470,7 @@ func (r *Router) sslIssueTask(c echo.Context) error {
 }
 
 func (r *Router) sslRenewTask(c echo.Context) error {
+	defer readNginxLock()()
 	var payload struct {
 		SiteID int64  `json:"site_id"`
 		Domain string `json:"domain"`

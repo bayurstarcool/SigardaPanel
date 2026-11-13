@@ -49,6 +49,7 @@ func (r *Router) manageBotBlocker(c echo.Context) error {
 
 // enableBotBlocker enables bot blocking by injecting checks into server blocks.
 func (r *Router) enableBotBlocker(c echo.Context) error {
+	defer readNginxLock()()
 	ctx := c.Request().Context()
 
 	// 1. Create map config for user-agent blocking
@@ -100,6 +101,7 @@ func (r *Router) enableBotBlocker(c echo.Context) error {
 
 // disableBotBlocker disables the bot blocker.
 func (r *Router) disableBotBlocker(c echo.Context) error {
+	defer readNginxLock()()
 	ctx := c.Request().Context()
 
 	r.executor.RunShell(ctx, "rm", "-f", "/etc/nginx/conf.d/bot-blocker.conf")
@@ -247,6 +249,7 @@ func currentBotIPs() []string {
 // previous contents when the test fails (a config nginx cannot parse must
 // never stay on disk: every later reload would fail).
 func (r *Router) applyNginxConf(ctx context.Context, files map[string]string) error {
+	defer readNginxLock()()
 	type prev struct {
 		data   []byte
 		exists bool

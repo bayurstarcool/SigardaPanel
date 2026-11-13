@@ -12,9 +12,18 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// vhostMu serializes raw vhost validation and saving: validation briefly
-// swaps the live file, and two concurrent swaps used to lose the original.
-var vhostMu sync.Mutex
+// vhostMu: raw vhost validation briefly swaps the live file and saving
+// replaces it, so both hold it exclusively. Everything else that writes
+// nginx config or reloads nginx holds it shared (readNginxLock), so no
+// reload can make an unvalidated candidate live and no write is undone by a
+// validation restoring the previous file.
+var vhostMu sync.RWMutex
+
+// readNginxLock takes the shared side of vhostMu; call the result to release.
+func readNginxLock() func() {
+	vhostMu.RLock()
+	return vhostMu.RUnlock
+}
 
 // nginxTestMessage keeps the lines of nginx -t output that explain a failure.
 func nginxTestMessage(raw string) string {
