@@ -981,12 +981,13 @@ func setRetention(db *sql.DB) echo.HandlerFunc {
 		if body.RetentionDays > 3650 {
 			return echo.NewHTTPError(http.StatusBadRequest, "retention_days must be <= 3650")
 		}
+		// Validate everything before writing anything.
+		if body.KeepLastPerSite < 0 {
+			return echo.NewHTTPError(http.StatusBadRequest, "keep_last_per_site must be >= 0")
+		}
 		val := strconv.Itoa(body.RetentionDays)
 		if err := store.SetSetting(c.Request().Context(), db, "retention_days", val); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to save setting")
-		}
-		if body.KeepLastPerSite < 0 {
-			return echo.NewHTTPError(http.StatusBadRequest, "keep_last_per_site must be >= 0")
 		}
 		if body.KeepLastPerSite > 0 {
 			if err := store.SetSetting(c.Request().Context(), db, "keep_last_per_site", strconv.Itoa(body.KeepLastPerSite)); err != nil {

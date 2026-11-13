@@ -327,13 +327,12 @@ func (h *userHandler) usage(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
-	// Regular users can only check their own usage
-	if !auth.HasRole(caller.Role, auth.RoleAdmin) && sess.UserID != id {
-		return echo.NewHTTPError(http.StatusForbidden, "forbidden")
-	}
-
 	user, err := h.store.Users.GetByID(c.Request().Context(), id)
 	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "user not found")
+	}
+	// Own usage, or a user the caller manages (super_admin: anyone).
+	if sess.UserID != id && !callerManagesUser(c, h.store, user) {
 		return echo.NewHTTPError(http.StatusNotFound, "user not found")
 	}
 

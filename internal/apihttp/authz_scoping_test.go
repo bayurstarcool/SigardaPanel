@@ -495,9 +495,13 @@ func TestDatabasesAndLogs_SitePermissionModel(t *testing.T) {
 
 func TestPlansAndOrders_AdminRoleFromSession(t *testing.T) {
 	f := newAuthzFixture(t)
-	_, admTok := f.user("adm", auth.RoleAdmin)
+	adm, admTok := f.user("adm", auth.RoleAdmin)
+	other, otherTok := f.user("adm2", auth.RoleAdmin)
 	u1, u1Tok := f.user("u1", auth.RoleUser)
 	u2, _ := f.user("u2", auth.RoleUser)
+	// adm created both users: their orders are adm's to see, not adm2's.
+	f.s.DB().Exec(`UPDATE users SET created_by = ? WHERE id IN (?, ?)`, adm.ID, u1.ID, u2.ID)
+	_ = other
 
 	inactive := &store.Plan{Name: "Hidden", Slug: "hidden", BillingCycle: "monthly", Features: "{}", IsActive: false}
 	if err := f.s.Plans.Create(f.ctx, inactive); err != nil {
@@ -528,6 +532,9 @@ func TestPlansAndOrders_AdminRoleFromSession(t *testing.T) {
 	}
 	if n := orderCount(u1Tok); n != 1 {
 		t.Errorf("user sees %d orders, want 1", n)
+	}
+	if n := orderCount(otherTok); n != 0 {
+		t.Errorf("another admin sees %d orders of users it did not create", n)
 	}
 }
 
