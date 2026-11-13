@@ -9,23 +9,26 @@ import (
 
 // Server represents a registered VPS target server.
 type Server struct {
-	ID               int64
-	Name             string
-	Hostname         string
-	AgentURL         sql.NullString
-	IPAddress        sql.NullString
-	IPv6             sql.NullString
-	SSHPort          int
-	Description      string
-	Status           string
-	Provider         sql.NullString
-	AgentToken       string
-	LastHealthCheck  sql.NullTime
-	HealthStatus     string
-	HealthLatencyMs  int64
-	AgentVersion     sql.NullString // reported by the agent's /health
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID              int64
+	Name            string
+	Hostname        string
+	AgentURL        sql.NullString
+	IPAddress       sql.NullString
+	IPv6            sql.NullString
+	SSHPort         int
+	Description     string
+	Status          string
+	Provider        sql.NullString
+	AgentToken      string
+	LastHealthCheck sql.NullTime
+	HealthStatus    string
+	HealthLatencyMs int64
+	AgentVersion    sql.NullString // reported by the agent's /health
+	// Rebound is set by agent registration when an existing server (same
+	// agent address) was re-bound instead of a new one created.
+	Rebound   bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // ServerRepository defines server persistence operations.

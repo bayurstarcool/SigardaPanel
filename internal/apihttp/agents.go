@@ -174,13 +174,19 @@ func (h *agentHandler) registerAgent(c echo.Context) error {
 		"ip":       req.IPAddress,
 		"os_info":  req.OSInfo,
 		"token_id": rt.ID,
+		"rebound":  server.Rebound,
 	})
 
-	return c.JSON(http.StatusCreated, httpjson.Success{
+	status := http.StatusCreated
+	if server.Rebound {
+		status = http.StatusOK
+	}
+	return c.JSON(status, httpjson.Success{
 		Data: map[string]any{
 			"server_id": server.ID,
 			"agent_url": agentURL,
 			"status":    server.Status,
+			"rebound":   server.Rebound,
 		},
 		RequestID: rid,
 	})

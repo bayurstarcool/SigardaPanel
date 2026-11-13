@@ -77,3 +77,37 @@ func TestConsumeRegistrationTokenRollsBackWhenServerInsertFails(t *testing.T) {
 		t.Fatal("token was consumed even though server creation failed")
 	}
 }
+
+func TestReRegistrationRebindsTheExistingServer(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := migrations.Up(database, migrations.AllMigrations); err != nil {
+		t.Fatal(err)
+	}
+	s := New(database)
+	ctx := context.Background()
+	url := sql.NullString{String: "http://203.0.113.5:7710", Valid: true}
+	register := func(hash, token string) *Server {
+		rt := &RegistrationToken{TokenHash: hash, ExpiresAt: time.Now().Add(time.Hour)}
+		if err := s.RegistrationTokens.Create(ctx, rt); err != nil {
+			t.Fatal(err)
+		}
+		srv := &Server{Name: "web1", Hostname: "web1", Status: "online", AgentToken: token, AgentURL: url, SSHPort: 22}
+		if err := s.ConsumeRegistrationTokenAndCreateServer(ctx, rt.ID, srv); err != nil {
+			t.Fatal(err)
+		}
+		return srv
+	}
+	first := register("t1", "token-one")
+	second := register("t2", "token-two")
+	if second.ID != first.ID || !second.Rebound || first.Rebound {
+		t.Fatalf("first=%d second=%d rebound=%v", first.ID, second.ID, second.Rebound)
+	}
+	servers, _ := s.Servers.List(ctx)
+	if len(servers) != 1 || servers[0].AgentToken != "token-two" {
+		t.Fatalf("servers = %+v", servers)
+	}
+}
