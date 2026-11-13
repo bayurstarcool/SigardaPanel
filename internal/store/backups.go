@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -50,7 +49,7 @@ type BackupRepository interface {
 	CleanupExpired(ctx context.Context, keepLast int) (int64, error)
 	ListExpiredLocal(ctx context.Context, keepLast int) ([]ExpiredLocalBackup, error)
 	ClearStoragePath(ctx context.Context, id int64) error
-	CleanupLocalAfterS3(ctx context.Context) (int, error)
+	ListLocalAfterS3(ctx context.Context) ([]ExpiredLocalBackup, error)
 	// Backup helper methods
 	CleanupStuckRunning(ctx context.Context, staleAfter time.Duration) (int64, error)
 	CleanupOrphanedPending(ctx context.Context, olderThan time.Duration) (int64, error)
@@ -428,31 +427,6 @@ func scanBackup(row *sql.Row) (*Backup, error) {
 func (s *SQLiteBackupStore) ClearStoragePath(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE backups SET storage_path = NULL WHERE id = ?`, id)
 	return err
-}
-
-// CleanupLocalAfterS3 removes local files for completed backups that have been uploaded to S3.
-func (s *SQLiteBackupStore) CleanupLocalAfterS3(ctx context.Context) (int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, storage_path FROM backups WHERE status = 'completed' AND s3_path IS NOT NULL AND s3_path != '' AND storage_path IS NOT NULL AND storage_path != '' AND storage_path NOT LIKE 's3://%'`)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	var cleaned int
-	for rows.Next() {
-		var id int64
-		var path string
-		if err := rows.Scan(&id, &path); err != nil {
-			continue
-		}
-		if err := os.Remove(path); err != nil {
-			slog.Warn("store: failed to remove local backup (already on S3)", "path", path, "error", err)
-		} else {
-			slog.Info("store: removed local backup (already on S3)", "s3_path", path, "backup_id", id)
-			_, _ = s.db.ExecContext(ctx, `UPDATE backups SET storage_path = NULL WHERE id = ?`, id)
-			cleaned++
-		}
-	}
-	return cleaned, nil
 }
 
 // CleanupStuckRunning marks backups stuck in 'running' for longer than staleAfter as failed.

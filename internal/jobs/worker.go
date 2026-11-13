@@ -493,17 +493,10 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 					slog.Error("worker: update backup s3_path", "id", payloadData.BackupID, "error", err)
 				} else {
 					slog.Info("worker: backup s3_path saved", "id", payloadData.BackupID, "s3_path", s3Path)
-					// Delete local file after successful S3 upload to save disk space
-					if localPath != "" && !strings.HasPrefix(localPath, "s3://") {
-						if err := os.Remove(localPath); err != nil {
-							slog.Warn("worker: failed to remove local backup after S3 upload", "path", localPath, "error", err)
-						} else {
-							slog.Info("worker: removed local backup after S3 upload", "path", localPath, "backup_id", payloadData.BackupID)
-							// Clear storage_path since local file is gone
-							if err := w.store.Backups.ClearStoragePath(ctx, payloadData.BackupID); err != nil {
-								slog.Error("worker: clear storage_path", "id", payloadData.BackupID, "error", err)
-							}
-						}
+					// The local copy is no longer needed: the site's agent removes
+					// it, and the worker clears storage_path once it is gone.
+					if err := w.store.QueueBackupFileDelete(ctx, payloadData.BackupID, job.SiteID.Int64, localPath, true); err != nil {
+						slog.Warn("worker: queue removal of local backup after S3 upload", "id", payloadData.BackupID, "error", err)
 					}
 				}
 			}
@@ -537,20 +530,22 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 						w.deleteS3Object(ctx, provider, b.S3Path.String)
 					}
 					if b.StoragePath.Valid && b.StoragePath.String != "" && !strings.HasPrefix(b.StoragePath.String, "s3://") {
-						// The archive is root-owned on the site's server: the
-						// agent deletes it (os.Remove here never could).
-						payload, _ := json.Marshal(map[string]any{"backup_id": b.ID, "storage_path": b.StoragePath.String})
-						if err := w.store.Jobs.Create(ctx, &jobmodel.Job{
-							ServerID: job.ServerID,
-							SiteID:   sql.NullInt64{Int64: b.SiteID, Valid: true},
-							Type:     jobmodel.TypeBackupDelete,
-							Status:   jobmodel.StatusQueued,
-							Payload:  string(payload),
-						}); err != nil {
+						if err := w.store.QueueBackupFileDelete(ctx, b.ID, b.SiteID, b.StoragePath.String, false); err != nil {
 							slog.Warn("worker: queue backup.delete", "backup_id", b.ID, "error", err)
 						}
 					}
 				}
+			}
+		}
+
+	case jobmodel.TypeBackupDelete:
+		var p struct {
+			BackupID int64 `json:"backup_id"`
+			Clear    bool  `json:"clear_storage_path"`
+		}
+		if json.Unmarshal([]byte(job.Payload), &p) == nil && p.Clear && p.BackupID > 0 {
+			if err := w.store.Backups.ClearStoragePath(ctx, p.BackupID); err != nil {
+				slog.Error("worker: clear storage_path", "id", p.BackupID, "error", err)
 			}
 		}
 

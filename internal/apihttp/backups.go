@@ -711,11 +711,12 @@ func (h *backupHandler) delete(c echo.Context) error {
 		}
 	}
 
-	// Remove the local file if it exists (best-effort). Note: for backups whose
-	// file lives on a remote agent, panel-side removal cannot reach it; the
-	// retention worker dispatches backup.delete jobs for those cases.
-	if backup.StoragePath.Valid && backup.StoragePath.String != "" && !strings.HasPrefix(backup.StoragePath.String, "s3://") {
-		os.Remove(backup.StoragePath.String)
+	// The archive is a root-owned file on the site's server: its agent
+	// removes it (the sandboxed API process cannot, nor reach other servers).
+	if backup.StoragePath.Valid {
+		if err := h.store.QueueBackupFileDelete(c.Request().Context(), backup.ID, backup.SiteID, backup.StoragePath.String, false); err != nil {
+			slog.Warn("backup: queue removal of the archive", "backup_id", backup.ID, "error", err)
+		}
 	}
 
 	if err := h.store.Backups.Delete(c.Request().Context(), id); err != nil {
