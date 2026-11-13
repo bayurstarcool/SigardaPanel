@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/httpjson"
@@ -70,9 +70,6 @@ func (h *logsHandler) tail(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "type must be access, error, or php")
 	}
 
-	// Determine log path
-	logPath := resolveLogPath(site.Domain, logType)
-
 	// Default: tail 200 lines
 	limit := 200
 	if l := c.QueryParam("limit"); l != "" {
@@ -81,7 +78,33 @@ func (h *logsHandler) tail(c echo.Context) error {
 		}
 	}
 
-	entries, exists, fileErr := readLogTail(logPath, limit, logType)
+	// The logs are on the site's server: its agent tails them (the API host
+	// may not have them, and its sandboxed user cannot read nginx logs).
+	logPath, exists, fileErr := "", false, ""
+	entries := []logEntry{}
+	server, _ := h.store.Servers.GetByID(c.Request().Context(), site.ServerID)
+	if server == nil || !server.AgentURL.Valid || server.AgentToken == "" {
+		fileErr = "the site's server has no reachable agent"
+	} else {
+		code, out, err := stackAgentRequest(c.Request().Context(), http.MethodPost, agentBase(server)+"/tasks/logs/read", server.AgentToken,
+			map[string]any{"site_id": site.ID, "domain": site.Domain, "type": logType, "lines": limit, "php_version": site.PHPVersion.String}, 30*time.Second)
+		switch {
+		case err != nil && code == 0:
+			fileErr = "the site's agent is unreachable"
+		case code >= 400:
+			fileErr = agentMessage(out, "the agent could not read the log")
+		default:
+			logPath, _ = out["path"].(string)
+			raw, _ := out["lines"].([]any)
+			msg, _ := out["message"].(string)
+			exists = msg != "log file does not exist yet"
+			for i := len(raw) - 1; i >= 0; i-- { // newest first
+				if line, ok := raw[i].(string); ok {
+					entries = append(entries, parseLogLine(line, logType))
+				}
+			}
+		}
+	}
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
@@ -97,34 +120,6 @@ func (h *logsHandler) tail(c echo.Context) error {
 	})
 }
 
-// resolveLogPath returns the canonical log file path for a domain + log type.
-func resolveLogPath(domain, logType string) string {
-	switch logType {
-	case "access":
-		return filepath.Join("/var/log/nginx", domain+".access.log")
-	case "error":
-		return filepath.Join("/var/log/nginx", domain+".error.log")
-	case "php":
-		// Try common php-fpm log locations — first existing wins
-		candidates := []string{
-			"/var/log/php8.3-fpm.log",
-			"/var/log/php8.2-fpm.log",
-			"/var/log/php8.1-fpm.log",
-			"/var/log/php8.0-fpm.log",
-			"/var/log/php7.4-fpm.log",
-			"/var/log/php7.1-fpm.log",
-		}
-		for _, p := range candidates {
-			if _, err := os.Stat(p); err == nil {
-				return p
-			}
-		}
-		return candidates[0]
-	}
-	return ""
-}
-
-// readLogTail reads the last N lines of a log file and parses them.
 // Returns parsed entries, whether file exists, and any error string.
 func readLogTail(path string, limit int, logType string) ([]logEntry, bool, string) {
 	if path == "" {

@@ -231,6 +231,12 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/stack/install", r.stackInstallTask)
 	tasks.GET("/stack/ops/:id", r.stackOpTask)
 
+	// Raw vhost editing and disk usage of a site on this server
+	tasks.GET("/vhost/get", r.vhostGetTask)
+	tasks.POST("/vhost/validate", r.vhostValidateTask)
+	tasks.POST("/vhost/put", r.vhostPutTask)
+	tasks.POST("/site/usage", r.siteUsageTask)
+
 	// File manager (operations on a site root on this server)
 	tasks.POST("/files/op", r.filesTask)
 	tasks.POST("/files/upload", r.filesUploadTask)
@@ -1464,10 +1470,11 @@ func (r *Router) sslRenewTask(c echo.Context) error {
 func (r *Router) logsReadTask(c echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
-		SiteID int64  `json:"site_id"`
-		Domain string `json:"domain"`
-		Type   string `json:"type"`
-		Lines  int    `json:"lines"`
+		SiteID     int64  `json:"site_id"`
+		Domain     string `json:"domain"`
+		Type       string `json:"type"`
+		Lines      int    `json:"lines"`
+		PHPVersion string `json:"php_version"`
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
@@ -1476,8 +1483,8 @@ func (r *Router) logsReadTask(c echo.Context) error {
 	if payload.Lines <= 0 || payload.Lines > 10000 {
 		payload.Lines = 100
 	}
-	if payload.Type != "access" && payload.Type != "error" {
-		return echo.NewHTTPError(http.StatusBadRequest, "type must be access or error")
+	if payload.Type != "access" && payload.Type != "error" && payload.Type != "php" {
+		return echo.NewHTTPError(http.StatusBadRequest, "type must be access, error or php")
 	}
 
 	if !isValidDomain(payload.Domain) {
@@ -1485,6 +1492,9 @@ func (r *Router) logsReadTask(c echo.Context) error {
 	}
 
 	logPath := filepath.Join(r.logDir, payload.Domain+"."+payload.Type+".log")
+	if payload.Type == "php" {
+		logPath = phpFPMLogPath(payload.PHPVersion)
+	}
 	exists, _ := r.executor.Stat(ctx, logPath)
 	if !exists {
 		return c.JSON(http.StatusOK, map[string]any{
@@ -2507,4 +2517,18 @@ func siteBackupExcludes(rootPath string) []string {
 		args = append(args, "--exclude="+base+"/"+name)
 	}
 	return args
+}
+
+// phpFPMLogPath is the PHP-FPM log of a version (or the first one present).
+func phpFPMLogPath(version string) string {
+	if version != "" && siteinput.PHPVersion(version) == nil {
+		return "/var/log/php" + version + "-fpm.log"
+	}
+	for _, v := range []string{"8.4", "8.3", "8.2", "8.1", "8.0", "7.4"} {
+		p := "/var/log/php" + v + "-fpm.log"
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "/var/log/php8.3-fpm.log"
 }

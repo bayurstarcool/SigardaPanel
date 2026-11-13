@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
@@ -1086,16 +1087,15 @@ func (h *siteHandler) usage(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
+	// du runs on the site's server (the API host may not have the files).
 	var diskUsedBytes int64
 	if site.RootPath != "" {
-		out, err := execCommand("du", "-sb", site.RootPath)
-		if err == nil {
-			parts := strings.SplitN(out, "\t", 2)
-			if len(parts) >= 1 {
-				if sz, parseErr := strconv.ParseInt(parts[0], 10, 64); parseErr == nil {
-					diskUsedBytes = sz
-				}
-			}
+		code, out, err := h.siteAgentCall(c.Request().Context(), site, http.MethodPost, "/tasks/site/usage", map[string]any{"root_path": site.RootPath}, 2*time.Minute)
+		if err != nil || code >= 400 {
+			return echo.NewHTTPError(http.StatusBadGateway, "could not get the disk usage from the site's server")
+		}
+		if v, ok := out["disk_used_bytes"].(float64); ok {
+			diskUsedBytes = int64(v)
 		}
 	}
 

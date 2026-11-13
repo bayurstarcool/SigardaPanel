@@ -1,7 +1,6 @@
 package apihttp
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +16,7 @@ import (
 	"sigardapanel/internal/jobmodel"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
@@ -243,6 +244,26 @@ func (h *siteHandler) deprovisionSSHUser(ctx echo.Context, username, homeDir str
 	_ = runCmd("userdel", "-r", username)
 }
 
+// siteAgentCall calls the agent of the server that hosts site.
+func (h *siteHandler) siteAgentCall(ctx context.Context, site *store.Site, method, path string, body any, timeout time.Duration) (int, map[string]any, error) {
+	server, err := h.store.Servers.GetByID(ctx, site.ServerID)
+	if err != nil || server == nil || !server.AgentURL.Valid || server.AgentURL.String == "" || server.AgentToken == "" {
+		return 0, nil, fmt.Errorf("the site's server has no reachable agent")
+	}
+	return stackAgentRequest(ctx, method, agentBase(server)+path, server.AgentToken, body, timeout)
+}
+
+// vhostRootGuard: raw vhost editing can read and write any file through nginx
+// directives, i.e. it is root on the site's server; on the panel host that is
+// super_admin power.
+func (h *siteHandler) vhostRootGuard(ctx context.Context, sess *store.Session, site *store.Site) error {
+	server, _ := h.store.Servers.GetByID(ctx, site.ServerID)
+	if server != nil && isLocalServer(*server) && !isSessionSuperAdmin(ctx, h.store, sess) {
+		return echo.NewHTTPError(http.StatusForbidden, "editing raw vhosts on the panel host requires a super admin")
+	}
+	return nil
+}
+
 func (h *siteHandler) getVhost(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
@@ -250,261 +271,124 @@ func (h *siteHandler) getVhost(c echo.Context) error {
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
 	}
-
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
+	if err != nil || site == nil || !h.canAccess(c.Request().Context(), sess, site) {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
-	// Access check: user must be admin, owner, or assigned to this site
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
-	}
-
-	nginxConfDir := "/etc/nginx/sites-enabled"
-	nginxConfigPath := filepath.Join(nginxConfDir, site.Domain+".conf")
-
-	// Try reading from live nginx config first
-	liveConfig, readErr := os.ReadFile(nginxConfigPath)
-	var config string
-	var source string = "db"
-	var exists bool = false
-
-	if readErr == nil {
-		config = string(liveConfig)
-		source = "nginx"
-		exists = true
-	} else {
-		// Fall back to DB
-		vhost, dbErr := h.store.Vhosts.GetBySiteID(c.Request().Context(), id)
-		if dbErr == nil {
-			config = vhost.Config
-			exists = true
+	// The live vhost is on the site's server; the DB copy is the fallback.
+	config, source, exists, path := "", "db", false, ""
+	code, out, err := h.siteAgentCall(c.Request().Context(), site, http.MethodGet, "/tasks/vhost/get?domain="+url.QueryEscape(site.Domain), nil, 15*time.Second)
+	if err == nil && code == http.StatusOK {
+		path, _ = out["path"].(string)
+		if e, _ := out["exists"].(bool); e {
+			config, _ = out["config"].(string)
+			source, exists = "nginx", true
 		}
 	}
-
+	if !exists {
+		if vhost, dbErr := h.store.Vhosts.GetBySiteID(c.Request().Context(), id); dbErr == nil {
+			config, exists = vhost.Config, true
+		}
+	}
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-		"site_id":      id,
-		"domain":       site.Domain,
-		"vhost_config": config,
-		"source":       source,
-		"exists":       exists,
-		"config_path":  nginxConfigPath,
+		"site_id": id, "domain": site.Domain, "vhost_config": config,
+		"source": source, "exists": exists, "config_path": path,
 	}, RequestID: rid})
 }
 
 func (h *siteHandler) updateVhost(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
+	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
 	}
-
-	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
+	site, err := h.store.Sites.GetByID(ctx, id)
+	if err != nil || site == nil || !h.checkSitePermission(ctx, sess, site, "write") {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-
-	// Permission check: admin, owner, or user with write+ permission on this site
-	if !h.checkSitePermission(c.Request().Context(), sess, site, "write") {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	if err := h.vhostRootGuard(ctx, sess, site); err != nil {
+		return err
 	}
-
+	if site.Status == "suspended" {
+		return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+	}
 	var body struct {
 		Config string `json:"vhost_config"`
 	}
-	if err := c.Bind(&body); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
+	if err := c.Bind(&body); err != nil || strings.TrimSpace(body.Config) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "vhost_config required")
 	}
 
-	// 1. Save to DB as backup
-	if err := h.store.Vhosts.Upsert(c.Request().Context(), id, body.Config); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/vhost/put", map[string]any{"domain": site.Domain, "config": body.Config}, 2*time.Minute)
+	if err != nil || code >= 400 {
+		msg := "the site's agent is unreachable"
+		if err == nil {
+			msg = agentMessage(out, "agent error")
+		}
+		return echo.NewHTTPError(http.StatusBadGateway, "vhost not saved: "+msg)
 	}
-
-	h.store.NotifySiteUsers(c.Request().Context(), id, "vhost_updated", "Vhost Updated", "Nginx vhost configuration was updated", "info", "site", id)
-
-	// 2. Check if nginx is available and write to nginx conf dir
-	nginxPath, nginxErr := exec.LookPath("nginx")
-	nginxConfDir := "/etc/nginx/sites-enabled"
-	nginxConfAvailableDir := "/etc/nginx/sites-available"
-
-	if nginxErr == nil {
-		// Ensure dirs exist
-		os.MkdirAll(nginxConfDir, 0755)
-		os.MkdirAll(nginxConfAvailableDir, 0755)
-
-		// Write config BOTH to sites-available AND sites-enabled
-		nginxConfigPath := filepath.Join(nginxConfDir, site.Domain+".conf")
-		nginxAvailablePath := filepath.Join(nginxConfAvailableDir, site.Domain+".conf")
-
-		// Remember the previous config so a failed `nginx -t` can be rolled
-		// back instead of leaving a broken file that fails every later reload.
-		prevEnabled, prevEnabledErr := os.ReadFile(nginxConfigPath)
-		prevAvailable, prevAvailableErr := os.ReadFile(nginxAvailablePath)
-		restore := func() {
-			if prevEnabledErr == nil {
-				os.WriteFile(nginxConfigPath, prevEnabled, 0644)
-			} else {
-				os.Remove(nginxConfigPath)
-			}
-			if prevAvailableErr == nil {
-				os.WriteFile(nginxAvailablePath, prevAvailable, 0644)
-			} else {
-				os.Remove(nginxAvailablePath)
-			}
-		}
-
-		// Write to sites-enabled directly
-		if writeErr := os.WriteFile(nginxConfigPath, []byte(body.Config), 0644); writeErr != nil {
-			return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-				"status":  "saved_db_only",
-				"message": "Config saved to DB, but failed to write nginx config: " + writeErr.Error(),
-				"db_only": true,
-			}, RequestID: rid})
-		}
-
-		// Also write to sites-available (for proper management)
-		os.WriteFile(nginxAvailablePath, []byte(body.Config), 0644)
-
-		// Run nginx -t
-		cmd := exec.Command(nginxPath, "-t")
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			restore()
-			return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-				"status":         "saved_nginx_invalid",
-				"message":        "nginx -t failed, previous config restored. Check syntax:\n" + stderr.String(),
-				"nginx_error":    stderr.String(),
-				"config_path":    nginxConfigPath,
-				"reload_attempt": false,
-			}, RequestID: rid})
-		}
-
-		// Try reload nginx
-		reloadCmd := exec.Command("systemctl", "reload", "nginx")
-		var reloadOut bytes.Buffer
-		reloadCmd.Stderr = &reloadOut
-		reloadErr := reloadCmd.Run()
-		reloadOK := reloadErr == nil
-
-		msg := "✅ Nginx config written to " + nginxConfigPath
-		if reloadOK {
-			msg += " and nginx reloaded"
-		} else {
-			msg += " (nginx reload skipped: " + strings.TrimSpace(reloadOut.String()) + ")"
-		}
-
+	if status, _ := out["status"].(string); status != "success" {
+		nginxErr, _ := out["nginx_error"].(string)
 		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-			"status":         "success",
-			"message":        msg,
-			"config_path":    nginxConfigPath,
-			"reload_attempt": true,
-			"reload_ok":      reloadOK,
+			"status": "saved_nginx_invalid", "message": "nginx -t failed, previous config kept. Check syntax:\n" + nginxErr,
+			"nginx_error": nginxErr, "config_path": out["path"], "reload_attempt": false,
 		}, RequestID: rid})
 	}
-
+	// Only a vhost nginx accepted is kept as the stored copy.
+	if err := h.store.Vhosts.Upsert(ctx, id, body.Config); err != nil {
+		slog.Warn("vhost: store copy failed", "site_id", id, "error", err)
+	}
+	h.store.NotifySiteUsers(ctx, id, "vhost_updated", "Vhost Updated", "Nginx vhost configuration was updated", "info", "site", id)
+	if sess != nil {
+		h.audit.RecordAction(ctx, sess.UserID, audit.ActionSiteUpdate, audit.ResourceSite, id, map[string]any{"domain": site.Domain, "section": "vhost"})
+	}
+	reloadOK, _ := out["reload_ok"].(bool)
+	msg := "Nginx config saved"
+	if reloadOK {
+		msg += " and nginx reloaded"
+	} else {
+		msg += " (nginx reload failed: " + fmt.Sprint(out["reload_output"]) + ")"
+	}
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-		"status":  "saved_db_only",
-		"message": "Config saved to DB. nginx not available on this server.",
-		"db_only": true,
+		"status": "success", "message": msg, "config_path": out["path"], "reload_attempt": true, "reload_ok": reloadOK,
 	}, RequestID: rid})
 }
 
-// validateVhost validates nginx config by writing to temp file and running nginx -t
+// validateVhost runs nginx -t with the candidate vhost on the site's server.
 func (h *siteHandler) validateVhost(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
+	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
 	}
-
-	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
+	site, err := h.store.Sites.GetByID(ctx, id)
+	// Validation briefly installs the candidate: same rights as saving.
+	if err != nil || site == nil || !h.checkSitePermission(ctx, sess, site, "write") {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-
-	// Validation swaps the content into the live vhost to run nginx -t, so it
-	// needs the same rights as saving it (admin + write on the site).
-	if !h.checkSitePermission(c.Request().Context(), sess, site, "write") {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	if err := h.vhostRootGuard(ctx, sess, site); err != nil {
+		return err
 	}
-
 	var body struct {
 		Config string `json:"vhost_config"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
-
-	nginxPath, err := exec.LookPath("nginx")
-	if err != nil {
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/vhost/validate", map[string]any{"domain": site.Domain, "config": body.Config}, time.Minute)
+	if err != nil || code >= 400 {
 		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-			"valid":   false,
-			"warning": true,
-			"message": "nginx binary not found on this server. Config will be saved to DB.",
+			"valid": false, "warning": true, "message": "Could not reach the site's agent to validate the config.",
 		}, RequestID: rid})
 	}
-
-	// Strategy: temporarily SWAP the live config with the new one, run nginx -t (which has full
-	// system context — modules, log_formats, SSL certs), then restore. No domain rewriting needed.
-	livePath := filepath.Join("/etc/nginx/sites-enabled", site.Domain+".conf")
-	backupPath := livePath + ".sigarda-bak"
-	hadOriginal := false
-	if _, err := os.Stat(livePath); err == nil {
-		if err := os.Rename(livePath, backupPath); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to backup live config: "+err.Error())
-		}
-		hadOriginal = true
-	}
-	// Write new config in place of the live one
-	if err := os.WriteFile(livePath, []byte(body.Config), 0644); err != nil {
-		if hadOriginal {
-			os.Rename(backupPath, livePath)
-		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to write test config: "+err.Error())
-	}
-	// Always restore original after test
-	defer func() {
-		os.Remove(livePath)
-		if hadOriginal {
-			os.Rename(backupPath, livePath)
-		}
-	}()
-
-	// Run real nginx -t
-	cmd := exec.Command(nginxPath, "-t")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// Filter: keep only emerg/error lines + test result; strip warn noise from other sites
-		raw := stderr.String()
-		var kept []string
-		for _, l := range strings.Split(raw, "\n") {
-			if strings.Contains(l, "[emerg]") || strings.Contains(l, "[error]") ||
-				strings.Contains(l, "test failed") || strings.Contains(l, "syntax is") {
-				kept = append(kept, l)
-			}
-		}
-		msg := strings.Join(kept, "\n")
-		if msg == "" {
-			msg = raw
-		}
-		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-			"valid":   false,
-			"warning": false,
-			"message": msg,
-		}, RequestID: rid})
-	}
-
+	valid, _ := out["valid"].(bool)
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-		"valid":   true,
-		"warning": false,
-		"message": "nginx configuration syntax is valid ✓",
+		"valid": valid, "warning": false, "message": out["message"],
 	}, RequestID: rid})
 }
 
