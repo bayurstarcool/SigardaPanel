@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
@@ -50,7 +50,7 @@ func toAPIKeyResp(k store.UserAPIKey) apiKeyResp {
 }
 
 // list returns the caller's API keys (never the key material).
-func (h *apiKeyHandler) list(c echo.Context) error {
+func (h *apiKeyHandler) list(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	keys, err := h.store.APIKeys.ListByUser(c.Request().Context(), sess.UserID)
 	if err != nil {
@@ -69,7 +69,7 @@ func (h *apiKeyHandler) list(c echo.Context) error {
 
 // create mints a key for the caller. The raw key is in the response exactly
 // once; only its SHA-256 hash is stored.
-func (h *apiKeyHandler) create(c echo.Context) error {
+func (h *apiKeyHandler) create(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	// An impersonating admin must not be able to mint lasting credentials
 	// for the user being impersonated.
@@ -131,7 +131,7 @@ func (h *apiKeyHandler) create(c echo.Context) error {
 }
 
 // revoke deletes one of the caller's keys. Another user's key is a 404.
-func (h *apiKeyHandler) revoke(c echo.Context) error {
+func (h *apiKeyHandler) revoke(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -157,7 +157,7 @@ func (h *apiKeyHandler) revoke(c echo.Context) error {
 // Wiping the whole log is deliberately impossible, and the purge itself is
 // recorded as a new audit entry so it can never be hidden.
 func purgeAuditLogs(s *store.Store, rec *audit.Recorder) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		days, err := strconv.Atoi(c.QueryParam("older_than_days"))
 		if err != nil || days < 1 || days > 3650 {
 			return echo.NewHTTPError(http.StatusBadRequest, "older_than_days must be between 1 and 3650")

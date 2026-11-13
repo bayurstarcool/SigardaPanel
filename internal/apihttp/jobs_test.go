@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/db"
 	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/migrations"

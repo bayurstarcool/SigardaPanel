@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/buildinfo"
@@ -139,7 +139,7 @@ func autoUpdateEnabled(ctx context.Context, db *sql.DB) bool {
 }
 
 // status answers GET /api/v1/system/panel-update[?refresh=1].
-func (h *panelUpdateHandler) status(c echo.Context) error {
+func (h *panelUpdateHandler) status(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	maxAge := 6 * time.Hour
@@ -174,7 +174,7 @@ func (h *panelUpdateHandler) status(c echo.Context) error {
 }
 
 // start answers POST /api/v1/system/panel-update: install the latest release.
-func (h *panelUpdateHandler) start(c echo.Context) error {
+func (h *panelUpdateHandler) start(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
@@ -219,7 +219,7 @@ func (h *panelUpdateHandler) start(c echo.Context) error {
 // settings answers PUT /api/v1/system/panel-update/settings
 // {"auto_update": bool, "auto_update_window": {"start": 2, "end": 5} | null}.
 // Fields left out keep their value.
-func (h *panelUpdateHandler) settings(c echo.Context) error {
+func (h *panelUpdateHandler) settings(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	var body map[string]json.RawMessage
@@ -276,7 +276,7 @@ func (h *panelUpdateHandler) settings(c echo.Context) error {
 
 // summary answers GET /api/v1/system/panel-update/summary: a cheap answer
 // for the header badge (cached release lookup, no agent call).
-func (h *panelUpdateHandler) summary(c echo.Context) error {
+func (h *panelUpdateHandler) summary(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	current := panelVersion()
 	rel, _, _ := latestRelease(c.Request().Context(), 6*time.Hour)
@@ -289,7 +289,7 @@ func (h *panelUpdateHandler) summary(c echo.Context) error {
 }
 
 // backups answers GET /api/v1/system/panel-update/backups.
-func (h *panelUpdateHandler) backups(c echo.Context) error {
+func (h *panelUpdateHandler) backups(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	code, out, err := panelAgentCall(c.Request().Context(), http.MethodGet, "/tasks/panel/backups", nil)
 	if err != nil {
@@ -306,7 +306,7 @@ func (h *panelUpdateHandler) backups(c echo.Context) error {
 
 // rollback answers POST /api/v1/system/panel-update/rollback {"backup": "..."}:
 // restore the binary, web app and database saved before an update.
-func (h *panelUpdateHandler) rollback(c echo.Context) error {
+func (h *panelUpdateHandler) rollback(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	var body struct {

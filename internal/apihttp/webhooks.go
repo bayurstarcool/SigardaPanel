@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/store"
 	"strings"
@@ -27,7 +27,7 @@ func newWebhookHandler(s *store.Store) *webhookHandler {
 	return &webhookHandler{store: s}
 }
 
-func (h *webhookHandler) deploy(c echo.Context) error {
+func (h *webhookHandler) deploy(c *echo.Context) error {
 	siteID, err := strconv.ParseInt(c.Param("site_id"), 10, 64)
 	if err != nil || siteID <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid site_id")
@@ -137,7 +137,7 @@ func computeHMAC(body []byte, secret string) string {
 // webhookSecret answers GET /api/v1/sites/:id/webhook (site admins): the
 // deploy URL path and secret, creating the secret on first use. POST
 // /api/v1/sites/:id/webhook/rotate replaces it (the old one stops working).
-func (h *siteHandler) webhookSecret(c echo.Context) error {
+func (h *siteHandler) webhookSecret(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

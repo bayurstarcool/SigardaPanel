@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/sitefs"
 )
 
@@ -33,12 +33,12 @@ func (r *Router) siteFS(rootPath, systemUser string) (*sitefs.FS, error) {
 	return f, nil
 }
 
-func fsError(c echo.Context, err error) error {
+func fsError(c *echo.Context, err error) error {
 	return c.JSON(sitefs.StatusOf(err), map[string]any{"ok": false, "message": err.Error()})
 }
 
 // filesTask answers POST /tasks/files/op: one file manager operation.
-func (r *Router) filesTask(c echo.Context) error {
+func (r *Router) filesTask(c *echo.Context) error {
 	var p struct {
 		Op         string   `json:"op"`
 		RootPath   string   `json:"root_path"`
@@ -139,7 +139,7 @@ func (r *Router) filesTask(c echo.Context) error {
 
 // filesUploadTask answers POST /tasks/files/upload?root_path=&system_user=&path=&filename=
 // with the file as the raw request body.
-func (r *Router) filesUploadTask(c echo.Context) error {
+func (r *Router) filesUploadTask(c *echo.Context) error {
 	f, err := r.siteFS(c.QueryParam("root_path"), c.QueryParam("system_user"))
 	if err != nil {
 		return fsError(c, err)
@@ -152,7 +152,7 @@ func (r *Router) filesUploadTask(c echo.Context) error {
 }
 
 // filesDownloadTask answers GET /tasks/files/download?root_path=&path= with the file.
-func (r *Router) filesDownloadTask(c echo.Context) error {
+func (r *Router) filesDownloadTask(c *echo.Context) error {
 	f, err := r.siteFS(c.QueryParam("root_path"), "")
 	if err != nil {
 		return fsError(c, err)

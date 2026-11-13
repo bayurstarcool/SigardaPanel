@@ -15,7 +15,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
@@ -45,7 +45,7 @@ func (h *backupHandler) hasPendingBackup(ctx context.Context, siteID int64) bool
 	return false
 }
 
-func (h *backupHandler) create(c echo.Context) error {
+func (h *backupHandler) create(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -122,7 +122,7 @@ func (h *backupHandler) create(c echo.Context) error {
 	})
 }
 
-func (h *backupHandler) list(c echo.Context) error {
+func (h *backupHandler) list(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	var siteID int64
@@ -172,7 +172,7 @@ func (h *backupHandler) list(c echo.Context) error {
 	})
 }
 
-func (h *backupHandler) restore(c echo.Context) error {
+func (h *backupHandler) restore(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -298,7 +298,7 @@ func (h *backupHandler) requireBackupAdmin(ctx context.Context, sess *store.Sess
 
 // ─── Bulk Create handler ──────────────────────────────────
 
-func (h *backupHandler) bulkCreate(c echo.Context) error {
+func (h *backupHandler) bulkCreate(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -573,7 +573,7 @@ func backupToMap(b store.Backup) map[string]any {
 
 // ─── Download handler ──────────────────────────────────────
 
-func (h *backupHandler) download(c echo.Context) error {
+func (h *backupHandler) download(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -658,7 +658,7 @@ func (h *backupHandler) download(c echo.Context) error {
 
 // ─── Delete handler ────────────────────────────────────────
 
-func (h *backupHandler) delete(c echo.Context) error {
+func (h *backupHandler) delete(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -746,7 +746,7 @@ func (h *backupHandler) delete(c echo.Context) error {
 
 // ─── Database Backup handler ───────────────────────────────
 
-func (h *backupHandler) createDatabaseBackup(c echo.Context) error {
+func (h *backupHandler) createDatabaseBackup(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -946,7 +946,7 @@ func (h *backupHandler) createDatabaseBackup(c echo.Context) error {
 // ─── Retention Settings Handlers ───────────────────────────
 
 func getRetention(db *sql.DB) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		rid := c.Response().Header().Get(echo.HeaderXRequestID)
 		val, err := store.GetSetting(c.Request().Context(), db, "retention_days")
 		if err != nil || val == "" || val == "0" {
@@ -970,7 +970,7 @@ func getRetention(db *sql.DB) echo.HandlerFunc {
 }
 
 func setRetention(db *sql.DB) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		rid := c.Response().Header().Get(echo.HeaderXRequestID)
 		var body struct {
 			RetentionDays   int `json:"retention_days"`

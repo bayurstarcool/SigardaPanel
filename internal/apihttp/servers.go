@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
@@ -104,7 +104,7 @@ func newServerHandler(s *store.Store, a *audit.Recorder) *serverHandler {
 }
 
 // list returns all servers (without agent_token).
-func (h *serverHandler) list(c echo.Context) error {
+func (h *serverHandler) list(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	servers, err := h.store.Servers.List(c.Request().Context())
 	if err != nil {
@@ -124,7 +124,7 @@ func (h *serverHandler) list(c echo.Context) error {
 }
 
 // get returns a single server (without agent_token).
-func (h *serverHandler) get(c echo.Context) error {
+func (h *serverHandler) get(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -147,7 +147,7 @@ func (h *serverHandler) get(c echo.Context) error {
 }
 
 // create creates a new server. Returns agent_token ONLY on creation.
-func (h *serverHandler) create(c echo.Context) error {
+func (h *serverHandler) create(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -230,7 +230,7 @@ func (h *serverHandler) create(c echo.Context) error {
 }
 
 // update modifies an existing server's editable fields.
-func (h *serverHandler) update(c echo.Context) error {
+func (h *serverHandler) update(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -331,7 +331,7 @@ func (h *serverHandler) update(c echo.Context) error {
 }
 
 // delete removes a server.
-func (h *serverHandler) delete(c echo.Context) error {
+func (h *serverHandler) delete(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -381,7 +381,7 @@ func (h *serverHandler) delete(c echo.Context) error {
 }
 
 // getHealth returns the health status of a single server.
-func (h *serverHandler) getHealth(c echo.Context) error {
+func (h *serverHandler) getHealth(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -410,7 +410,7 @@ func (h *serverHandler) getHealth(c echo.Context) error {
 }
 
 // getHealthAll returns the health status of all servers.
-func (h *serverHandler) getHealthAll(c echo.Context) error {
+func (h *serverHandler) getHealthAll(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	servers, err := h.store.Servers.List(c.Request().Context())
 	if err != nil {
@@ -437,7 +437,7 @@ func (h *serverHandler) getHealthAll(c echo.Context) error {
 }
 
 // regenerateToken creates a new agent token for a server.
-func (h *serverHandler) regenerateToken(c echo.Context) error {
+func (h *serverHandler) regenerateToken(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {

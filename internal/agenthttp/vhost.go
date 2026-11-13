@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // vhostMu: raw vhost validation briefly swaps the live file and saving
@@ -45,7 +45,7 @@ func (r *Router) vhostPath(domain string) string {
 }
 
 // vhostGetTask answers GET /tasks/vhost/get?domain=.
-func (r *Router) vhostGetTask(c echo.Context) error {
+func (r *Router) vhostGetTask(c *echo.Context) error {
 	domain := c.QueryParam("domain")
 	if !isValidDomain(domain) {
 		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid domain"})
@@ -80,7 +80,7 @@ func (r *Router) withCandidateVhost(ctx context.Context, domain, config string, 
 
 // vhostValidateTask answers POST /tasks/vhost/validate {domain, config}:
 // nginx -t with the candidate in place, then the live file is restored.
-func (r *Router) vhostValidateTask(c echo.Context) error {
+func (r *Router) vhostValidateTask(c *echo.Context) error {
 	var p struct {
 		Domain string `json:"domain"`
 		Config string `json:"config"`
@@ -99,7 +99,7 @@ func (r *Router) vhostValidateTask(c echo.Context) error {
 
 // vhostPutTask answers POST /tasks/vhost/put {domain, config}: install the
 // vhost if nginx -t accepts it (otherwise the previous one stays), reload.
-func (r *Router) vhostPutTask(c echo.Context) error {
+func (r *Router) vhostPutTask(c *echo.Context) error {
 	var p struct {
 		Domain string `json:"domain"`
 		Config string `json:"config"`
@@ -133,7 +133,7 @@ func dirExists(p string) bool {
 }
 
 // siteUsageTask answers POST /tasks/site/usage {root_path}: disk usage in bytes.
-func (r *Router) siteUsageTask(c echo.Context) error {
+func (r *Router) siteUsageTask(c *echo.Context) error {
 	var p struct {
 		RootPath string `json:"root_path"`
 	}

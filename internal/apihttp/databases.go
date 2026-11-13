@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/dbserver"
@@ -54,7 +54,7 @@ func canonicalDBUserKey(username, host string) string {
 }
 
 // createDatabase -- POST /api/v1/sites/:id/databases
-func (h *dbHandler) createDatabase(c echo.Context) error {
+func (h *dbHandler) createDatabase(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -182,7 +182,7 @@ func (h *dbHandler) createDatabase(c echo.Context) error {
 }
 
 // listDatabases -- GET /api/v1/sites/:id/databases
-func (h *dbHandler) listDatabases(c echo.Context) error {
+func (h *dbHandler) listDatabases(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -233,7 +233,7 @@ func (h *dbHandler) listDatabases(c echo.Context) error {
 }
 
 // listAllDatabases -- GET /api/v1/databases
-func (h *dbHandler) listAllDatabases(c echo.Context) error {
+func (h *dbHandler) listAllDatabases(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -289,7 +289,7 @@ func (h *dbHandler) listAllDatabases(c echo.Context) error {
 }
 
 // rotateDBUserPassword -- POST /api/v1/databases/:id/users/:user_id/rotate-password
-func (h *dbHandler) rotateDBUserPassword(c echo.Context) error {
+func (h *dbHandler) rotateDBUserPassword(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -383,7 +383,7 @@ func generateDBPassword() string {
 	return hex.EncodeToString(b)
 }
 
-func (h *dbHandler) getDatabase(c echo.Context) error {
+func (h *dbHandler) getDatabase(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -425,7 +425,7 @@ func (h *dbHandler) getDatabase(c echo.Context) error {
 }
 
 // deleteDatabase -- DELETE /api/v1/databases/:id
-func (h *dbHandler) deleteDatabase(c echo.Context) error {
+func (h *dbHandler) deleteDatabase(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -494,7 +494,7 @@ func (h *dbHandler) deleteDatabase(c echo.Context) error {
 }
 
 // createDBUser -- POST /api/v1/databases/:id/users
-func (h *dbHandler) createDBUser(c echo.Context) error {
+func (h *dbHandler) createDBUser(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -636,7 +636,7 @@ func (h *dbHandler) createDBUser(c echo.Context) error {
 }
 
 // listDBUsers -- GET /api/v1/databases/:id/users
-func (h *dbHandler) listDBUsers(c echo.Context) error {
+func (h *dbHandler) listDBUsers(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -676,7 +676,7 @@ func (h *dbHandler) listDBUsers(c echo.Context) error {
 }
 
 // deleteDBUser -- DELETE /api/v1/databases/:id/users/:user_id
-func (h *dbHandler) deleteDBUser(c echo.Context) error {
+func (h *dbHandler) deleteDBUser(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -828,7 +828,7 @@ func execMySQLConn(s *store.Store, fn func(conn *dbserver.MySQLConn) error) erro
 // phpMyAdminCredentials creates a dedicated, short-lived-login account for one database.
 // Only callable from localhost with a signed request from the web process.
 // POST /api/v1/databases/phpmyadmin-credentials
-func (h *dbHandler) phpMyAdminCredentials(c echo.Context) error {
+func (h *dbHandler) phpMyAdminCredentials(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	var body struct {
@@ -890,7 +890,7 @@ func (h *dbHandler) phpMyAdminCredentials(c echo.Context) error {
 // phpMyAdminResetPasswords resets MySQL passwords for all users that have
 // password_hash = "imported" (i.e., imported from CloudPanel without a known password).
 // POST /api/v1/databases/phpmyadmin-reset-passwords
-func (h *dbHandler) phpMyAdminResetPasswords(c echo.Context) error {
+func (h *dbHandler) phpMyAdminResetPasswords(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -977,7 +977,7 @@ func (h *dbHandler) phpMyAdminResetPasswords(c echo.Context) error {
 
 // listAllDBUsers lists all database users across all databases (global).
 // GET /api/v1/db-users
-func (h *dbHandler) listAllDBUsers(c echo.Context) error {
+func (h *dbHandler) listAllDBUsers(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -1027,7 +1027,7 @@ func (h *dbHandler) listAllDBUsers(c echo.Context) error {
 
 // updateDBUser updates a database user's host_pattern and/or privileges.
 // PATCH /api/v1/db-users/:id
-func (h *dbHandler) updateDBUser(c echo.Context) error {
+func (h *dbHandler) updateDBUser(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var actorID int64
@@ -1143,7 +1143,7 @@ func (h *dbHandler) updateDBUser(c echo.Context) error {
 
 // updateDatabase updates a database's charset and/or collation.
 // PATCH /api/v1/databases/:id
-func (h *dbHandler) updateDatabase(c echo.Context) error {
+func (h *dbHandler) updateDatabase(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var actorID int64
@@ -1215,7 +1215,7 @@ func (h *dbHandler) updateDatabase(c echo.Context) error {
 
 // grantExistingUser grants an existing MySQL user access to this database.
 // POST /api/v1/databases/:id/grant-user
-func (h *dbHandler) grantExistingUser(c echo.Context) error {
+func (h *dbHandler) grantExistingUser(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var actorID int64
@@ -1349,7 +1349,7 @@ func (h *dbHandler) grantExistingUser(c echo.Context) error {
 
 // listAvailableMySQLUsers lists MySQL users NOT yet assigned to this database.
 // GET /api/v1/databases/:id/available-users
-func (h *dbHandler) listAvailableMySQLUsers(c echo.Context) error {
+func (h *dbHandler) listAvailableMySQLUsers(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -1413,7 +1413,7 @@ func (h *dbHandler) listAvailableMySQLUsers(c echo.Context) error {
 // pmaCredentials returns MySQL credentials for phpMyAdmin per-site.
 // Finds the MySQL user that has ALL PRIVILEGES on the database.
 // Uses encrypted password from db_users if available, otherwise phpmyadmin control user.
-func (h *dbHandler) pmaCredentials(c echo.Context) error {
+func (h *dbHandler) pmaCredentials(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	if sess == nil {
@@ -1512,7 +1512,7 @@ func extractPHPVar(content, varName string) string {
 }
 
 // execSQL executes raw SQL on the default database server (admin only).
-func (h *dbHandler) execSQL(c echo.Context) error {
+func (h *dbHandler) execSQL(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	var body struct {

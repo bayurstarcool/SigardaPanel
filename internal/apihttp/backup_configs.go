@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
@@ -27,7 +27,7 @@ func newBackupConfigHandler(s *store.Store, a *audit.Recorder) *backupConfigHand
 }
 
 // GET /api/v1/backup-configs
-func (h *backupConfigHandler) list(c echo.Context) error {
+func (h *backupConfigHandler) list(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	configs, err := h.store.BackupConfigs.ListAll(c.Request().Context())
@@ -48,7 +48,7 @@ func (h *backupConfigHandler) list(c echo.Context) error {
 }
 
 // POST /api/v1/backup-configs
-func (h *backupConfigHandler) create(c echo.Context) error {
+func (h *backupConfigHandler) create(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -132,7 +132,7 @@ func (h *backupConfigHandler) create(c echo.Context) error {
 }
 
 // PATCH /api/v1/backup-configs/:id
-func (h *backupConfigHandler) update(c echo.Context) error {
+func (h *backupConfigHandler) update(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -229,7 +229,7 @@ func (h *backupConfigHandler) update(c echo.Context) error {
 }
 
 // DELETE /api/v1/backup-configs/:id
-func (h *backupConfigHandler) delete(c echo.Context) error {
+func (h *backupConfigHandler) delete(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -264,7 +264,7 @@ func (h *backupConfigHandler) delete(c echo.Context) error {
 }
 
 // POST /api/v1/backup-configs/:id/run
-func (h *backupConfigHandler) run(c echo.Context) error {
+func (h *backupConfigHandler) run(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64

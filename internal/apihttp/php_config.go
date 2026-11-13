@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"sort"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/jobmodel"
 )
 
@@ -61,7 +61,7 @@ func (h *siteHandler) sitePHPVersions(ctx context.Context, serverID int64) []str
 }
 
 // getPHPConfig returns the site's PHP version, custom php.ini, and available versions.
-func (h *siteHandler) getPHPConfig(c echo.Context) error {
+func (h *siteHandler) getPHPConfig(c *echo.Context) error {
 	site, err := h.getSiteForUser(c)
 	if err != nil {
 		return err
@@ -81,7 +81,7 @@ func (h *siteHandler) getPHPConfig(c echo.Context) error {
 
 // updatePHPConfig sets the per-site PHP version and custom php.ini directives,
 // then regenerates the nginx vhost. Does NOT touch global PHP-FPM config.
-func (h *siteHandler) updatePHPConfig(c echo.Context) error {
+func (h *siteHandler) updatePHPConfig(c *echo.Context) error {
 	site, err := h.getSiteForUserPerm(c, sitePermWrite)
 	if err != nil {
 		return err
@@ -224,7 +224,7 @@ func trimSpace(s string) string {
 
 // sshInfo returns read-only SSH connection details for the site.
 // It does NOT expose credentials — just the connection command and metadata.
-func (h *siteHandler) sshInfo(c echo.Context) error {
+func (h *siteHandler) sshInfo(c *echo.Context) error {
 	site, err := h.getSiteForUser(c)
 	if err != nil {
 		return err

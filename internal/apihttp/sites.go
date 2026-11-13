@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/cloudflare"
@@ -49,7 +49,7 @@ func newSiteHandler(s *store.Store, a *audit.Recorder) *siteHandler {
 	return &siteHandler{store: s, audit: a}
 }
 
-func (h *siteHandler) list(c echo.Context) error {
+func (h *siteHandler) list(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	_ = h.isAdmin(c) // keep for future use if needed
@@ -115,7 +115,7 @@ func (h *siteHandler) list(c echo.Context) error {
 	})
 }
 
-func (h *siteHandler) get(c echo.Context) error {
+func (h *siteHandler) get(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -148,7 +148,7 @@ func (h *siteHandler) get(c echo.Context) error {
 	})
 }
 
-func (h *siteHandler) create(c echo.Context) error {
+func (h *siteHandler) create(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -489,7 +489,7 @@ func (h *siteHandler) create(c echo.Context) error {
 	})
 }
 
-func (h *siteHandler) delete(c echo.Context) error {
+func (h *siteHandler) delete(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -616,7 +616,7 @@ func (h *siteHandler) delete(c echo.Context) error {
 	})
 }
 
-func (h *siteHandler) deploy(c echo.Context) error {
+func (h *siteHandler) deploy(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -679,7 +679,7 @@ func (h *siteHandler) deploy(c echo.Context) error {
 	})
 }
 
-func (h *siteHandler) updateConfig(c echo.Context) error {
+func (h *siteHandler) updateConfig(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -796,7 +796,7 @@ func (h *siteHandler) updateConfig(c echo.Context) error {
 	})
 }
 
-func (h *siteHandler) reloadNginx(c echo.Context) error {
+func (h *siteHandler) reloadNginx(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -917,7 +917,7 @@ func (h *siteHandler) isSiteOwnerOrSuperAdmin(ctx context.Context, sess *store.S
 	return user != nil && user.Role == auth.RoleSuperAdmin
 }
 
-func (h *siteHandler) isAdmin(c echo.Context) bool {
+func (h *siteHandler) isAdmin(c *echo.Context) bool {
 	sess := sessionFromEcho(c)
 	if sess == nil {
 		return false
@@ -929,7 +929,7 @@ func (h *siteHandler) isAdmin(c echo.Context) bool {
 	return auth.HasRole(user.Role, auth.RoleAdmin)
 }
 
-func (h *siteHandler) isSuperAdmin(c echo.Context) bool {
+func (h *siteHandler) isSuperAdmin(c *echo.Context) bool {
 	sess := sessionFromEcho(c)
 	if sess == nil {
 		return false
@@ -941,7 +941,7 @@ func (h *siteHandler) isSuperAdmin(c echo.Context) bool {
 	return user.Role == auth.RoleSuperAdmin
 }
 
-func (h *siteHandler) transfer(c echo.Context) error {
+func (h *siteHandler) transfer(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	if sess == nil || sess.UserID == 0 {
@@ -1164,7 +1164,7 @@ func defaultSiteRootPath(username, domain string) string {
 }
 
 // usage returns real disk usage for a specific site.
-func (h *siteHandler) usage(c echo.Context) error {
+func (h *siteHandler) usage(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -1213,7 +1213,7 @@ func (h *siteHandler) usage(c echo.Context) error {
 // ─── Git Deploy v2 Proxy Handlers ──────────────────────────────────────
 
 // gitBranches proxies to agent GET /tasks/git/branches.
-func (h *siteHandler) gitBranches(c echo.Context) error {
+func (h *siteHandler) gitBranches(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, server, err := h.resolveSiteAndServer(c)
 	if err != nil {
@@ -1232,7 +1232,7 @@ func (h *siteHandler) gitBranches(c echo.Context) error {
 }
 
 // gitLog proxies to agent GET /tasks/git/log.
-func (h *siteHandler) gitLog(c echo.Context) error {
+func (h *siteHandler) gitLog(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, server, err := h.resolveSiteAndServer(c)
 	if err != nil {
@@ -1255,7 +1255,7 @@ func (h *siteHandler) gitLog(c echo.Context) error {
 }
 
 // gitRollback proxies to agent POST /tasks/git/rollback.
-func (h *siteHandler) gitRollback(c echo.Context) error {
+func (h *siteHandler) gitRollback(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	// Changing the deployed code needs write permission on the site (read
 	// assignees could do it, owners with the user role could not).
@@ -1287,7 +1287,7 @@ func (h *siteHandler) gitRollback(c echo.Context) error {
 }
 
 // gitCheckout proxies to agent POST /tasks/git/checkout.
-func (h *siteHandler) gitCheckout(c echo.Context) error {
+func (h *siteHandler) gitCheckout(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	// Changing the deployed code needs write permission on the site (read
 	// assignees could do it, owners with the user role could not).
@@ -1319,13 +1319,13 @@ func (h *siteHandler) gitCheckout(c echo.Context) error {
 }
 
 // resolveSiteAndServer resolves site and its server from URL params.
-func (h *siteHandler) resolveSiteAndServer(c echo.Context) (*store.Site, *store.Server, error) {
+func (h *siteHandler) resolveSiteAndServer(c *echo.Context) (*store.Site, *store.Server, error) {
 	return h.resolveSiteAndServerPerm(c, "read")
 }
 
 // resolveSiteAndServerPerm is resolveSiteAndServer requiring a permission
 // level on the site, checked before anything about the server is revealed.
-func (h *siteHandler) resolveSiteAndServerPerm(c echo.Context, perm string) (*store.Site, *store.Server, error) {
+func (h *siteHandler) resolveSiteAndServerPerm(c *echo.Context, perm string) (*store.Site, *store.Server, error) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
@@ -1356,7 +1356,7 @@ func (h *siteHandler) resolveSiteAndServerPerm(c echo.Context, perm string) (*st
 // ─── Process Resource Management ──────────────────────────────────────
 
 // appResourceUsage returns current resource usage for a site's app process.
-func (h *siteHandler) appResourceUsage(c echo.Context) error {
+func (h *siteHandler) appResourceUsage(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -1420,7 +1420,7 @@ func (h *siteHandler) appResourceUsage(c echo.Context) error {
 }
 
 // appUpdateResourceLimits updates resource limits for a site's app process.
-func (h *siteHandler) appUpdateResourceLimits(c echo.Context) error {
+func (h *siteHandler) appUpdateResourceLimits(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {

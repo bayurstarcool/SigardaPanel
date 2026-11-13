@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/nginx"
@@ -99,7 +99,7 @@ func (h *siteHandler) vhostRootGuard(ctx context.Context, sess *store.Session, s
 	return nil
 }
 
-func (h *siteHandler) getVhost(c echo.Context) error {
+func (h *siteHandler) getVhost(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -132,7 +132,7 @@ func (h *siteHandler) getVhost(c echo.Context) error {
 	}, RequestID: rid})
 }
 
-func (h *siteHandler) updateVhost(c echo.Context) error {
+func (h *siteHandler) updateVhost(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	ctx := c.Request().Context()
@@ -193,7 +193,7 @@ func (h *siteHandler) updateVhost(c echo.Context) error {
 }
 
 // validateVhost runs nginx -t with the candidate vhost on the site's server.
-func (h *siteHandler) validateVhost(c echo.Context) error {
+func (h *siteHandler) validateVhost(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	ctx := c.Request().Context()
@@ -227,7 +227,7 @@ func (h *siteHandler) validateVhost(c echo.Context) error {
 	}, RequestID: rid})
 }
 
-func (h *siteHandler) getVarnish(c echo.Context) error {
+func (h *siteHandler) getVarnish(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -257,7 +257,7 @@ func (h *siteHandler) getVarnish(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"enabled": v.Enabled, "cache_time": v.CacheTime, "hit_rate": v.HitRate}, RequestID: rid})
 }
 
-func (h *siteHandler) purgeVarnish(c echo.Context) error {
+func (h *siteHandler) purgeVarnish(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -278,7 +278,7 @@ func (h *siteHandler) purgeVarnish(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Cache purged"}, RequestID: rid})
 }
 
-func (h *siteHandler) getSecurity(c echo.Context) error {
+func (h *siteHandler) getSecurity(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -308,7 +308,7 @@ func (h *siteHandler) getSecurity(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"basic_auth_enabled": sec.BasicAuthEnabled, "basic_auth_username": sec.BasicAuthUsername, "blocked_ips": sec.BlockedIPs}, RequestID: rid})
 }
 
-func (h *siteHandler) updateSecurity(c echo.Context) error {
+func (h *siteHandler) updateSecurity(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -396,7 +396,7 @@ func (h *siteHandler) updateSecurity(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "queued", "message": "Security settings saved; applying them to the site", "job_id": job.ID}, RequestID: rid})
 }
 
-func (h *siteHandler) getSshFtp(c echo.Context) error {
+func (h *siteHandler) getSshFtp(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -429,7 +429,7 @@ func (h *siteHandler) getSshFtp(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"users": users}, RequestID: rid})
 }
 
-func (h *siteHandler) createSshFtp(c echo.Context) error {
+func (h *siteHandler) createSshFtp(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -486,7 +486,7 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/create", map[string]any{
 		"username": body.Username, "site_root": site.RootPath, "ssh_keys": body.SSHKeys,
 		"system_user": site.SystemUser.String,
-		"accounts": h.sshAccountsOnServer(ctx, site.ServerID, "", body.Username),
+		"accounts":    h.sshAccountsOnServer(ctx, site.ServerID, "", body.Username),
 	}, 3*time.Minute)
 	if err != nil && code == 0 {
 		return echo.NewHTTPError(http.StatusBadGateway, "the site's agent is unreachable")
@@ -531,7 +531,7 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 	}, RequestID: rid})
 }
 
-func (h *siteHandler) deleteSshFtp(c echo.Context) error {
+func (h *siteHandler) deleteSshFtp(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -585,7 +585,7 @@ func (h *siteHandler) deleteSshFtp(c echo.Context) error {
 // siteSSHUser loads SSH/FTP user sshID, verifying it belongs to the site in
 // the :id URL parameter and that the caller holds the required permission on
 // that site. Users of other sites are reported as not found.
-func (h *siteHandler) siteSSHUser(c echo.Context, sshID int64, required string) (*store.SiteSSHUser, error) {
+func (h *siteHandler) siteSSHUser(c *echo.Context, sshID int64, required string) (*store.SiteSSHUser, error) {
 	ctx := c.Request().Context()
 	siteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || siteID <= 0 {
@@ -611,7 +611,7 @@ func (h *siteHandler) siteSSHUser(c echo.Context, sshID int64, required string) 
 
 // getSSHPrivateKey returns the SSH private key for a given SSH/FTP user.
 // GET /api/v1/sites/:id/ssh-ftp/:ssh_id/key
-func (h *siteHandler) getSSHPrivateKey(c echo.Context) error {
+func (h *siteHandler) getSSHPrivateKey(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sshID, err := strconv.ParseInt(c.Param("ssh_id"), 10, 64)
 	if err != nil || sshID <= 0 {
@@ -663,7 +663,7 @@ func (h *siteHandler) syncSiteCron(ctx context.Context, site *store.Site, jobs [
 	return nil
 }
 
-func (h *siteHandler) listCron(c echo.Context) error {
+func (h *siteHandler) listCron(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -692,7 +692,7 @@ func (h *siteHandler) listCron(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"jobs": jobs}, RequestID: rid})
 }
 
-func (h *siteHandler) createCron(c echo.Context) error {
+func (h *siteHandler) createCron(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -756,7 +756,7 @@ func (h *siteHandler) createCron(c echo.Context) error {
 	return c.JSON(http.StatusCreated, httpjson.Success{Data: map[string]any{"status": "success", "message": "Cron job created"}, RequestID: rid})
 }
 
-func (h *siteHandler) deleteCron(c echo.Context) error {
+func (h *siteHandler) deleteCron(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64

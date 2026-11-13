@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -18,13 +18,13 @@ func newNotificationHandler(s *store.Store) *notificationHandler {
 	return &notificationHandler{s: s}
 }
 
-func (h *notificationHandler) rid(c echo.Context) string {
+func (h *notificationHandler) rid(c *echo.Context) string {
 	return c.Response().Header().Get(echo.HeaderXRequestID)
 }
 
 // list returns notifications for the current user.
 // GET /api/v1/notifications?limit=50&offset=0
-func (h *notificationHandler) list(c echo.Context) error {
+func (h *notificationHandler) list(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
 	offset, _ := strconv.Atoi(c.QueryParam("offset"))
@@ -52,7 +52,7 @@ func (h *notificationHandler) list(c echo.Context) error {
 
 // count returns the unread count for the current user.
 // GET /api/v1/notifications/unread-count
-func (h *notificationHandler) count(c echo.Context) error {
+func (h *notificationHandler) count(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	count, err := h.s.Notifications.CountUnread(c.Request().Context(), sess.UserID)
 	if err != nil {
@@ -67,7 +67,7 @@ func (h *notificationHandler) count(c echo.Context) error {
 
 // markRead marks a single notification as read.
 // POST /api/v1/notifications/:id/read
-func (h *notificationHandler) markRead(c echo.Context) error {
+func (h *notificationHandler) markRead(c *echo.Context) error {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid notification id")
@@ -84,7 +84,7 @@ func (h *notificationHandler) markRead(c echo.Context) error {
 
 // markAllRead marks all of the user's notifications as read.
 // POST /api/v1/notifications/read-all
-func (h *notificationHandler) markAllRead(c echo.Context) error {
+func (h *notificationHandler) markAllRead(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	if err := h.s.Notifications.MarkAllRead(c.Request().Context(), sess.UserID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
@@ -97,7 +97,7 @@ func (h *notificationHandler) markAllRead(c echo.Context) error {
 
 // delete removes a single notification.
 // DELETE /api/v1/notifications/:id
-func (h *notificationHandler) delete(c echo.Context) error {
+func (h *notificationHandler) delete(c *echo.Context) error {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid notification id")
@@ -114,7 +114,7 @@ func (h *notificationHandler) delete(c echo.Context) error {
 
 // deleteAllRead removes all read notifications for the current user.
 // DELETE /api/v1/notifications/read
-func (h *notificationHandler) deleteAllRead(c echo.Context) error {
+func (h *notificationHandler) deleteAllRead(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	if err := h.s.Notifications.DeleteAllRead(c.Request().Context(), sess.UserID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")

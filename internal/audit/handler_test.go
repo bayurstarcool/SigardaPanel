@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // mockStore is an in-memory implementation of AuditLogStore for testing.
@@ -92,7 +92,7 @@ func TestList_ReturnsEntries(t *testing.T) {
 
 	e := newTestEcho()
 	allowAdmin := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { return next(c) }
+		return func(c *echo.Context) error { return next(c) }
 	}
 	h := NewHandler(store, allowAdmin)
 	h.Register(e.Group("/api/v1"))
@@ -121,7 +121,7 @@ func TestList_FilterUserID(t *testing.T) {
 
 	e := newTestEcho()
 	allowAdmin := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { return next(c) }
+		return func(c *echo.Context) error { return next(c) }
 	}
 	h := NewHandler(store, allowAdmin)
 	h.Register(e.Group("/api/v1"))
@@ -152,7 +152,7 @@ func TestList_FilterResource(t *testing.T) {
 
 	e := newTestEcho()
 	allowAdmin := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { return next(c) }
+		return func(c *echo.Context) error { return next(c) }
 	}
 	h := NewHandler(store, allowAdmin)
 	h.Register(e.Group("/api/v1"))
@@ -178,7 +178,7 @@ func TestList_FilterAction(t *testing.T) {
 
 	e := newTestEcho()
 	allowAdmin := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { return next(c) }
+		return func(c *echo.Context) error { return next(c) }
 	}
 	h := NewHandler(store, allowAdmin)
 	h.Register(e.Group("/api/v1"))
@@ -204,7 +204,7 @@ func TestList_Pagination(t *testing.T) {
 
 	e := newTestEcho()
 	allowAdmin := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { return next(c) }
+		return func(c *echo.Context) error { return next(c) }
 	}
 	h := NewHandler(store, allowAdmin)
 	h.Register(e.Group("/api/v1"))
@@ -232,7 +232,7 @@ func TestList_InvalidLimit(t *testing.T) {
 
 	e := newTestEcho()
 	allowAdmin := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { return next(c) }
+		return func(c *echo.Context) error { return next(c) }
 	}
 	h := NewHandler(store, allowAdmin)
 	h.Register(e.Group("/api/v1"))
@@ -258,7 +258,7 @@ func TestList_InvalidUserID(t *testing.T) {
 
 	e := newTestEcho()
 	allowAdmin := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { return next(c) }
+		return func(c *echo.Context) error { return next(c) }
 	}
 	h := NewHandler(store, allowAdmin)
 	h.Register(e.Group("/api/v1"))
@@ -284,7 +284,7 @@ func TestList_NonAdminBlocked(t *testing.T) {
 
 	e := newTestEcho()
 	blockAdmin := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			return echo.NewHTTPError(http.StatusForbidden, "admin only")
 		}
 	}

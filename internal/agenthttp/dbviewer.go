@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-sql-driver/mysql"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	_ "github.com/lib/pq"
 )
 
@@ -111,7 +111,7 @@ func quoteIdent(dbType, name string) string {
 }
 
 // viewerTask answers POST /tasks/db/view.
-func (r *Router) viewerTask(c echo.Context) error {
+func (r *Router) viewerTask(c *echo.Context) error {
 	var req viewerRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid payload"})

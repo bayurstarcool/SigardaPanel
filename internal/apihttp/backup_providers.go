@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"log/slog"
 	"net/http"
 	"os/exec"
@@ -36,7 +36,7 @@ var allowedProviderTypes = map[string]struct{}{
 	"generic":      {},
 }
 
-func (h *backupProviderHandler) list(c echo.Context) error {
+func (h *backupProviderHandler) list(c *echo.Context) error {
 	providers, err := h.store.BackupProviders.List(c.Request().Context())
 	if err != nil {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
@@ -51,7 +51,7 @@ func (h *backupProviderHandler) list(c echo.Context) error {
 	})
 }
 
-func (h *backupProviderHandler) create(c echo.Context) error {
+func (h *backupProviderHandler) create(c *echo.Context) error {
 	var body struct {
 		Name          string `json:"name"`
 		ProviderType  string `json:"provider_type"`
@@ -110,7 +110,7 @@ func (h *backupProviderHandler) create(c echo.Context) error {
 	})
 }
 
-func (h *backupProviderHandler) update(c echo.Context) error {
+func (h *backupProviderHandler) update(c *echo.Context) error {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
@@ -189,7 +189,7 @@ func (h *backupProviderHandler) update(c echo.Context) error {
 	})
 }
 
-func (h *backupProviderHandler) delete(c echo.Context) error {
+func (h *backupProviderHandler) delete(c *echo.Context) error {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
@@ -207,7 +207,7 @@ func (h *backupProviderHandler) delete(c echo.Context) error {
 }
 
 // testConnection tests S3 connectivity by running aws s3 ls on the bucket.
-func (h *backupProviderHandler) usage(c echo.Context) error {
+func (h *backupProviderHandler) usage(c *echo.Context) error {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
@@ -293,7 +293,7 @@ func (h *backupProviderHandler) usage(c echo.Context) error {
 	})
 }
 
-func (h *backupProviderHandler) testConnection(c echo.Context) error {
+func (h *backupProviderHandler) testConnection(c *echo.Context) error {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
@@ -522,7 +522,7 @@ func backupProviderToMap(p store.BackupStorageProvider) map[string]any {
 
 // ─── Update backup create to support S3 ────────────────────
 
-func (h *backupHandler) createWithProvider(c echo.Context) error {
+func (h *backupHandler) createWithProvider(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64

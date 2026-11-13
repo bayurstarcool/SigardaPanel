@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/cloudflare"
 	"sigardapanel/internal/httpjson"
@@ -26,7 +26,7 @@ func newCloudflareHandler(s *store.Store, auditRec *audit.Recorder) *cloudflareH
 }
 
 // clientForUser creates a Cloudflare client for the given user's stored config.
-func (h *cloudflareHandler) clientForUser(c echo.Context, userID int64) (*cloudflare.Client, error) {
+func (h *cloudflareHandler) clientForUser(c *echo.Context, userID int64) (*cloudflare.Client, error) {
 	cfg, err := h.s.Cloudflare.GetConfig(userID)
 	if err != nil {
 		return nil, fmt.Errorf("get config: %w", err)
@@ -41,7 +41,7 @@ func (h *cloudflareHandler) clientForUser(c echo.Context, userID int64) (*cloudf
 }
 
 // clientFromSession creates a Cloudflare client using the session user's config.
-func (h *cloudflareHandler) clientFromSession(c echo.Context) (*cloudflare.Client, int64, error) {
+func (h *cloudflareHandler) clientFromSession(c *echo.Context) (*cloudflare.Client, int64, error) {
 	sess := sessionFromEcho(c)
 	if sess == nil {
 		return nil, 0, echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
@@ -51,7 +51,7 @@ func (h *cloudflareHandler) clientFromSession(c echo.Context) (*cloudflare.Clien
 }
 
 // GET /api/v1/cloudflare/config
-func (h *cloudflareHandler) getConfig(c echo.Context) error {
+func (h *cloudflareHandler) getConfig(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	if sess == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
@@ -78,7 +78,7 @@ func (h *cloudflareHandler) getConfig(c echo.Context) error {
 }
 
 // PUT /api/v1/cloudflare/config
-func (h *cloudflareHandler) saveConfig(c echo.Context) error {
+func (h *cloudflareHandler) saveConfig(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	if sess == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
@@ -137,7 +137,7 @@ func (h *cloudflareHandler) saveConfig(c echo.Context) error {
 }
 
 // DELETE /api/v1/cloudflare/config
-func (h *cloudflareHandler) deleteConfig(c echo.Context) error {
+func (h *cloudflareHandler) deleteConfig(c *echo.Context) error {
 	sess := sessionFromEcho(c)
 	if sess == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
@@ -156,7 +156,7 @@ func (h *cloudflareHandler) deleteConfig(c echo.Context) error {
 }
 
 // GET /api/v1/cloudflare/verify
-func (h *cloudflareHandler) verify(c echo.Context) error {
+func (h *cloudflareHandler) verify(c *echo.Context) error {
 	client, _, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -169,7 +169,7 @@ func (h *cloudflareHandler) verify(c echo.Context) error {
 }
 
 // GET /api/v1/cloudflare/zones
-func (h *cloudflareHandler) listZones(c echo.Context) error {
+func (h *cloudflareHandler) listZones(c *echo.Context) error {
 	client, _, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -185,7 +185,7 @@ func (h *cloudflareHandler) listZones(c echo.Context) error {
 }
 
 // GET /api/v1/cloudflare/zones/search?q=
-func (h *cloudflareHandler) searchZones(c echo.Context) error {
+func (h *cloudflareHandler) searchZones(c *echo.Context) error {
 	client, _, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -212,7 +212,7 @@ func (h *cloudflareHandler) searchZones(c echo.Context) error {
 }
 
 // GET /api/v1/cloudflare/zones/:id
-func (h *cloudflareHandler) getZone(c echo.Context) error {
+func (h *cloudflareHandler) getZone(c *echo.Context) error {
 	client, _, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -226,7 +226,7 @@ func (h *cloudflareHandler) getZone(c echo.Context) error {
 }
 
 // GET /api/v1/cloudflare/zones/:id/dns
-func (h *cloudflareHandler) listDNSRecords(c echo.Context) error {
+func (h *cloudflareHandler) listDNSRecords(c *echo.Context) error {
 	client, _, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -244,7 +244,7 @@ func (h *cloudflareHandler) listDNSRecords(c echo.Context) error {
 }
 
 // POST /api/v1/cloudflare/zones/:id/dns
-func (h *cloudflareHandler) createDNSRecord(c echo.Context) error {
+func (h *cloudflareHandler) createDNSRecord(c *echo.Context) error {
 	client, userID, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -273,7 +273,7 @@ func (h *cloudflareHandler) createDNSRecord(c echo.Context) error {
 }
 
 // PUT /api/v1/cloudflare/zones/:id/dns/:recordId
-func (h *cloudflareHandler) updateDNSRecord(c echo.Context) error {
+func (h *cloudflareHandler) updateDNSRecord(c *echo.Context) error {
 	client, userID, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -303,7 +303,7 @@ func (h *cloudflareHandler) updateDNSRecord(c echo.Context) error {
 }
 
 // PATCH /api/v1/cloudflare/zones/:id/dns/:recordId — partial update (e.g. toggle proxy)
-func (h *cloudflareHandler) patchDNSRecord(c echo.Context) error {
+func (h *cloudflareHandler) patchDNSRecord(c *echo.Context) error {
 	client, _, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -322,7 +322,7 @@ func (h *cloudflareHandler) patchDNSRecord(c echo.Context) error {
 }
 
 // DELETE /api/v1/cloudflare/zones/:id/dns/:recordId
-func (h *cloudflareHandler) deleteDNSRecord(c echo.Context) error {
+func (h *cloudflareHandler) deleteDNSRecord(c *echo.Context) error {
 	client, userID, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -340,7 +340,7 @@ func (h *cloudflareHandler) deleteDNSRecord(c echo.Context) error {
 }
 
 // POST /api/v1/cloudflare/zones/:id/purge-cache
-func (h *cloudflareHandler) purgeCache(c echo.Context) error {
+func (h *cloudflareHandler) purgeCache(c *echo.Context) error {
 	client, userID, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -366,7 +366,7 @@ func (h *cloudflareHandler) purgeCache(c echo.Context) error {
 }
 
 // GET /api/v1/cloudflare/zones/:id/analytics?since=&until=
-func (h *cloudflareHandler) getAnalytics(c echo.Context) error {
+func (h *cloudflareHandler) getAnalytics(c *echo.Context) error {
 	client, _, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -393,7 +393,7 @@ func (h *cloudflareHandler) getAnalytics(c echo.Context) error {
 }
 
 // GET /api/v1/cloudflare/zones/:id/analytics/range?days=7
-func (h *cloudflareHandler) getAnalyticsRange(c echo.Context) error {
+func (h *cloudflareHandler) getAnalyticsRange(c *echo.Context) error {
 	client, _, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -414,7 +414,7 @@ func (h *cloudflareHandler) getAnalyticsRange(c echo.Context) error {
 }
 
 // POST /api/v1/cloudflare/zones/:id/dns/bulk-delete
-func (h *cloudflareHandler) bulkDeleteDNS(c echo.Context) error {
+func (h *cloudflareHandler) bulkDeleteDNS(c *echo.Context) error {
 	client, userID, err := h.clientFromSession(c)
 	if err != nil {
 		return err
@@ -444,7 +444,7 @@ func (h *cloudflareHandler) bulkDeleteDNS(c echo.Context) error {
 }
 
 // POST /api/v1/cloudflare/zones/:id/dns/import
-func (h *cloudflareHandler) importDNSRecords(c echo.Context) error {
+func (h *cloudflareHandler) importDNSRecords(c *echo.Context) error {
 	client, userID, err := h.clientFromSession(c)
 	if err != nil {
 		return err

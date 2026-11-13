@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // fail2banStatus returns the overall fail2ban status and list of jails.
 // securityOverviewTask returns security health metrics (firewall, fail2ban, ports, suspicious files).
-func (r *Router) securityOverviewTask(c echo.Context) error {
+func (r *Router) securityOverviewTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	// 1. Fail2ban status
@@ -82,7 +82,7 @@ func (r *Router) securityOverviewTask(c echo.Context) error {
 	})
 }
 
-func (r *Router) fail2banStatus(c echo.Context) error {
+func (r *Router) fail2banStatus(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	// Check if fail2ban is installed
@@ -147,7 +147,7 @@ func (r *Router) fail2banStatus(c echo.Context) error {
 }
 
 // fail2banJail returns details about a specific jail.
-func (r *Router) fail2banJail(c echo.Context) error {
+func (r *Router) fail2banJail(c *echo.Context) error {
 	ctx := c.Request().Context()
 	jailName := c.QueryParam("name")
 	if jailName == "" {
@@ -241,7 +241,7 @@ func (r *Router) fail2banJail(c echo.Context) error {
 }
 
 // fail2banUnban unbans an IP from a jail.
-func (r *Router) fail2banUnban(c echo.Context) error {
+func (r *Router) fail2banUnban(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	var body struct {
@@ -268,7 +268,7 @@ func (r *Router) fail2banUnban(c echo.Context) error {
 }
 
 // fail2banBan bans an IP in a jail.
-func (r *Router) fail2banBan(c echo.Context) error {
+func (r *Router) fail2banBan(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	var body struct {
@@ -295,7 +295,7 @@ func (r *Router) fail2banBan(c echo.Context) error {
 }
 
 // fail2banEnable enables a jail.
-func (r *Router) fail2banEnable(c echo.Context) error {
+func (r *Router) fail2banEnable(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	var body struct {
@@ -318,7 +318,7 @@ func (r *Router) fail2banEnable(c echo.Context) error {
 }
 
 // fail2banDisable disables a jail.
-func (r *Router) fail2banDisable(c echo.Context) error {
+func (r *Router) fail2banDisable(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	var body struct {

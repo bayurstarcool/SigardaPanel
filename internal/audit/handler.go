@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/httpjson"
 )
 
@@ -48,7 +48,7 @@ func (h *Handler) Register(g *echo.Group) {
 }
 
 // List returns recent audit logs. Admin only.
-func (h *Handler) List(c echo.Context) error {
+func (h *Handler) List(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	limit := 100

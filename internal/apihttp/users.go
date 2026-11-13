@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
@@ -24,7 +24,7 @@ func newUserHandler(s *store.Store, a *audit.Recorder) *userHandler {
 	return &userHandler{store: s, audit: a}
 }
 
-func (h *userHandler) list(c echo.Context) error {
+func (h *userHandler) list(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	role := c.Get(roleKey).(string)
@@ -77,7 +77,7 @@ func (h *userHandler) list(c echo.Context) error {
 	})
 }
 
-func (h *userHandler) create(c echo.Context) error {
+func (h *userHandler) create(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	callerRole := c.Get(roleKey).(string)
@@ -157,7 +157,7 @@ func (h *userHandler) create(c echo.Context) error {
 	})
 }
 
-func (h *userHandler) delete(c echo.Context) error {
+func (h *userHandler) delete(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	callerRole := c.Get(roleKey).(string)
@@ -207,7 +207,7 @@ func (h *userHandler) delete(c echo.Context) error {
 	})
 }
 
-func (h *userHandler) update(c echo.Context) error {
+func (h *userHandler) update(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	callerRole := c.Get(roleKey).(string)
@@ -312,7 +312,7 @@ func limitToNull(v *int64) sql.NullInt64 {
 }
 
 // usage returns real disk usage and site count for a user.
-func (h *userHandler) usage(c echo.Context) error {
+func (h *userHandler) usage(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 

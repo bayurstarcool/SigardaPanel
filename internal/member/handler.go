@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"golang.org/x/crypto/bcrypt"
+	"github.com/labstack/echo/v5"
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/httpjson"
@@ -30,7 +30,7 @@ func NewHandler(db *sql.DB) *Handler {
 }
 
 // Register creates a new member account.
-func (h *Handler) Register(c echo.Context) error {
+func (h *Handler) Register(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	// Member (SaaS customer) sign-up is closed unless the operator opens it.
@@ -99,18 +99,18 @@ func (h *Handler) Register(c echo.Context) error {
 
 	return c.JSON(http.StatusCreated, httpjson.Success{
 		Data: map[string]any{
-			"id":       m.ID,
-			"name":     m.Name,
-			"email":    m.Email,
-			"plan":     m.Plan,
-			"message":  "account created successfully",
+			"id":      m.ID,
+			"name":    m.Name,
+			"email":   m.Email,
+			"plan":    m.Plan,
+			"message": "account created successfully",
 		},
 		RequestID: rid,
 	})
 }
 
 // Login authenticates a member and returns a session token.
-func (h *Handler) Login(c echo.Context) error {
+func (h *Handler) Login(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	var body struct {
@@ -163,12 +163,12 @@ func (h *Handler) Login(c echo.Context) error {
 		Data: map[string]any{
 			"token": token,
 			"member": map[string]any{
-				"id":       m.ID,
-				"name":     m.Name,
-				"email":    m.Email,
-				"plan":     m.Plan,
-				"company":  m.Company,
-				"status":   m.Status,
+				"id":      m.ID,
+				"name":    m.Name,
+				"email":   m.Email,
+				"plan":    m.Plan,
+				"company": m.Company,
+				"status":  m.Status,
 			},
 		},
 		RequestID: rid,
@@ -176,7 +176,7 @@ func (h *Handler) Login(c echo.Context) error {
 }
 
 // Me returns the current member info.
-func (h *Handler) Me(c echo.Context) error {
+func (h *Handler) Me(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	memberID := c.Get("member_id").(int64)
 
@@ -187,19 +187,19 @@ func (h *Handler) Me(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
-			"id":       m.ID,
-			"name":     m.Name,
-			"email":    m.Email,
-			"plan":     m.Plan,
-			"company":  m.Company,
-			"status":   m.Status,
+			"id":      m.ID,
+			"name":    m.Name,
+			"email":   m.Email,
+			"plan":    m.Plan,
+			"company": m.Company,
+			"status":  m.Status,
 		},
 		RequestID: rid,
 	})
 }
 
 // UpdatePlan updates the member's plan.
-func (h *Handler) UpdatePlan(c echo.Context) error {
+func (h *Handler) UpdatePlan(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	memberID := c.Get("member_id").(int64)
 

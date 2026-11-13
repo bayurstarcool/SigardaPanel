@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -39,7 +39,7 @@ var nginxErrorRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \[
 // php-fpm log: [DD-Mon-YYYY HH:MM:SS] LEVEL: message
 var phpFpmRe = regexp.MustCompile(`^\[([^\]]+)\] (\w+):\s+(.+)$`)
 
-func (h *logsHandler) tail(c echo.Context) error {
+func (h *logsHandler) tail(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 

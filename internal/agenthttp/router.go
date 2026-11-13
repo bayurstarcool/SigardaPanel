@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/executor"
@@ -126,8 +126,6 @@ func NewRouterWithOptions(opts RouterOptions) *echo.Echo {
 
 func newRouter(opts *RouterOptions) *echo.Echo {
 	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
 
 	r := &Router{
 		executor:       &executor.Executor{Timeout: 30 * time.Minute},
@@ -379,7 +377,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 }
 
 func (r *Router) requireAgentAuth(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		if r.testAuth {
 			return next(c)
 		}
@@ -400,14 +398,14 @@ func (r *Router) requireAgentAuth(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-func authCheckHandler(c echo.Context) error {
+func authCheckHandler(c *echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data:      map[string]any{"ok": true, "version": buildinfo.Version},
 		RequestID: "",
 	})
 }
 
-func healthHandler(c echo.Context) error {
+func healthHandler(c *echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
 			"status":  "ok",
@@ -419,7 +417,7 @@ func healthHandler(c echo.Context) error {
 	})
 }
 
-func (r *Router) metricsHandler(c echo.Context) error {
+func (r *Router) metricsHandler(c *echo.Context) error {
 	var m struct {
 		CPUPercent  float64 `json:"cpu_percent"`
 		MemUsed     int64   `json:"mem_used"`
@@ -458,7 +456,7 @@ func (r *Router) metricsHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{Data: m, RequestID: ""})
 }
 
-func capabilitiesHandler(c echo.Context) error {
+func capabilitiesHandler(c *echo.Context) error {
 	// Auto-detect installed software
 	nginx := false
 	php := false
@@ -516,7 +514,7 @@ func capabilitiesHandler(c echo.Context) error {
 	})
 }
 
-func (r *Router) siteCreateTask(c echo.Context) error {
+func (r *Router) siteCreateTask(c *echo.Context) error {
 	defer readNginxLock()()
 	ctx := c.Request().Context()
 	var payload struct {
@@ -1093,7 +1091,7 @@ func dockerDefaultCmd(lang string) string {
 // siteContainerName is the docker container of a docker site.
 func siteContainerName(siteID int64) string { return fmt.Sprintf("sp-site-%d", siteID) }
 
-func (r *Router) siteDeleteTask(c echo.Context) error {
+func (r *Router) siteDeleteTask(c *echo.Context) error {
 	defer readNginxLock()()
 	ctx := c.Request().Context()
 	var payload struct {
@@ -1199,7 +1197,7 @@ func (r *Router) siteDeleteTask(c echo.Context) error {
 	})
 }
 
-func (r *Router) siteDeployTask(c echo.Context) error {
+func (r *Router) siteDeployTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		SiteID       int64  `json:"site_id"`
@@ -1351,7 +1349,7 @@ func (r *Router) siteDeployTask(c echo.Context) error {
 	return c.JSON(http.StatusOK, resp)
 }
 
-func (r *Router) nginxReloadTask(c echo.Context) error {
+func (r *Router) nginxReloadTask(c *echo.Context) error {
 	defer readNginxLock()()
 	ctx := c.Request().Context()
 	slog.Info("agent: nginx.reload requested")
@@ -1395,7 +1393,7 @@ func acmeContactUsable(email string) bool {
 	return true
 }
 
-func (r *Router) sslIssueTask(c echo.Context) error {
+func (r *Router) sslIssueTask(c *echo.Context) error {
 	defer readNginxLock()()
 	var payload struct {
 		SiteID int64  `json:"site_id"`
@@ -1474,7 +1472,7 @@ func (r *Router) sslIssueTask(c echo.Context) error {
 	})
 }
 
-func (r *Router) sslRenewTask(c echo.Context) error {
+func (r *Router) sslRenewTask(c *echo.Context) error {
 	defer readNginxLock()()
 	var payload struct {
 		SiteID int64  `json:"site_id"`
@@ -1537,7 +1535,7 @@ func (r *Router) sslRenewTask(c echo.Context) error {
 	})
 }
 
-func (r *Router) logsReadTask(c echo.Context) error {
+func (r *Router) logsReadTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		SiteID     int64  `json:"site_id"`
@@ -1594,7 +1592,7 @@ func (r *Router) logsReadTask(c echo.Context) error {
 	})
 }
 
-func (r *Router) backupCreateTask(c echo.Context) error {
+func (r *Router) backupCreateTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		BackupID   int64  `json:"backup_id"`
@@ -1819,7 +1817,7 @@ func normalizeS3Endpoint(endpoint string) string {
 	return "https://" + endpoint
 }
 
-func (r *Router) backupRestoreTask(c echo.Context) error {
+func (r *Router) backupRestoreTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		BackupID   int64             `json:"backup_id"`
@@ -2030,7 +2028,7 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 	})
 }
 
-func (r *Router) databaseBackupTask(c echo.Context) error {
+func (r *Router) databaseBackupTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		BackupID   int64  `json:"backup_id"`
@@ -2134,7 +2132,7 @@ func (r *Router) databaseBackupTask(c echo.Context) error {
 // by the panel's retention cleanup so that expired local backups do not
 // accumulate and fill the VPS disk. The path is validated against the allowed
 // backup locations; S3-only paths are ignored (handled panel-side).
-func (r *Router) backupDeleteTask(c echo.Context) error {
+func (r *Router) backupDeleteTask(c *echo.Context) error {
 	var payload struct {
 		BackupID    int64  `json:"backup_id"`
 		StoragePath string `json:"storage_path"`
@@ -2164,7 +2162,7 @@ func (r *Router) backupDeleteTask(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "backup deleted", "backup_id": payload.BackupID, "path": path})
 }
 
-func (r *Router) databaseCreateTask(c echo.Context) error {
+func (r *Router) databaseCreateTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		DatabaseID int64  `json:"database_id"`
@@ -2201,7 +2199,7 @@ func (r *Router) databaseCreateTask(c echo.Context) error {
 	})
 }
 
-func (r *Router) databaseDeleteTask(c echo.Context) error {
+func (r *Router) databaseDeleteTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		DatabaseID int64  `json:"database_id"`
@@ -2238,7 +2236,7 @@ func (r *Router) databaseDeleteTask(c echo.Context) error {
 	})
 }
 
-func (r *Router) dbUserCreateTask(c echo.Context) error {
+func (r *Router) dbUserCreateTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		UserID       int64  `json:"user_id"`
@@ -2316,7 +2314,7 @@ func (r *Router) dbUserCreateTask(c echo.Context) error {
 	})
 }
 
-func (r *Router) dbUserDeleteTask(c echo.Context) error {
+func (r *Router) dbUserDeleteTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		UserID       int64  `json:"user_id"`
@@ -2374,7 +2372,7 @@ func (r *Router) dbUserDeleteTask(c echo.Context) error {
 
 // commandExecTask executes an arbitrary shell command on the server and returns output.
 // POST /tasks/command/exec
-func (r *Router) commandExecTask(c echo.Context) error {
+func (r *Router) commandExecTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Command string `json:"command"`
@@ -2413,7 +2411,7 @@ func (r *Router) commandExecTask(c echo.Context) error {
 }
 
 func notImplementedHandler(action string) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		return c.JSON(http.StatusNotImplemented, httpjson.ErrorBody{
 			Error: httpjson.APIError{
 				Code:    "not_implemented",

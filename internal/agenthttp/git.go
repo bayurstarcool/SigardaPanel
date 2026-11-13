@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/siteinput"
 )
 
@@ -26,7 +26,7 @@ type GitCommit struct {
 }
 
 // gitBranchesTask lists branches in a git repo.
-func (r *Router) gitBranchesTask(c echo.Context) error {
+func (r *Router) gitBranchesTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rootPath := c.QueryParam("root_path")
 	if rootPath == "" || !r.isAllowedSitePath(rootPath) {
@@ -74,7 +74,7 @@ func (r *Router) gitBranchesTask(c echo.Context) error {
 }
 
 // gitLogTask shows commit history.
-func (r *Router) gitLogTask(c echo.Context) error {
+func (r *Router) gitLogTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rootPath := c.QueryParam("root_path")
 	lines := c.QueryParam("lines")
@@ -132,7 +132,7 @@ func (r *Router) gitLogTask(c echo.Context) error {
 }
 
 // gitRollbackTask rolls back to a specific commit.
-func (r *Router) gitRollbackTask(c echo.Context) error {
+func (r *Router) gitRollbackTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		RootPath string `json:"root_path"`
@@ -198,7 +198,7 @@ func (r *Router) gitRollbackTask(c echo.Context) error {
 }
 
 // gitCheckoutTask switches to a different branch.
-func (r *Router) gitCheckoutTask(c echo.Context) error {
+func (r *Router) gitCheckoutTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		RootPath string `json:"root_path"`

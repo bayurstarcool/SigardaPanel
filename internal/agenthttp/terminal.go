@@ -14,7 +14,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 var terminalUpgrader = websocket.Upgrader{
@@ -288,7 +288,7 @@ func ptyReader(ctx context.Context, sess *ptySession, sessionID string) {
 	}
 }
 
-func (r *Router) terminalWebSocket(c echo.Context) error {
+func (r *Router) terminalWebSocket(c *echo.Context) error {
 	ws, err := terminalUpgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
 		slog.Error("terminal: websocket upgrade failed", "error", err)

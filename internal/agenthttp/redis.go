@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // redisStatsTask returns Redis statistics.
-func (r *Router) redisStatsTask(c echo.Context) error {
+func (r *Router) redisStatsTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	// Check if redis-cli is available
@@ -75,7 +75,7 @@ func (r *Router) redisStatsTask(c echo.Context) error {
 }
 
 // redisFlushTask flushes all Redis data.
-func (r *Router) redisFlushTask(c echo.Context) error {
+func (r *Router) redisFlushTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	output, err := r.executor.RunShell(ctx, "redis-cli", "flushall")
@@ -94,7 +94,7 @@ func (r *Router) redisFlushTask(c echo.Context) error {
 }
 
 // redisInfoTask returns detailed Redis information.
-func (r *Router) redisInfoTask(c echo.Context) error {
+func (r *Router) redisInfoTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	output, err := r.executor.RunShell(ctx, "redis-cli", "info")
@@ -112,7 +112,7 @@ func (r *Router) redisInfoTask(c echo.Context) error {
 }
 
 // redisFlushDBTask flushes a specific Redis database.
-func (r *Router) redisFlushDBTask(c echo.Context) error {
+func (r *Router) redisFlushDBTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		DB int `json:"db"`

@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // Suspending a site takes it offline without deleting anything: the nginx
@@ -57,16 +57,16 @@ func (r *Router) disabledNginxDir() string {
 }
 
 // POST /tasks/site/suspend
-func (r *Router) siteSuspendTask(c echo.Context) error {
+func (r *Router) siteSuspendTask(c *echo.Context) error {
 	return r.toggleSite(c, true)
 }
 
 // POST /tasks/site/resume
-func (r *Router) siteResumeTask(c echo.Context) error {
+func (r *Router) siteResumeTask(c *echo.Context) error {
 	return r.toggleSite(c, false)
 }
 
-func (r *Router) toggleSite(c echo.Context, suspend bool) error {
+func (r *Router) toggleSite(c *echo.Context, suspend bool) error {
 	defer readNginxLock()()
 	ctx := c.Request().Context()
 	var payload siteToggleRequest

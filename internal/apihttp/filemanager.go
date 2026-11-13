@@ -19,7 +19,7 @@ import (
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 type fileManagerHandler struct {
@@ -47,7 +47,7 @@ type fileEntry struct {
 	ModTime string `json:"mod_time"`
 }
 
-func (h *fileManagerHandler) resolveSite(c echo.Context) (*store.Site, error) {
+func (h *fileManagerHandler) resolveSite(c *echo.Context) (*store.Site, error) {
 	sess := sessionFromEcho(c)
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
@@ -61,7 +61,7 @@ func (h *fileManagerHandler) resolveSite(c echo.Context) (*store.Site, error) {
 	return site, nil
 }
 
-func (h *fileManagerHandler) resolveSiteWrite(c echo.Context) (*store.Site, error) {
+func (h *fileManagerHandler) resolveSiteWrite(c *echo.Context) (*store.Site, error) {
 	sess := sessionFromEcho(c)
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
@@ -87,7 +87,7 @@ func (h *fileManagerHandler) siteAgent(ctx context.Context, site *store.Site) (s
 // fileOp runs one file manager operation on the site's server. Files live on
 // the server that hosts the site, not on the panel host (the API process is
 // sandboxed and cannot see /home there either).
-func (h *fileManagerHandler) fileOp(c echo.Context, site *store.Site, op string, args map[string]any) (map[string]any, error) {
+func (h *fileManagerHandler) fileOp(c *echo.Context, site *store.Site, op string, args map[string]any) (map[string]any, error) {
 	base, token, err := h.siteAgent(c.Request().Context(), site)
 	if err != nil {
 		return nil, err
@@ -109,7 +109,7 @@ func (h *fileManagerHandler) fileOp(c echo.Context, site *store.Site, op string,
 	return out, nil
 }
 
-func (h *fileManagerHandler) auditFile(c echo.Context, site *store.Site, details map[string]any) {
+func (h *fileManagerHandler) auditFile(c *echo.Context, site *store.Site, details map[string]any) {
 	var uid int64
 	if sess := sessionFromEcho(c); sess != nil {
 		uid = sess.UserID
@@ -119,7 +119,7 @@ func (h *fileManagerHandler) auditFile(c echo.Context, site *store.Site, details
 }
 
 // GET /sites/:id/files?path=.
-func (h *fileManagerHandler) listFiles(c echo.Context) error {
+func (h *fileManagerHandler) listFiles(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSite(c)
 	if err != nil {
@@ -147,7 +147,7 @@ func (h *fileManagerHandler) listFiles(c echo.Context) error {
 }
 
 // GET /sites/:id/files/read?path=...
-func (h *fileManagerHandler) readFile(c echo.Context) error {
+func (h *fileManagerHandler) readFile(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSite(c)
 	if err != nil {
@@ -171,7 +171,7 @@ func (h *fileManagerHandler) readFile(c echo.Context) error {
 }
 
 // POST /sites/:id/files/write
-func (h *fileManagerHandler) writeFile(c echo.Context) error {
+func (h *fileManagerHandler) writeFile(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {
@@ -197,7 +197,7 @@ func (h *fileManagerHandler) writeFile(c echo.Context) error {
 }
 
 // POST /sites/:id/files/create
-func (h *fileManagerHandler) createEntry(c echo.Context) error {
+func (h *fileManagerHandler) createEntry(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {
@@ -221,7 +221,7 @@ func (h *fileManagerHandler) createEntry(c echo.Context) error {
 }
 
 // DELETE /sites/:id/files?path=...
-func (h *fileManagerHandler) deleteEntry(c echo.Context) error {
+func (h *fileManagerHandler) deleteEntry(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {
@@ -244,7 +244,7 @@ func (h *fileManagerHandler) deleteEntry(c echo.Context) error {
 }
 
 // POST /sites/:id/files/rename
-func (h *fileManagerHandler) renameEntry(c echo.Context) error {
+func (h *fileManagerHandler) renameEntry(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {
@@ -267,7 +267,7 @@ func (h *fileManagerHandler) renameEntry(c echo.Context) error {
 }
 
 // POST /sites/:id/files/upload (multipart: path, file)
-func (h *fileManagerHandler) uploadFile(c echo.Context) error {
+func (h *fileManagerHandler) uploadFile(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {
@@ -326,7 +326,7 @@ func (h *fileManagerHandler) uploadFile(c echo.Context) error {
 }
 
 // GET /sites/:id/files/download?path=...
-func (h *fileManagerHandler) downloadFile(c echo.Context) error {
+func (h *fileManagerHandler) downloadFile(c *echo.Context) error {
 	site, err := h.resolveSite(c)
 	if err != nil {
 		return err
@@ -370,7 +370,7 @@ func (h *fileManagerHandler) downloadFile(c echo.Context) error {
 }
 
 // POST /sites/:id/files/move  body: { "paths": ["a/b.txt", "c"], "dest": "folder" }
-func (h *fileManagerHandler) moveEntries(c echo.Context) error {
+func (h *fileManagerHandler) moveEntries(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {
@@ -399,7 +399,7 @@ func (h *fileManagerHandler) moveEntries(c echo.Context) error {
 }
 
 // POST /sites/:id/files/compress  body: { "paths": ["a", "b.txt"], "name": "archive.zip", "dest": "folder" }
-func (h *fileManagerHandler) compressEntries(c echo.Context) error {
+func (h *fileManagerHandler) compressEntries(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {
@@ -430,7 +430,7 @@ func (h *fileManagerHandler) compressEntries(c echo.Context) error {
 }
 
 // POST /sites/:id/files/extract {path, dest}: unpack a .zip archive.
-func (h *fileManagerHandler) extractArchive(c echo.Context) error {
+func (h *fileManagerHandler) extractArchive(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {
@@ -459,7 +459,7 @@ func (h *fileManagerHandler) extractArchive(c echo.Context) error {
 }
 
 // POST /sites/:id/files/chmod {path, mode}: set permission bits (octal).
-func (h *fileManagerHandler) chmodEntry(c echo.Context) error {
+func (h *fileManagerHandler) chmodEntry(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {

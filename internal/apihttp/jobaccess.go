@@ -1,7 +1,7 @@
 package apihttp
 
 import (
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/store"
@@ -15,7 +15,7 @@ type jobVisibility struct {
 
 // isAdminServiceToken reports whether the request is authenticated with a
 // service token carrying admin-level scope.
-func isAdminServiceToken(c echo.Context) bool {
+func isAdminServiceToken(c *echo.Context) bool {
 	sess := sessionFromEcho(c)
 	if sess == nil || sess.UserID != 0 {
 		return false
@@ -27,7 +27,7 @@ func isAdminServiceToken(c echo.Context) bool {
 // jobVisibilityFor computes the job visibility of the current caller.
 // Jobs not tied to a site (server-level jobs) are admin-only; service tokens
 // have no site assignments, so admin-scoped tokens only see server-level jobs.
-func jobVisibilityFor(c echo.Context, s *store.Store) jobVisibility {
+func jobVisibilityFor(c *echo.Context, s *store.Store) jobVisibility {
 	ctx := c.Request().Context()
 	sess := sessionFromEcho(c)
 	if sess != nil && sess.UserID == 0 {
@@ -49,7 +49,7 @@ func jobVisibilityFor(c echo.Context, s *store.Store) jobVisibility {
 // canSeeJob reports whether the caller holds the required site permission on
 // the job's site (super_admin always; server-level jobs: admins and
 // admin-scoped service tokens only).
-func canSeeJob(c echo.Context, s *store.Store, job *jobmodel.Job, required string) bool {
+func canSeeJob(c *echo.Context, s *store.Store, job *jobmodel.Job, required string) bool {
 	ctx := c.Request().Context()
 	sess := sessionFromEcho(c)
 	if job == nil {

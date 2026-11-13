@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
@@ -20,12 +20,12 @@ import (
 
 // viewerAccount picks the database account the viewer connects with: one
 // with ALL privileges if possible, else any account with a stored password.
-func viewerAccount(h *dbHandler, c echo.Context, d *store.Database) (string, string) {
+func viewerAccount(h *dbHandler, c *echo.Context, d *store.Database) (string, string) {
 	bh := &backupHandler{store: h.store}
 	return bh.restoreAccount(c.Request().Context(), *d)
 }
 
-func (h *dbHandler) viewer(c echo.Context, action string, extra map[string]any) error {
+func (h *dbHandler) viewer(c *echo.Context, action string, extra map[string]any) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	if sess == nil {
@@ -74,16 +74,16 @@ func (h *dbHandler) viewer(c echo.Context, action string, extra map[string]any) 
 }
 
 // GET /databases/:id/viewer/tables
-func (h *dbHandler) viewerTables(c echo.Context) error { return h.viewer(c, "tables", nil) }
+func (h *dbHandler) viewerTables(c *echo.Context) error { return h.viewer(c, "tables", nil) }
 
 // GET /databases/:id/viewer/columns?table=&schema=
-func (h *dbHandler) viewerColumns(c echo.Context) error {
+func (h *dbHandler) viewerColumns(c *echo.Context) error {
 	return h.viewer(c, "columns", map[string]any{"table": c.QueryParam("table"), "schema": c.QueryParam("schema")})
 }
 
 // GET /databases/:id/viewer/rows?table=&schema=&limit=&offset=&order_by=&desc=1
 // &filters=[{"column":"…","op":"eq|ne|lt|le|gt|ge|contains|starts|null|notnull","value":"…"}]
-func (h *dbHandler) viewerRows(c echo.Context) error {
+func (h *dbHandler) viewerRows(c *echo.Context) error {
 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
 	offset, _ := strconv.Atoi(c.QueryParam("offset"))
 	filters := []map[string]string{}

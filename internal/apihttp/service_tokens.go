@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
@@ -22,7 +22,7 @@ func newServiceTokenHandler(s *store.Store) *serviceTokenHandler {
 }
 
 // list returns all service tokens (admin only).
-func (h *serviceTokenHandler) list(c echo.Context) error {
+func (h *serviceTokenHandler) list(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	tokens, err := h.store.ServiceTokens.List(c.Request().Context())
 	if err != nil {
@@ -62,7 +62,7 @@ func (h *serviceTokenHandler) list(c echo.Context) error {
 
 // create generates a new service token (admin only).
 // Returns the raw token value exactly once.
-func (h *serviceTokenHandler) create(c echo.Context) error {
+func (h *serviceTokenHandler) create(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	var body struct {
@@ -115,7 +115,7 @@ func (h *serviceTokenHandler) create(c echo.Context) error {
 }
 
 // revoke deletes a service token by ID (admin only).
-func (h *serviceTokenHandler) revoke(c echo.Context) error {
+func (h *serviceTokenHandler) revoke(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

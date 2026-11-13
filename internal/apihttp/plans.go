@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
@@ -20,7 +20,7 @@ func newPlanHandler(s *store.Store) *planHandler {
 }
 
 // listPlans returns all plans (active only for non-admin).
-func (h *planHandler) listPlans(c echo.Context) error {
+func (h *planHandler) listPlans(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	// Non-admin users only see active plans
@@ -44,7 +44,7 @@ func (h *planHandler) listPlans(c echo.Context) error {
 }
 
 // createPlan creates a new plan (admin only).
-func (h *planHandler) createPlan(c echo.Context) error {
+func (h *planHandler) createPlan(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	var body struct {
@@ -91,7 +91,7 @@ func (h *planHandler) createPlan(c echo.Context) error {
 }
 
 // getPlan returns a single plan by ID.
-func (h *planHandler) getPlan(c echo.Context) error {
+func (h *planHandler) getPlan(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -110,7 +110,7 @@ func (h *planHandler) getPlan(c echo.Context) error {
 }
 
 // updatePlan updates an existing plan (admin only).
-func (h *planHandler) updatePlan(c echo.Context) error {
+func (h *planHandler) updatePlan(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -164,7 +164,7 @@ func (h *planHandler) updatePlan(c echo.Context) error {
 }
 
 // deletePlan removes a plan (admin only).
-func (h *planHandler) deletePlan(c echo.Context) error {
+func (h *planHandler) deletePlan(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -182,7 +182,7 @@ func (h *planHandler) deletePlan(c echo.Context) error {
 }
 
 // assignPlan assigns a plan to a user (admin only).
-func (h *userHandler) assignPlan(c echo.Context) error {
+func (h *userHandler) assignPlan(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || userID <= 0 {
@@ -228,7 +228,7 @@ func (h *userHandler) assignPlan(c echo.Context) error {
 // The role is only put in the context by RequireRole, so on routes guarded by
 // RequireAuth alone it is looked up from the session's user record. Service
 // tokens are never treated as admins here.
-func hasAdminRole(c echo.Context, s *store.Store) bool {
+func hasAdminRole(c *echo.Context, s *store.Store) bool {
 	if role, ok := c.Get(roleKey).(string); ok && role != "" {
 		return role == auth.RoleAdmin || role == auth.RoleSuperAdmin
 	}
@@ -263,7 +263,7 @@ func planToJSON(p store.Plan) planJSON {
 
 // callerManagesUser: a super_admin manages every account; anyone else only
 // regular users they created.
-func callerManagesUser(c echo.Context, s *store.Store, u *store.User) bool {
+func callerManagesUser(c *echo.Context, s *store.Store, u *store.User) bool {
 	sess := sessionFromEcho(c)
 	if sess == nil {
 		return false

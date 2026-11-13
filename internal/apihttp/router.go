@@ -4,13 +4,13 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/buildinfo"
@@ -22,8 +22,6 @@ import (
 // NewRouter returns a new Echo router wired with the given store and database.
 func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
 	// Only trust X-Real-IP when it comes from the local nginx proxy; a client
 	// must not be able to spoof its IP via X-Forwarded-For to dodge rate limits
 	// or poison audit logs.
@@ -34,13 +32,10 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	)
 	// A panic in any handler must turn into a 500 for that request, not take
 	// down the API process (and the job worker and scheduler running in it).
-	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
-		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
-			slog.Error("api: recovered from handler panic", "route", c.Path(), "error", err, "stack", string(stack))
-			return err
-		},
-	}))
-	e.Use(middleware.BodyLimit("32M"))
+	// The panic comes back as *middleware.PanicStackError; customErrorHandler
+	// logs it with the stack and answers 500.
+	e.Use(middleware.Recover())
+	e.Use(middleware.BodyLimit(32 << 20))
 
 	// Request ID middleware — Echo built-in
 	e.Use(middleware.RequestIDWithConfig(middleware.RequestIDConfig{
@@ -84,7 +79,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// needs the member database AND SIGARDAPANEL_ALLOW_MEMBER_SIGNUP) and
 	// whether / and /pricing show the SaaS landing (SIGARDAPANEL_LANDING_PAGE)
 	// or redirect to the login. Same body on both paths.
-	publicConfig := func(c echo.Context) error {
+	publicConfig := func(c *echo.Context) error {
 		c.Response().Header().Set("Cache-Control", "no-store")
 		return c.JSON(http.StatusOK, httpjson.Success{
 			Data:      publicConfigData(memberDB != nil),
@@ -531,26 +526,44 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	return e
 }
 
-func customErrorHandler(err error, c echo.Context) {
+func customErrorHandler(c *echo.Context, err error) {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-	if c.Response().Committed {
+	if responseCommitted(c) {
 		return
 	}
-
-	he, ok := err.(*echo.HTTPError)
-	if !ok {
-		he = &echo.HTTPError{
-			Code:     http.StatusInternalServerError,
-			Message:  "internal error",
-			Internal: err,
-		}
+	var pse *middleware.PanicStackError
+	if errors.As(err, &pse) {
+		slog.Error("api: recovered from handler panic", "route", c.Path(), "error", pse.Err, "stack", string(pse.Stack))
 	}
 
-	// Convert to our format
-	httpjson.Error(c.Response(), he.Code, rid, errorCodeFromStatus(he.Code), fmt.Sprintf("%v", he.Message))
+	// *echo.HTTPError carries our message; echo's own errors (404/405 from the
+	// router, 413 from BodyLimit) only carry a status; anything else is a 500
+	// whose details are not shown.
+	code, msg := http.StatusInternalServerError, "internal error"
+	var he *echo.HTTPError
+	if errors.As(err, &he) {
+		code, msg = he.Code, he.Message
+	} else if sc := echo.StatusCode(err); sc != 0 {
+		code, msg = sc, http.StatusText(sc)
+	}
+	httpjson.Error(c.Response(), code, rid, errorCodeFromStatus(code), msg)
 }
 
-func healthHandler(c echo.Context) error {
+// responseStatus is the status written (or about to be written) for c.
+func responseStatus(c *echo.Context) int {
+	if r, err := echo.UnwrapResponse(c.Response()); err == nil {
+		return r.Status
+	}
+	return 0
+}
+
+// responseCommitted reports whether c's response headers were already sent.
+func responseCommitted(c *echo.Context) bool {
+	r, err := echo.UnwrapResponse(c.Response())
+	return err == nil && r.Committed
+}
+
+func healthHandler(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
@@ -562,7 +575,7 @@ func healthHandler(c echo.Context) error {
 	})
 }
 
-func versionHandler(c echo.Context) error {
+func versionHandler(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
@@ -574,7 +587,7 @@ func versionHandler(c echo.Context) error {
 }
 
 func notImplementedHandler(action string) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		rid := c.Response().Header().Get(echo.HeaderXRequestID)
 		return c.JSON(http.StatusNotImplemented, httpjson.ErrorBody{
 			Error: httpjson.APIError{

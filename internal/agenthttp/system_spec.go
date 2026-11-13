@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/httpjson"
 )
 
@@ -138,7 +138,7 @@ type NetworkBenchmark struct {
 }
 
 // systemSpecTask returns detailed server specifications.
-func (r *Router) systemSpecTask(c echo.Context) error {
+func (r *Router) systemSpecTask(c *echo.Context) error {
 	spec := SystemSpec{
 		Uptime:        getUptime(),
 		Hostname:      getHostname(),
@@ -160,7 +160,7 @@ func (r *Router) systemSpecTask(c echo.Context) error {
 }
 
 // systemBenchmarkTask runs CPU, disk, and network benchmarks.
-func (r *Router) systemBenchmarkTask(c echo.Context) error {
+func (r *Router) systemBenchmarkTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	result := BenchmarkResult{

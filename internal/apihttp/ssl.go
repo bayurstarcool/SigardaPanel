@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
@@ -29,7 +29,7 @@ func newSSLHandler(s *store.Store, a *audit.Recorder) *sslHandler {
 var emailRegex = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 
 // Status returns current SSL info for a site.
-func (h *sslHandler) status(c echo.Context) error {
+func (h *sslHandler) status(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -65,7 +65,7 @@ func (h *sslHandler) status(c echo.Context) error {
 }
 
 // Issue enqueues an SSL issue job.
-func (h *sslHandler) issue(c echo.Context) error {
+func (h *sslHandler) issue(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -157,7 +157,7 @@ func (h *sslHandler) resolveSSLEmail(ctx context.Context, override string, site 
 }
 
 // Renew enqueues an SSL renew job.
-func (h *sslHandler) renew(c echo.Context) error {
+func (h *sslHandler) renew(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -209,7 +209,7 @@ func (h *sslHandler) renew(c echo.Context) error {
 }
 
 // renewAll finds all sites with SSL expiring within 30 days and queues renew jobs.
-func (h *sslHandler) renewAll(c echo.Context) error {
+func (h *sslHandler) renewAll(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 

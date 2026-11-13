@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 func registerRequest(t *testing.T, h *Handler, body string) *httptest.ResponseRecorder {
@@ -16,7 +16,7 @@ func registerRequest(t *testing.T, h *Handler, body string) *httptest.ResponseRe
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	if err := h.Register(e.NewContext(req, rec)); err != nil {
-		e.HTTPErrorHandler(err, e.NewContext(req, rec))
+		e.HTTPErrorHandler(e.NewContext(req, rec), err)
 	}
 	return rec
 }
