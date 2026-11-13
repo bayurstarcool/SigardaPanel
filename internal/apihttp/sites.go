@@ -303,6 +303,9 @@ func (h *siteHandler) create(c echo.Context) error {
 					fmt.Sprintf("max sites limit reached (%d/%d)", count, owner.MaxSites.Int64))
 			}
 		}
+		if err := checkDiskQuota(c.Request().Context(), h.store, userID, 0); err != nil {
+			return err
+		}
 	}
 
 	// Validate domain not duplicate
@@ -640,6 +643,10 @@ func (h *siteHandler) deploy(c echo.Context) error {
 	if !site.GitRepo.Valid || site.GitRepo.String == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "no git repository configured; set git_repo in site config first")
 	}
+	if err := checkSiteDiskQuota(c.Request().Context(), h.store, site, 0); err != nil {
+		return err
+	}
+	siteDisk.grew(site.ID, 0)
 	branch := site.GitBranch.String
 	if branch == "" {
 		branch = "main"
@@ -1007,6 +1014,24 @@ func (h *siteHandler) transfer(c echo.Context) error {
 	if jobs, _ := h.store.Cron.ListBySiteID(c.Request().Context(), id); len(jobs) > 0 {
 		return echo.NewHTTPError(http.StatusConflict, "remove the site's cron jobs before transferring it")
 	}
+	// The site counts against the new owner's limits from now on.
+	if target.MaxSites.Valid {
+		count, err := h.store.Sites.CountByOwner(c.Request().Context(), target.ID)
+		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		if int64(count) >= target.MaxSites.Int64 {
+			return echo.NewHTTPError(http.StatusForbidden,
+				fmt.Sprintf("the new owner's max sites limit is reached (%d/%d)", count, target.MaxSites.Int64))
+		}
+	}
+	if diskLimitBytes(target) > 0 {
+		size := siteDisk.total(c.Request().Context(), h.store, []store.Site{*site}, diskQuotaCheckWait).Bytes
+		if err := checkDiskQuota(c.Request().Context(), h.store, target.ID, size); err != nil {
+			return err
+		}
+	}
 	// The files move on the site's server first (site.transfer job); owner,
 	// root path and system user change only when that succeeded, then the
 	// vhost is regenerated for the new path.
@@ -1240,6 +1265,10 @@ func (h *siteHandler) gitRollback(c echo.Context) error {
 	if err := c.Bind(&req); err != nil || strings.TrimSpace(req.Commit) == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "commit is required")
 	}
+	if err := checkSiteDiskQuota(c.Request().Context(), h.store, site, 0); err != nil {
+		return err
+	}
+	siteDisk.grew(site.ID, 0)
 	body := map[string]any{"commit": strings.TrimSpace(req.Commit), "root_path": site.RootPath}
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/rollback"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
@@ -1268,6 +1297,10 @@ func (h *siteHandler) gitCheckout(c echo.Context) error {
 	if err := c.Bind(&req); err != nil || strings.TrimSpace(req.Branch) == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "branch is required")
 	}
+	if err := checkSiteDiskQuota(c.Request().Context(), h.store, site, 0); err != nil {
+		return err
+	}
+	siteDisk.grew(site.ID, 0)
 	body := map[string]any{"branch": strings.TrimSpace(req.Branch), "root_path": site.RootPath}
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/checkout"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)

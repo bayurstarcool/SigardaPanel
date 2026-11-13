@@ -20,7 +20,8 @@
   let loading = $state(true);
 
   // Edit form
-  let form = $state({ username: '', email: '', role: 'user', password: '' });
+  // diskLimit (GB) / maxSites: null = unlimited.
+  let form = $state<{ username: string; email: string; role: string; password: string; diskLimit: number | null; maxSites: number | null }>({ username: '', email: '', role: 'user', password: '', diskLimit: null, maxSites: null });
   let busy = $state(false);
 
   // Assigned sites
@@ -55,7 +56,7 @@
       const d = await apiFetch(auth.token, 'GET', 'users');
       user = (d?.users || []).find((u: any) => u.id === userId);
       if (user) {
-        form = { username: user.username, email: user.email || '', role: user.role, password: '' };
+        form = { username: user.username, email: user.email || '', role: user.role, password: '', diskLimit: user.disk_limit ?? null, maxSites: user.max_sites ?? null };
         // Fetch additional data in parallel
         fetchAssignedSites();
         fetchAllSites();
@@ -75,7 +76,16 @@
       // Username and email are not editable here (the API ignores them).
       if (form.role !== user.role) body.role = form.role;
       if (form.password) body.password = form.password;
+      // 0 = unlimited for the API; an empty field means unlimited.
+      const lim = (v: number | null) => (v && v > 0 ? Math.floor(v) : 0);
+      const limitsChanged = lim(form.diskLimit) !== lim(user.disk_limit ?? null) || lim(form.maxSites) !== lim(user.max_sites ?? null);
+      if (lim(form.diskLimit) !== lim(user.disk_limit ?? null)) body.disk_limit = lim(form.diskLimit);
+      if (lim(form.maxSites) !== lim(user.max_sites ?? null)) body.max_sites = lim(form.maxSites);
       await apiFetch(auth.token, 'PATCH', `users/${userId}`, body);
+      if (limitsChanged) {
+        user = { ...user, disk_limit: lim(form.diskLimit) || null, max_sites: lim(form.maxSites) || null };
+        fetchUsage();
+      }
       if (form.password) {
         user = { ...user, password_set: true };
         form = { ...form, password: '' };
@@ -310,6 +320,16 @@
               <input id="ude-pass" type="password" bind:value={form.password} class="input" placeholder="••••••••" autocomplete="new-password" />
               <p class="hint">Leave blank to keep the current password.</p>
             </div>
+            <div>
+              <label for="ude-disk" class="label">Disk limit (GB)</label>
+              <input id="ude-disk" type="number" min="0" step="1" bind:value={form.diskLimit} class="input" placeholder="Unlimited" />
+              <p class="hint">Total for the sites this user owns. Empty or 0 = unlimited.</p>
+            </div>
+            <div>
+              <label for="ude-max" class="label">Max sites</label>
+              <input id="ude-max" type="number" min="0" step="1" bind:value={form.maxSites} class="input" placeholder="Unlimited" />
+              <p class="hint">Empty or 0 = unlimited.</p>
+            </div>
           </div>
         </div>
         <div class="flex justify-end gap-2 border-t border-line px-5 py-3.5">
@@ -439,6 +459,9 @@
                 {#if usage.disk_limit_bytes}
                   <div class="text-xs text-subtle">of {formatBytes(usage.disk_limit_bytes)} limit</div>
                   <div class="progress mt-2"><div class="progress-bar" style="width: {pct(usage.disk_used_bytes || 0, usage.disk_limit_bytes)}%"></div></div>
+                  {#if usage.disk_over_limit}
+                    <div class="mt-1 text-xs text-danger">Limit reached: new sites, uploads, edits, deploys and restores are blocked</div>
+                  {/if}
                 {:else}
                   <div class="text-xs text-subtle">No limit</div>
                 {/if}
@@ -450,6 +473,7 @@
               <div class="rounded-lg border border-line p-4">
                 <div class="stat-label">Sites</div>
                 <div class="mt-1 text-lg font-semibold text-fg tabular-nums">{usage.site_count ?? 0}</div>
+                <div class="text-xs text-subtle">owned{usage.assigned_site_count ? ` · ${usage.assigned_site_count} assigned` : ''}</div>
                 {#if usage.max_sites}
                   <div class="text-xs text-subtle">of {usage.max_sites} max</div>
                   <div class="progress mt-2"><div class="progress-bar" style="width: {pct(usage.site_count ?? 0, usage.max_sites)}%"></div></div>

@@ -36,7 +36,10 @@ type siteDiskCache struct {
 	mu       sync.Mutex
 	entries  map[int64]siteDiskEntry
 	inflight map[int64]chan struct{}
-	sem      chan struct{}
+	// gen changes when a site's value is forgotten, so a measurement started
+	// before that (e.g. before files were deleted) does not store its result.
+	gen map[int64]uint64
+	sem chan struct{}
 	// measure is the agent call; tests replace it.
 	measure func(ctx context.Context, st *store.Store, site store.Site) (int64, error)
 	now     func() time.Time
@@ -48,6 +51,7 @@ func newSiteDiskCache() *siteDiskCache {
 	return &siteDiskCache{
 		entries:  map[int64]siteDiskEntry{},
 		inflight: map[int64]chan struct{}{},
+		gen:      map[int64]uint64{},
 		sem:      make(chan struct{}, siteDiskWorkers),
 		measure:  measureSiteDiskOnAgent,
 		now:      time.Now,
@@ -78,6 +82,32 @@ func (c *siteDiskCache) store(siteID, bytes int64) {
 	c.mu.Unlock()
 }
 
+// grew records data a panel action added to a site: n known bytes are added to
+// the cached value at once (so a run of uploads cannot slip past the quota
+// between measurements), and the entry is marked for re-measuring.
+func (c *siteDiskCache) grew(siteID, n int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[siteID]
+	if !ok || !e.ok {
+		return
+	}
+	if n > 0 {
+		e.bytes += n
+	}
+	e.at = time.Time{} // stale: the next read refreshes it
+	c.entries[siteID] = e
+}
+
+// forget drops the cached value of a site (after data was removed).
+func (c *siteDiskCache) forget(siteID int64) {
+	c.mu.Lock()
+	delete(c.entries, siteID)
+	delete(c.inflight, siteID)
+	c.gen[siteID]++
+	c.mu.Unlock()
+}
+
 // start returns a channel closed when the site's measurement is done, starting
 // one unless the cached entry is still fresh (then it returns nil).
 func (c *siteDiskCache) start(st *store.Store, site store.Site) <-chan struct{} {
@@ -94,6 +124,7 @@ func (c *siteDiskCache) start(st *store.Store, site store.Site) <-chan struct{} 
 	}
 	ch := make(chan struct{})
 	c.inflight[site.ID] = ch
+	gen := c.gen[site.ID]
 	go func() {
 		defer close(ch)
 		c.sem <- struct{}{}
@@ -105,6 +136,9 @@ func (c *siteDiskCache) start(st *store.Store, site store.Site) <-chan struct{} 
 		<-c.sem
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		if c.gen[site.ID] != gen {
+			return // forgotten meanwhile: the result may predate the change
+		}
 		delete(c.inflight, site.ID)
 		if err != nil {
 			c.entries[site.ID] = siteDiskEntry{at: c.now()}
@@ -170,7 +204,7 @@ func (c *siteDiskCache) total(ctx context.Context, st *store.Store, sites []stor
 		}
 		t.Measured++
 		t.Bytes += e.bytes
-		if t.MeasuredAt.IsZero() || e.at.Before(t.MeasuredAt) {
+		if !e.at.IsZero() && (t.MeasuredAt.IsZero() || e.at.Before(t.MeasuredAt)) {
 			t.MeasuredAt = e.at
 		}
 	}

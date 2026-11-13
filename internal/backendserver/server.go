@@ -93,6 +93,9 @@ func Run(ctx context.Context) error {
 	// when auto-update is enabled under Settings).
 	apihttp.StartPanelUpdateChecker(ctx, s, database)
 
+	// Check users' disk usage against their limits (notifies at 80% / 100%).
+	apihttp.StartDiskQuotaChecker(ctx, s)
+
 	// Start periodic session cleanup (every 1 hour)
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)

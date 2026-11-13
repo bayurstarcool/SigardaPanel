@@ -176,7 +176,10 @@
         <div class="mb-1.5 flex justify-between text-[11px] text-subtle">
           <span>Disk</span><span class="tabular-nums" title={diskTitle}>{diskLabel}</span>
         </div>
-        <div class="progress h-1"><div class="progress-bar" style="width: {hasDiskLimit ? diskPct : 0}%"></div></div>
+        <div class="progress h-1"><div class="progress-bar {diskPct >= 100 ? 'bg-danger' : diskPct >= 80 ? 'bg-warning' : ''}" style="width: {hasDiskLimit ? diskPct : 0}%"></div></div>
+        {#if hasDiskLimit && diskPct >= 100}
+          <div class="mt-1 text-[11px] text-danger">Disk limit reached: uploads, edits and deploys are blocked</div>
+        {/if}
       </div>
       <div>
         <div class="mb-1.5 flex justify-between text-[11px] text-subtle">
