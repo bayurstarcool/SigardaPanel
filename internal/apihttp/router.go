@@ -109,7 +109,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	}
 
 	e.GET("/api/v1/auth/me", ah.me, RequireAuth(s))
-	e.PUT("/api/v1/auth/profile", ah.updateProfile, RequireAuth(s))
+	// Email/password changes: the account holder's own interactive session
+	// only (not an API key, not an impersonating admin).
+	e.PUT("/api/v1/auth/profile", ah.updateProfile, RequireAuth(s), RequireUserSession, rejectImpersonation)
 	// Logout revokes the session row by ID, so service tokens and API keys
 	// (which carry no session row of their own) are rejected.
 	e.POST("/api/v1/auth/logout", ah.logout, RequireAuth(s), RequireUserSession)

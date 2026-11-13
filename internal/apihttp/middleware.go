@@ -351,7 +351,9 @@ func scopeAuditLogs(s *store.Store) echo.MiddlewareFunc {
 		return admin(func(c echo.Context) error {
 			if role, _ := c.Get(roleKey).(string); role != auth.RoleSuperAdmin {
 				sess := sessionFromEcho(c)
-				if sess == nil {
+				// Service tokens have no user (UserID 0, which the store
+				// reads as "no filter"): they would see every entry.
+				if sess == nil || sess.UserID == 0 {
 					return echo.NewHTTPError(http.StatusForbidden, "access denied")
 				}
 				c.Set(audit.ForceUserIDKey, sess.UserID)

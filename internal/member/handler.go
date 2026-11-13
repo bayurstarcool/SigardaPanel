@@ -80,10 +80,8 @@ func (h *Handler) Register(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to hash password")
 	}
 
-	plan := body.Plan
-	if plan == "" {
-		plan = "community"
-	}
+	// Self sign-up starts on the free plan; paid plans are assigned elsewhere.
+	plan := "community"
 
 	m := &Member{
 		Name:         body.Name,
@@ -125,14 +123,27 @@ func (h *Handler) Login(c echo.Context) error {
 
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
 
+	// Brute-force limits: per client address and per account.
+	ipKey, acctKey := "ip:"+c.RealIP(), "acct:"+body.Email
+	if loginFailures.blocked(ipKey, 20) || loginFailures.blocked(acctKey, 10) {
+		return echo.NewHTTPError(http.StatusTooManyRequests, "too many failed logins; try again later")
+	}
+
 	m, err := h.store.GetByEmail(body.Email)
 	if err != nil {
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(body.Password)) // same timing
+		loginFailures.fail(ipKey, acctKey)
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid credentials")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(m.PasswordHash), []byte(body.Password)); err != nil {
+		loginFailures.fail(ipKey, acctKey)
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid credentials")
 	}
+	if m.Status != "" && m.Status != "active" {
+		return echo.NewHTTPError(http.StatusForbidden, "this account is "+m.Status)
+	}
+	loginFailures.reset(acctKey)
 
 	token, err := auth.NewToken()
 	if err != nil {
@@ -199,8 +210,8 @@ func (h *Handler) UpdatePlan(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 
-	if body.Plan == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "plan is required")
+	if !validPlans[body.Plan] {
+		return echo.NewHTTPError(http.StatusBadRequest, "unknown plan")
 	}
 
 	if err := h.store.UpdatePlan(memberID, body.Plan); err != nil {

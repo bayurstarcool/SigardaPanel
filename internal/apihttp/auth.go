@@ -519,8 +519,12 @@ func (ah *authHandler) updateProfile(c echo.Context) error {
 	details := map[string]any{}
 
 	if body.Email != "" && body.Email != user.Email {
+		body.Email = strings.TrimSpace(body.Email)
+		if len(body.Email) > 254 || !emailRegex.MatchString(body.Email) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid email address")
+		}
 		if err := ah.store.Users.UpdateEmail(ctx, sess.UserID, body.Email); err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+			return echo.NewHTTPError(http.StatusConflict, "this email address cannot be used")
 		}
 		details["email"] = body.Email
 	}
