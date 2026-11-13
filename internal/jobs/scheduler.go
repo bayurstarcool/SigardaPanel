@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"sync"
 	"time"
 
@@ -610,6 +609,15 @@ func schedConfigDBIDInSlice(val int64, slice []int64) bool {
 // deleted from the DB but the .tar.gz files remain on the VPS forever, filling
 // the disk. Jobs are created before the DB rows are removed by CleanupExpired.
 func enqueueLocalBackupDeletes(ctx context.Context, s *store.Store, keepLast int) {
+	// Their S3 copies go too, from the provider that holds each one (the
+	// rows are deleted right after; the copies used to stay on S3 forever).
+	if expired, err := s.Backups.ListExpiredS3(ctx, keepLast); err == nil {
+		for i := range expired {
+			b := &expired[i]
+			site, _ := s.Sites.GetByID(ctx, b.SiteID)
+			deleteS3Object(ctx, s.BackupProviderFor(ctx, b, site), b.S3Path.String)
+		}
+	}
 	expired, err := s.Backups.ListExpiredLocal(ctx, keepLast)
 	if err != nil {
 		slog.Warn("scheduler: list expired local backups failed", "error", err)
@@ -682,29 +690,11 @@ func runCleanup(ctx context.Context, s *store.Store) {
 		slog.Info("scheduler: cleaned up expired backups", "count", n)
 	}
 
-	// Clean up local files that have already been uploaded to S3
-	cleaned, err := s.Backups.CleanupLocalAfterS3(ctx)
-	if err != nil {
-		slog.Warn("scheduler: cleanup local-after-s3 failed", "error", err)
-	} else if cleaned > 0 {
-		slog.Info("scheduler: removed local backups already on S3", "count", cleaned)
-	}
-
-	// Also clean up orphaned local files via os for any that CleanupLocalAfterS3 missed
-	rows, err := s.DB().QueryContext(ctx, `SELECT id, storage_path FROM backups WHERE status = 'completed' AND s3_path IS NOT NULL AND s3_path != '' AND storage_path IS NOT NULL AND storage_path != '' AND storage_path NOT LIKE 's3://%'`)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var id int64
-			var path string
-			if err := rows.Scan(&id, &path); err != nil {
-				continue
-			}
-			if err := os.Remove(path); err != nil {
-				slog.Warn("scheduler: failed to remove local backup (already on S3)", "path", path, "error", err)
-			} else {
-				slog.Info("scheduler: removed local backup (already on S3)", "path", path, "backup_id", id)
-				_, _ = s.DB().ExecContext(ctx, `UPDATE backups SET storage_path = NULL WHERE id = ?`, id)
+	// Local copies of backups already on S3 are removed by the site's agent.
+	if local, err := s.Backups.ListLocalAfterS3(ctx); err == nil {
+		for _, b := range local {
+			if err := s.QueueBackupFileDelete(ctx, b.ID, b.SiteID, b.StoragePath, true); err != nil {
+				slog.Warn("scheduler: queue removal of local backup already on S3", "backup_id", b.ID, "error", err)
 			}
 		}
 	}

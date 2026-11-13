@@ -50,6 +50,29 @@ contains "$generated" 'rm -rf.*\.sigardapanel\.previous' 'generated rollback cle
 not_contains "$generated" "trap 'rm -f.*DASHBOARD_TMP.*EXIT" 'generated installer does not overwrite rollback trap'
 not_contains "$generated" 'status-dashboard.*\|\|' 'generated dashboard fetch has no fallback'
 
+agent_updater="$ROOT/installer/agent-update.sh"
+bash -n "$agent_updater" && pass 'agent-update.sh syntax' || fail 'agent-update.sh syntax'
+key_install=$(sed -n 's/^PUBKEY="\(.*\)"$/\1/p' "$installer")
+key_agent=$(sed -n 's/^PUBKEY="\(.*\)"$/\1/p' "$agent_updater")
+key_api=$(sed -n 's/^const releasePublicKey = "\(.*\)"$/\1/p' "$generated")
+[[ -n "$key_install" && "$key_install" == "$key_agent" && "$key_install" == "$key_api" ]] \
+    && pass 'install.sh, agent-update.sh and the agent install command pin the same release key' \
+    || fail 'install.sh, agent-update.sh and the agent install command pin the same release key'
+contains "$installer" 'do_rollback "\$\{1:-\}"' 'installer offers rollback'
+
+# Behaviour: update/rollback and the agent updater against stubbed system tools.
+if bash "$ROOT/scripts/test-installer-sandbox.sh" "$installer" > /tmp/sigarda-sandbox.$$ 2>&1; then
+    pass 'install.sh update/rollback sandbox'
+else
+    cat /tmp/sigarda-sandbox.$$ >&2; fail 'install.sh update/rollback sandbox'
+fi
+if bash "$ROOT/scripts/test-agent-update-sandbox.sh" "$agent_updater" > /tmp/sigarda-sandbox.$$ 2>&1; then
+    pass 'agent-update.sh sandbox'
+else
+    cat /tmp/sigarda-sandbox.$$ >&2; fail 'agent-update.sh sandbox'
+fi
+rm -f /tmp/sigarda-sandbox.$$
+
 if (( failures > 0 )); then
     printf '\n%d installer contract(s) failed\n' "$failures" >&2
     exit 1

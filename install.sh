@@ -3,6 +3,8 @@
 #
 #   sudo bash install.sh            install the latest release
 #   sudo bash install.sh update     update an existing install (backup + automatic rollback)
+#   sudo bash install.sh rollback [BACKUP|list]
+#                                   return to the state before an update (binary, web, database)
 #   sudo bash install.sh verify     show the release-signing key this script trusts
 #
 # Every download is checked against a minisign signature (public key below) and
@@ -477,6 +479,48 @@ do_install() {
   echo "   Update later:        sudo bash install.sh update"
 }
 
+# panel_db_file: the database path from panel.env (empty when unset).
+panel_db_file() { grep -E '^SIGARDAPANEL_DB_PATH=' "$CONF_DIR/panel.env" | cut -d= -f2- || true; }
+
+# make_backup <dir> <kind> <target>: save binary, web bundle, a consistent copy
+# of the database and the secrets needed to decrypt it. VERSION/TARGET/KIND
+# describe the backup for "rollback" and the panel's backup list.
+make_backup() {
+  local bk="$1" kind="$2" target="$3" dbfile keyfile
+  install -d -m 700 "$bk"
+  cp -a "$INSTALL_BIN" "$bk/sigardapanel.bin"
+  cp -a "$WEB_DIR" "$bk/web"
+  dbfile="$(panel_db_file)"
+  if [ -f "$dbfile" ]; then sqlite3 "$dbfile" ".backup '${bk}/sigardapanel.db'"; fi
+  # Secrets needed to decrypt the database (never modified by the update, saved for disaster recovery).
+  cp -a "$CONF_DIR/panel.env" "$CONF_DIR/agent.env" "$bk/" 2>/dev/null || true
+  keyfile="$(dirname "${dbfile:-$DATA_DIR/x}")/encryption.key"
+  if [ -f "$keyfile" ]; then cp -a "$keyfile" "$bk/"; fi
+  { "$INSTALL_BIN" version --client 2>/dev/null || echo unknown; } | head -n1 > "$bk/VERSION"
+  echo "$target" > "$bk/TARGET"
+  echo "$kind" > "$bk/KIND"
+}
+
+# restore_backup <dir>: stop the services, put back binary, web bundle and
+# database from <dir>, start the services again. Returns non-zero when a
+# step fails (the services are started either way).
+restore_backup() {
+  local bk="$1" dbfile rc=0
+  dbfile="$(panel_db_file)"
+  # Stop first: the database must not be replaced under a running API.
+  systemctl stop sigardapanel-web sigardapanel-api sigardapanel-agent || true
+  { install -m 755 "$bk/sigardapanel.bin" "${INSTALL_BIN}.rb" && mv -f "${INSTALL_BIN}.rb" "$INSTALL_BIN"; } || { warn "could not restore the binary"; rc=1; }
+  { rm -rf "${WEB_DIR}.rb" && cp -a "$bk/web" "${WEB_DIR}.rb" && rm -rf "$WEB_DIR" && mv "${WEB_DIR}.rb" "$WEB_DIR"; } \
+    || { warn "could not restore the web bundle"; rc=1; }
+  if [ -f "$bk/sigardapanel.db" ] && [ -n "$dbfile" ]; then
+    rm -f "${dbfile}-wal" "${dbfile}-shm"
+    { cp -a "$bk/sigardapanel.db" "$dbfile" && chown sigardapanel:sigardapanel "$dbfile" && chmod 640 "$dbfile"; } \
+      || { warn "could not restore the database"; rc=1; }
+  fi
+  systemctl start sigardapanel-agent sigardapanel-api sigardapanel-web || rc=1
+  return "$rc"
+}
+
 do_update() {
   require_root; check_os; detect_arch
   [ -x "$INSTALL_BIN" ] && [ -f "$CONF_DIR/panel.env" ] || die "SigardaPanel is not installed here. Run: bash install.sh"
@@ -492,29 +536,12 @@ do_update() {
   unpack_web "$TMP/sigardapanel-web.tar.gz" "$TMP/web"
 
   local ts bk; ts="$(date -u +%Y%m%dT%H%M%SZ)"; bk="${UPDATE_BACKUPS}/${ts}"
-  install -d -m 700 "$bk"
-  cp -a "$INSTALL_BIN" "$bk/sigardapanel.bin"
-  cp -a "$WEB_DIR" "$bk/web"
-  local dbfile; dbfile="$(grep -E '^SIGARDAPANEL_DB_PATH=' "$CONF_DIR/panel.env" | cut -d= -f2-)"
-  if [ -f "$dbfile" ]; then sqlite3 "$dbfile" ".backup '${bk}/sigardapanel.db'"; fi
-  # Secrets needed to decrypt the database (never modified by the update, saved for disaster recovery).
-  cp -a "$CONF_DIR/panel.env" "$CONF_DIR/agent.env" "$bk/" 2>/dev/null || true
-  local keyfile; keyfile="$(dirname "${dbfile:-$DATA_DIR/x}")/encryption.key"
-  if [ -f "$keyfile" ]; then cp -a "$keyfile" "$bk/"; fi
+  make_backup "$bk" update "$TAG"
   ok "Backup saved to ${bk}"
 
   rollback() {
     warn "Update failed - rolling back"
-    # Stop first: the database must not be replaced under a running API.
-    systemctl stop sigardapanel-web sigardapanel-api sigardapanel-agent || true
-    { install -m 755 "$bk/sigardapanel.bin" "${INSTALL_BIN}.rb" && mv -f "${INSTALL_BIN}.rb" "$INSTALL_BIN"; } || warn "could not restore the binary"
-    rm -rf "$WEB_DIR"; cp -a "$bk/web" "$WEB_DIR" || warn "could not restore the web bundle"
-    if [ -f "$bk/sigardapanel.db" ] && [ -n "$dbfile" ]; then
-      rm -f "${dbfile}-wal" "${dbfile}-shm"
-      cp -a "$bk/sigardapanel.db" "$dbfile" && chown sigardapanel:sigardapanel "$dbfile" && chmod 640 "$dbfile" \
-        || warn "could not restore the database"
-    fi
-    systemctl start sigardapanel-agent sigardapanel-api sigardapanel-web || true
+    restore_backup "$bk" || true
     if healthy; then
       die "Update to ${TAG} failed; rolled back to ${current} and the panel is healthy again. Backup kept in ${bk}"
     fi
@@ -539,10 +566,66 @@ do_update() {
   fi
 }
 
+# list_backups: the update backups that can be rolled back to, newest first.
+list_backups() {
+  local d name kind ver
+  [ -d "$UPDATE_BACKUPS" ] || return 0
+  for d in $(find "$UPDATE_BACKUPS" -mindepth 1 -maxdepth 1 -type d -name '20*T*Z' -printf '%f\n' | sort -r); do
+    name="$d"; d="${UPDATE_BACKUPS}/${d}"
+    [ -f "$d/sigardapanel.bin" ] && [ -f "$d/web/index.js" ] || continue
+    kind="$(cat "$d/KIND" 2>/dev/null || echo update)"
+    ver="$(cat "$d/VERSION" 2>/dev/null || echo unknown)"
+    printf '%s\t%s\t%s\n' "$name" "$ver" "$kind"
+  done
+}
+
+# do_rollback [backup]: return to the state saved before an update (binary,
+# web bundle and database; changes made since that backup are lost). The
+# current state is backed up first, and restored if the rolled-back panel is
+# not healthy. Without an argument the newest update backup is used.
+do_rollback() {
+  require_root
+  [ -x "$INSTALL_BIN" ] && [ -f "$CONF_DIR/panel.env" ] || die "SigardaPanel is not installed here."
+  local name="${1:-}" bk current target ts safety
+  if [ "$name" = "list" ]; then
+    printf 'BACKUP\tVERSION\tKIND\n'; list_backups; return 0
+  fi
+  if [ -z "$name" ]; then
+    name="$(list_backups | awk -F'\t' '$3 == "update" {print $1; exit}')"
+    [ -n "$name" ] || die "No update backup found in ${UPDATE_BACKUPS}"
+  fi
+  [[ "$name" =~ ^20[0-9]{6}T[0-9]{6}Z$ ]] || die "Invalid backup name '${name}' (see: bash install.sh rollback list)"
+  bk="${UPDATE_BACKUPS}/${name}"
+  [ -f "$bk/sigardapanel.bin" ] && [ -f "$bk/web/index.js" ] || die "Backup ${bk} is incomplete (needs sigardapanel.bin and web/)"
+  [ -f "$bk/sigardapanel.db" ] || warn "Backup ${name} has no database copy; the current database is kept"
+  target="$("$bk/sigardapanel.bin" version --client 2>/dev/null | head -n1 || true)"
+  [ -n "$target" ] || die "The binary in ${bk} does not run"
+  current="$("$INSTALL_BIN" version --client 2>/dev/null || echo unknown)"
+  log "Rolling back ${current} -> ${target} (backup ${name})"
+
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  if [ "$ts" = "$name" ]; then sleep 1; ts="$(date -u +%Y%m%dT%H%M%SZ)"; fi
+  safety="${UPDATE_BACKUPS}/${ts}"
+  make_backup "$safety" pre-rollback "$target"
+  ok "Current state saved to ${safety}"
+
+  if restore_backup "$bk" && healthy; then
+    ok "Rolled back to $("$INSTALL_BIN" version --client) (backup ${name}). The state before the rollback is in ${safety}"
+    return 0
+  fi
+  warn "The rolled-back panel is not healthy - restoring the state before the rollback"
+  restore_backup "$safety" || true
+  if healthy; then
+    die "Rollback to ${target} failed; restored ${current} and the panel is healthy again."
+  fi
+  die "Rollback failed and restoring ${current} did not bring the panel back. Backups: ${bk}, ${safety}. Check: journalctl -u sigardapanel-api -u sigardapanel-web"
+}
+
 case "${1:-install}" in
   install) do_install ;;
   update)  do_update ;;
+  rollback) shift; do_rollback "${1:-}" ;;
   verify)  echo "Release signing key: ${PUBKEY}"; echo "Published at https://github.com/${REPO}#verifying-releases" ;;
-  -h|--help|help) sed -n '2,20p' "$0" ;;
-  *) die "Unknown command '$1' (use: install | update | verify)" ;;
+  -h|--help|help) sed -n '2,22p' "$0" ;;
+  *) die "Unknown command '$1' (use: install | update | rollback | verify)" ;;
 esac

@@ -3,8 +3,11 @@ package nginx
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"text/template"
 
 	"sigardapanel/internal/siteinput"
@@ -23,8 +26,8 @@ const staticTemplate = `server {
     server_name {{.Domain}};
     client_max_body_size 100M;
 
-    ssl_certificate /etc/nginx/ssl/sigardapanel.crt;
-    ssl_certificate_key /etc/nginx/ssl/sigardapanel.key;
+    ssl_certificate {{.SSLCertificate}};
+    ssl_certificate_key {{.SSLCertificateKey}};
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
@@ -32,6 +35,10 @@ const staticTemplate = `server {
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
     }
+
+    # Panel backups are stored under the site root: never serve them.
+    location ^~ /backups/ { deny all; }
+    location ^~ /backup/ { deny all; }
 
     root {{.RootPath}};
     index index.html;
@@ -48,6 +55,8 @@ const staticTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        try_files $uri $uri/ =404;
     }
 
@@ -69,8 +78,8 @@ const phpTemplate = `server {
     server_name {{.Domain}};
     client_max_body_size 100M;
 
-    ssl_certificate /etc/nginx/ssl/sigardapanel.crt;
-    ssl_certificate_key /etc/nginx/ssl/sigardapanel.key;
+    ssl_certificate {{.SSLCertificate}};
+    ssl_certificate_key {{.SSLCertificateKey}};
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
@@ -78,6 +87,10 @@ const phpTemplate = `server {
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
     }
+
+    # Panel backups are stored under the site root: never serve them.
+    location ^~ /backups/ { deny all; }
+    location ^~ /backup/ { deny all; }
 
     root {{.RootPath}};
     index index.php index.html;
@@ -94,6 +107,8 @@ const phpTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        try_files $uri $uri/ /index.php?$query_string;
     }
 
@@ -119,8 +134,8 @@ const nodeTemplate = `server {
     server_name {{.Domain}};
     client_max_body_size 100M;
 
-    ssl_certificate /etc/nginx/ssl/sigardapanel.crt;
-    ssl_certificate_key /etc/nginx/ssl/sigardapanel.key;
+    ssl_certificate {{.SSLCertificate}};
+    ssl_certificate_key {{.SSLCertificateKey}};
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
@@ -128,6 +143,10 @@ const nodeTemplate = `server {
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
     }
+
+    # Panel backups are stored under the site root: never serve them.
+    location ^~ /backups/ { deny all; }
+    location ^~ /backup/ { deny all; }
 
     # SigardaPanel marker
     {{.MarkerBegin}}
@@ -141,6 +160,8 @@ const nodeTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        proxy_pass http://127.0.0.1:{{.Port}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -159,8 +180,8 @@ const proxyTemplate = `server {
     server_name {{.Domain}};
     client_max_body_size 100M;
 
-    ssl_certificate /etc/nginx/ssl/sigardapanel.crt;
-    ssl_certificate_key /etc/nginx/ssl/sigardapanel.key;
+    ssl_certificate {{.SSLCertificate}};
+    ssl_certificate_key {{.SSLCertificateKey}};
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
@@ -168,6 +189,10 @@ const proxyTemplate = `server {
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
     }
+
+    # Panel backups are stored under the site root: never serve them.
+    location ^~ /backups/ { deny all; }
+    location ^~ /backup/ { deny all; }
 
     # SigardaPanel marker
     {{.MarkerBegin}}
@@ -181,6 +206,8 @@ const proxyTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        proxy_pass {{.ProxyPassURL}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -205,6 +232,10 @@ const staticSSLTemplate = `server {
         root /var/www/certbot/{{.Domain}};
     }
 
+    # Panel backups are stored under the site root: never serve them.
+    location ^~ /backups/ { deny all; }
+    location ^~ /backup/ { deny all; }
+
     root {{.RootPath}};
     index index.html;
 
@@ -220,6 +251,8 @@ const staticSSLTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        try_files $uri $uri/ =404;
     }
 
@@ -244,6 +277,10 @@ const phpSSLTemplate = `server {
         root /var/www/certbot/{{.Domain}};
     }
 
+    # Panel backups are stored under the site root: never serve them.
+    location ^~ /backups/ { deny all; }
+    location ^~ /backup/ { deny all; }
+
     root {{.RootPath}};
     index index.php index.html;
 
@@ -259,6 +296,8 @@ const phpSSLTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        try_files $uri $uri/ /index.php?$query_string;
     }
 
@@ -287,6 +326,10 @@ const nodeSSLTemplate = `server {
         root /var/www/certbot/{{.Domain}};
     }
 
+    # Panel backups are stored under the site root: never serve them.
+    location ^~ /backups/ { deny all; }
+    location ^~ /backup/ { deny all; }
+
     # SigardaPanel marker
     {{.MarkerBegin}}
     access_log /var/log/nginx/{{.Domain}}.access.log;
@@ -299,6 +342,8 @@ const nodeSSLTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        proxy_pass http://127.0.0.1:{{.Port}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -320,6 +365,10 @@ const proxySSLTemplate = `server {
         root /var/www/certbot/{{.Domain}};
     }
 
+    # Panel backups are stored under the site root: never serve them.
+    location ^~ /backups/ { deny all; }
+    location ^~ /backup/ { deny all; }
+
     # SigardaPanel marker
     {{.MarkerBegin}}
     access_log /var/log/nginx/{{.Domain}}.access.log;
@@ -332,6 +381,8 @@ const proxySSLTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        proxy_pass {{.ProxyPassURL}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -367,6 +418,87 @@ type SiteConfig struct {
 	BasicAuthUsername     string
 	BasicAuthPasswordPath string
 	BlockedIPs            []string
+	AllowedIPs            []string
+	SSLCertificate        string
+	SSLCertificateKey     string
+}
+
+// Placeholder certificate every vhost serves until Let's Encrypt issued one.
+const (
+	DefaultSSLCertificate    = "/etc/nginx/ssl/sigardapanel.crt"
+	DefaultSSLCertificateKey = "/etc/nginx/ssl/sigardapanel.key"
+)
+
+var (
+	basicAuthUserRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	bcryptHashRe    = regexp.MustCompile(`^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$`)
+	certPathRe      = regexp.MustCompile(`^/[A-Za-z0-9._/-]+\.pem$`)
+)
+
+// NormalizeBlockedIPs validates blocked IP entries (an IP or a CIDR each)
+// and returns them in canonical form. Anything else is rejected, so the
+// values can never carry nginx syntax into a vhost.
+func NormalizeBlockedIPs(in []string) ([]string, error) {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, raw := range in {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		var norm string
+		if strings.Contains(v, "/") {
+			_, n, err := net.ParseCIDR(v)
+			if err != nil {
+				return nil, fmt.Errorf("invalid blocked IP or CIDR %q", raw)
+			}
+			norm = n.String()
+		} else {
+			ip := net.ParseIP(v)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid blocked IP or CIDR %q", raw)
+			}
+			norm = ip.String()
+		}
+		if !seen[norm] {
+			seen[norm] = true
+			out = append(out, norm)
+		}
+	}
+	if len(out) > 500 {
+		return nil, fmt.Errorf("too many blocked IPs (max 500)")
+	}
+	return out, nil
+}
+
+// ValidBasicAuthUsername reports whether name may be used in an htpasswd file.
+func ValidBasicAuthUsername(name string) bool { return basicAuthUserRe.MatchString(name) }
+
+// validateSecurity is the vhost-side check of the per-site security settings.
+func validateSecurity(sec *store.SiteSecurity) error {
+	if sec == nil {
+		return nil
+	}
+	if _, err := NormalizeBlockedIPs(sec.BlockedIPs); err != nil {
+		return err
+	}
+	if _, err := NormalizeBlockedIPs(sec.AllowedIPs); err != nil {
+		return err
+	}
+	for _, v := range append(append([]string{}, sec.BlockedIPs...), sec.AllowedIPs...) {
+		if strings.TrimSpace(v) != v || v == "" {
+			return fmt.Errorf("invalid blocked IP %q", v)
+		}
+	}
+	if sec.BasicAuthEnabled {
+		if !basicAuthUserRe.MatchString(sec.BasicAuthUsername) {
+			return fmt.Errorf("invalid basic auth username")
+		}
+		if !bcryptHashRe.MatchString(sec.BasicAuthPassword) {
+			return fmt.Errorf("basic auth is enabled but no valid password hash is stored")
+		}
+	}
+	return nil
 }
 
 // phpFpmTCPPorts maps PHP versions to the TCP port a CloudPanel-style
@@ -435,6 +567,22 @@ func htpasswdPath(domain string) string {
 // GenerateVhost renders an nginx vhost configuration for a site.
 // SSL is enabled by default via wildcard cert.
 func GenerateVhost(s *store.Site, port int, security *store.SiteSecurity) (string, error) {
+	return GenerateVhostWithCert(s, port, security, "", "")
+}
+
+// GenerateVhostWithCert is GenerateVhost serving the given certificate
+// (e.g. Let's Encrypt's live/<domain>/fullchain.pem) instead of the
+// placeholder. Empty paths mean the placeholder.
+func GenerateVhostWithCert(s *store.Site, port int, security *store.SiteSecurity, certPath, keyPath string) (string, error) {
+	if certPath == "" || keyPath == "" {
+		certPath, keyPath = DefaultSSLCertificate, DefaultSSLCertificateKey
+	}
+	if !certPathRe.MatchString(certPath) && certPath != DefaultSSLCertificate || !certPathRe.MatchString(keyPath) && keyPath != DefaultSSLCertificateKey {
+		return "", fmt.Errorf("invalid certificate path")
+	}
+	if err := validateSecurity(security); err != nil {
+		return "", err
+	}
 	tmplStr := templates[s.Runtime]
 	if tmplStr == "" {
 		return "", fmt.Errorf("unsupported runtime %q", s.Runtime)
@@ -469,15 +617,17 @@ func GenerateVhost(s *store.Site, port int, security *store.SiteSecurity) (strin
 	}
 
 	data := SiteConfig{
-		Domain:           s.Domain,
-		RootPath:         s.RootPath,
-		Runtime:          s.Runtime,
-		Port:             port,
-		ProxyPassURL:     proxyPassURL,
-		PHPFpmPass:       phpFpmPass,
-		PHPIniDirectives: phpIni,
-		MarkerBegin:      markerBegin,
-		MarkerEnd:        markerEnd,
+		Domain:            s.Domain,
+		RootPath:          s.RootPath,
+		Runtime:           s.Runtime,
+		Port:              port,
+		ProxyPassURL:      proxyPassURL,
+		PHPFpmPass:        phpFpmPass,
+		PHPIniDirectives:  phpIni,
+		MarkerBegin:       markerBegin,
+		MarkerEnd:         markerEnd,
+		SSLCertificate:    certPath,
+		SSLCertificateKey: keyPath,
 	}
 
 	if security != nil && security.BasicAuthEnabled {
@@ -490,6 +640,9 @@ func GenerateVhost(s *store.Site, port int, security *store.SiteSecurity) (strin
 	}
 	if security != nil && len(security.BlockedIPs) > 0 {
 		data.BlockedIPs = security.BlockedIPs
+	}
+	if security != nil && len(security.AllowedIPs) > 0 {
+		data.AllowedIPs = security.AllowedIPs
 	}
 
 	var buf bytes.Buffer

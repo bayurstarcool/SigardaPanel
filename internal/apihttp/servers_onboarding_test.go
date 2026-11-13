@@ -81,7 +81,7 @@ func TestServerUpdate_AgentURL(t *testing.T) {
 	if rec := doRequest(t, e, "PATCH", path, map[string]any{"agent_url": "ftp://x"}, token); rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid agent_url: expected 400, got %d", rec.Code)
 	}
-	rec := doRequest(t, e, "PATCH", path, map[string]any{"agent_url": "http://10.0.0.5:7710"}, token)
+	rec := doRequest(t, e, "PATCH", path, map[string]any{"agent_url": "http://203.0.113.5:7710"}, token)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -89,7 +89,7 @@ func TestServerUpdate_AgentURL(t *testing.T) {
 		t.Fatal("PATCH response leaks the agent token")
 	}
 	got, _ := s.Servers.GetByID(ctx, srv.ID)
-	if got.AgentURL.String != "http://10.0.0.5:7710" {
+	if got.AgentURL.String != "http://203.0.113.5:7710" {
 		t.Fatalf("agent_url = %q", got.AgentURL.String)
 	}
 	if got.AgentToken != "secret-token" {

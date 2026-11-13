@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,8 +124,14 @@ func TestDatabaseCreate_Success(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected database in store")
 	}
-	if got.Name != "sp_appdb" || got.Type != "mysql" {
+	// The record names the database that is actually created (the agent job
+	// payload carries the same name).
+	if got.Name != "appdb" || got.Type != "mysql" {
 		t.Fatalf("unexpected database: %+v", got)
+	}
+	job, _ := s.Jobs.GetByID(ctx, int64(result.Data.JobID))
+	if job == nil || !strings.Contains(job.Payload, `"name":"appdb"`) {
+		t.Fatalf("job payload does not create %q: %+v", got.Name, job)
 	}
 }
 

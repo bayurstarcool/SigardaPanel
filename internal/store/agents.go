@@ -117,6 +117,24 @@ func (s *Store) ConsumeRegistrationTokenAndCreateServer(ctx context.Context, tok
 	if srv.HealthStatus == "" {
 		srv.HealthStatus = "unknown"
 	}
+	// Re-running the installer on a server the panel already knows (same
+	// agent address) re-binds that server: its sites, jobs and settings stay
+	// attached and the new agent token replaces the old one, instead of a
+	// duplicate row while the sites keep pointing at a dead token.
+	if srv.AgentURL.Valid && srv.AgentURL.String != "" {
+		var existingID int64
+		err := tx.QueryRowContext(ctx, `SELECT id FROM servers WHERE agent_url = ? ORDER BY id LIMIT 1`, srv.AgentURL.String).Scan(&existingID)
+		if err == nil && existingID > 0 {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE servers SET hostname = ?, ip_address = ?, agent_token = ?, status = ?, health_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+				srv.Hostname, srv.IPAddress, srv.AgentToken, srv.Status, srv.HealthStatus, existingID); err != nil {
+				return fmt.Errorf("re-bind registered server: %w", err)
+			}
+			srv.ID = existingID
+			srv.Rebound = true
+			return tx.Commit()
+		}
+	}
 	res, err = tx.ExecContext(ctx,
 		`INSERT INTO servers (name, hostname, agent_url, ip_address, ipv6, ssh_port, description, status, provider, agent_token, health_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		srv.Name, srv.Hostname, srv.AgentURL, srv.IPAddress, srv.IPv6, srv.SSHPort, srv.Description, srv.Status, srv.Provider, srv.AgentToken, srv.HealthStatus)

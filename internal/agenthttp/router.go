@@ -53,10 +53,23 @@ type Router struct {
 	phpRunDir    string // PHP-FPM sockets (php<version>-fpm.sock)
 	useraddCmd   string // creates site owners' Linux accounts
 	stack        *stackManager
+	panelUpdate  *panelUpdater
+	agentUpdate  *panelUpdater
+
+	// SSH/FTP jails
+	sshHomeBase    string
+	fstabPath      string
+	sshdConfigPath string
+	cronDir        string
+	cronUserOK     func(name string) bool
 }
 
 // RouterOptions allows overriding router defaults for testing.
 type RouterOptions struct {
+	// CronDir overrides /etc/cron.d; CronUserOK replaces the check that
+	// cron jobs run as a regular (UID >= 1000) user.
+	CronDir        string
+	CronUserOK     func(name string) bool
 	NginxConfDir   string
 	LetsEncryptDir string
 	LogDir         string
@@ -83,6 +96,22 @@ type RouterOptions struct {
 	// version detection.
 	StackBinDir  string
 	StackSbinDir string
+	// PanelUpdate* replace the host access of the panel self-update. Injected
+	// routers default to a runner that executes nothing.
+	PanelUpdateRun      panelUpdateRunFunc
+	PanelUpdateStateDir string
+	PanelUpdateEnvFile  string
+	PanelUpdateVersion  string
+	// PanelUpdateFreeBytes replaces the free-space lookup of the preflight.
+	PanelUpdateFreeBytes func(path string) (uint64, error)
+	PanelUpdateBackupDir string
+	AgentUpdateEnvFile   string
+	// SSHHomeBase / FstabPath / SSHDConfigPath replace /home, /etc/fstab and
+	// the sshd drop-in for SSH/FTP accounts (injected routers default to
+	// temp paths so tests never touch the real ones).
+	SSHHomeBase    string
+	FstabPath      string
+	SSHDConfigPath string
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -101,18 +130,23 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	e.HidePort = true
 
 	r := &Router{
-		executor:     &executor.Executor{Timeout: 30 * time.Minute},
-		nginxConfDir: "/etc/nginx/sites-enabled",
-		leDir:        "/etc/letsencrypt",
-		logDir:       "/var/log/nginx",
-		backupDir:    "/var/backups/sigardapanel",
-		authToken:    config.AgentToken(),
-		siteRootDir:  config.AgentSiteRoot(),
-		allowStubSSL: config.AgentAllowStubSSL(),
-		stubDev:      os.Getenv("SIGARDAPANEL_DEV") == "true",
-		certDir:      defaultSSLCertDir,
-		phpRunDir:    defaultPHPRunDir,
-		useraddCmd:   "useradd",
+		executor:       &executor.Executor{Timeout: 30 * time.Minute},
+		nginxConfDir:   "/etc/nginx/sites-enabled",
+		leDir:          "/etc/letsencrypt",
+		logDir:         "/var/log/nginx",
+		backupDir:      "/var/backups/sigardapanel",
+		authToken:      config.AgentToken(),
+		siteRootDir:    config.AgentSiteRoot(),
+		allowStubSSL:   config.AgentAllowStubSSL(),
+		stubDev:        os.Getenv("SIGARDAPANEL_DEV") == "true",
+		certDir:        defaultSSLCertDir,
+		phpRunDir:      defaultPHPRunDir,
+		useraddCmd:     "useradd",
+		sshHomeBase:    "/home",
+		fstabPath:      "/etc/fstab",
+		sshdConfigPath: "/etc/ssh/sshd_config.d/sigardapanel-ssh.conf",
+		cronDir:        "/etc/cron.d",
+		cronUserOK:     cronUserAllowed,
 	}
 	if opts != nil {
 		// RouterOptions is test/dependency-injection surface. Keep production
@@ -158,6 +192,24 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		if opts.UseraddCommand != "" {
 			r.useraddCmd = opts.UseraddCommand
 		}
+		tmp := filepath.Join(os.TempDir(), "sigardapanel-agent-test-ssh")
+		r.sshHomeBase, r.fstabPath, r.sshdConfigPath = filepath.Join(tmp, "home"), filepath.Join(tmp, "fstab"), filepath.Join(tmp, "sshd.conf")
+		if opts.SSHHomeBase != "" {
+			r.sshHomeBase = opts.SSHHomeBase
+		}
+		if opts.FstabPath != "" {
+			r.fstabPath = opts.FstabPath
+		}
+		if opts.SSHDConfigPath != "" {
+			r.sshdConfigPath = opts.SSHDConfigPath
+		}
+		r.cronDir = filepath.Join(tmp, "cron.d")
+		if opts.CronDir != "" {
+			r.cronDir = opts.CronDir
+		}
+		if opts.CronUserOK != nil {
+			r.cronUserOK = opts.CronUserOK
+		}
 		var sys stackSystem = denyStackSystem{}
 		if opts.StackSystem != nil {
 			sys = opts.StackSystem
@@ -173,6 +225,9 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		r.stack = newStackManager(hostStackSystem{}, r.phpRunDir,
 			[]string{r.nginxConfDir, "/etc/nginx/conf.d", "/etc/nginx/sites-available"})
 	}
+
+	r.panelUpdate = newPanelUpdater(opts)
+	r.agentUpdate = newAgentUpdater(opts)
 
 	e.GET("/health", healthHandler)
 	// /metrics forks several processes per call, so it requires the agent token.
@@ -190,6 +245,8 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/site/deploy", r.siteDeployTask)
 	tasks.POST("/site/suspend", r.siteSuspendTask)
 	tasks.POST("/site/resume", r.siteResumeTask)
+	tasks.POST("/site/transfer", r.siteTransferTask)
+	tasks.POST("/cron/sync", r.cronSyncTask)
 	tasks.POST("/nginx/reload", r.nginxReloadTask)
 	tasks.POST("/ssl/issue", r.sslIssueTask)
 	tasks.POST("/ssl/renew", r.sslRenewTask)
@@ -215,6 +272,30 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.GET("/stack/info", r.stackInfoTask)
 	tasks.POST("/stack/install", r.stackInstallTask)
 	tasks.GET("/stack/ops/:id", r.stackOpTask)
+
+	// SSH/FTP accounts (chroot jails) of sites on this server
+	tasks.POST("/sshftp/create", r.sshCreateTask)
+	tasks.POST("/sshftp/delete", r.sshDeleteTask)
+
+	// Raw vhost editing and disk usage of a site on this server
+	tasks.GET("/vhost/get", r.vhostGetTask)
+	tasks.POST("/vhost/validate", r.vhostValidateTask)
+	tasks.POST("/vhost/put", r.vhostPutTask)
+	tasks.POST("/site/usage", r.siteUsageTask)
+
+	// File manager (operations on a site root on this server)
+	tasks.POST("/files/op", r.filesTask)
+	tasks.POST("/files/upload", r.filesUploadTask)
+	tasks.GET("/files/download", r.filesDownloadTask)
+
+	// Panel self-update (panel host only; runs the embedded, signature-verifying installer)
+	tasks.GET("/panel/update", r.panelUpdateStatusTask)
+	tasks.POST("/panel/update", r.panelUpdateStartTask)
+	tasks.GET("/panel/backups", r.panelBackupsTask)
+	tasks.POST("/panel/rollback", r.panelRollbackTask)
+	// Agent self-update on remote servers (runs the embedded agent-update.sh)
+	tasks.GET("/agent/update", r.agentUpdateStatusTask)
+	tasks.POST("/agent/update", r.agentUpdateStartTask)
 
 	// Application templates (WordPress, Laravel, etc.)
 	tasks.POST("/templates/wordpress", r.installWordPress)
@@ -456,6 +537,18 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		// SystemUser owns the site files (sent on the initial site.create
 		// only; vhost regenerations leave ownership alone).
 		SystemUser string `json:"system_user,omitempty"`
+		// VhostRegen: an existing site, only its vhost is regenerated (no
+		// starter files, no container re-creation).
+		VhostRegen bool `json:"vhost_regen,omitempty"`
+		// Security: the site's basic auth and blocked IPs (validated again
+		// by nginx.GenerateVhost before anything is written).
+		Security *struct {
+			BasicAuthEnabled  bool     `json:"basic_auth_enabled"`
+			BasicAuthUsername string   `json:"basic_auth_username"`
+			BasicAuthHash     string   `json:"basic_auth_hash"`
+			BlockedIPs        []string `json:"blocked_ips"`
+			AllowedIPs        []string `json:"allowed_ips"`
+		} `json:"security,omitempty"`
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
@@ -497,7 +590,9 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 	}
 
 	// 2. Write runtime starter template (skip if site already has content — don't overwrite user code)
-	if templates := nginx.TemplateForRuntime(payload.Runtime, payload.Domain, payload.Port); templates != nil {
+	if payload.VhostRegen {
+		// existing site: leave its files alone
+	} else if templates := nginx.TemplateForRuntime(payload.Runtime, payload.Domain, payload.Port); templates != nil {
 		for fname, content := range templates {
 			fpath := filepath.Join(payload.RootPath, fname)
 			if _, err := r.executor.RunShell(ctx, "test", "-f", fpath); err != nil {
@@ -513,7 +608,7 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 	}
 
 	// ─── Docker runtime: pull image + create container ───
-	if payload.Runtime == "docker" {
+	if payload.Runtime == "docker" && !payload.VhostRegen {
 		// Default image if not specified
 		if payload.DockerImage == "" {
 			payload.DockerImage = "nginx:alpine"
@@ -545,14 +640,12 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 			}
 		}
 
+		// One container per site, named after its id: names derived from
+		// the site name collided (and "docker rm -f" removed the other
+		// site's container).
 		containerName := payload.DockerName
 		if containerName == "" {
-			containerName = "site-" + strings.Map(func(r rune) rune {
-				if r == ' ' {
-					return '-'
-				}
-				return r
-			}, payload.Name)
+			containerName = siteContainerName(payload.SiteID)
 		}
 		if err := siteinput.DockerName(containerName); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -675,9 +768,23 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		PHPVersion:   sql.NullString{String: payload.PHPVersion, Valid: payload.PHPVersion != ""},
 		PHPIni:       sql.NullString{String: payload.PHPIni, Valid: payload.PHPIni != ""},
 	}
-	config, err := nginx.GenerateVhost(site, payload.Port, nil)
+	var security *store.SiteSecurity
+	if payload.Security != nil {
+		security = &store.SiteSecurity{
+			BasicAuthEnabled:  payload.Security.BasicAuthEnabled,
+			BasicAuthUsername: payload.Security.BasicAuthUsername,
+			BasicAuthPassword: payload.Security.BasicAuthHash,
+			BlockedIPs:        payload.Security.BlockedIPs,
+			AllowedIPs:        payload.Security.AllowedIPs,
+		}
+	}
+	certPath, keyPath := r.letsEncryptCert(payload.Domain)
+	config, err := nginx.GenerateVhostWithCert(site, payload.Port, security, certPath, keyPath)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "config gen failed: "+err.Error())
+	}
+	if security == nil || !security.BasicAuthEnabled {
+		_ = nginx.RemoveHtpasswd(payload.Domain)
 	}
 
 	// Every generated vhost listens on 443 with the placeholder certificate
@@ -977,6 +1084,9 @@ func dockerDefaultCmd(lang string) string {
 	}
 }
 
+// siteContainerName is the docker container of a docker site.
+func siteContainerName(siteID int64) string { return fmt.Sprintf("sp-site-%d", siteID) }
+
 func (r *Router) siteDeleteTask(c echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
@@ -1002,6 +1112,17 @@ func (r *Router) siteDeleteTask(c echo.Context) error {
 		r.executor.RunShell(ctx, "rm", "-f", "/etc/systemd/system/"+svcName+".service")
 		r.executor.RunShell(ctx, "systemctl", "daemon-reload")
 		cleaned = append(cleaned, "app service")
+	}
+
+	// 1b. Remove the site's docker container (named by site id).
+	if payload.SiteID > 0 {
+		if _, err := r.executor.RunShell(ctx, "docker", "inspect", "--type", "container", siteContainerName(payload.SiteID)); err == nil {
+			if out, err := r.executor.RunShell(ctx, "docker", "rm", "-f", siteContainerName(payload.SiteID)); err != nil {
+				errs = append(errs, "docker container: "+strings.TrimSpace(out))
+			} else {
+				cleaned = append(cleaned, "docker container")
+			}
+		}
 	}
 
 	// 2. Remove nginx config
@@ -1111,9 +1232,35 @@ func (r *Router) siteDeployTask(c echo.Context) error {
 		// Cloning never executes repository code, so root may do it; ownership is
 		// handed to the site user right after so every later git/npm/pip step
 		// runs unprivileged.
-		output, err := r.executor.RunShell(ctx, "git", "clone", "-b", payload.Branch, "--", payload.Repo, payload.RootPath)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
+		cloneArgs := []string{"clone"}
+		if payload.Branch != "" {
+			cloneArgs = append(cloneArgs, "-b", payload.Branch)
+		}
+		if !exists {
+			cloneArgs = append(cloneArgs, "--", payload.Repo, payload.RootPath)
+			if output, err := r.executor.RunShell(ctx, "git", cloneArgs...); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
+			}
+		} else {
+			// The root exists but is not a repository (site.create writes
+			// starter files): "git clone" refuses a non-empty directory, so
+			// clone the history next to it and check it out in place.
+			tmp, err := os.MkdirTemp(filepath.Dir(payload.RootPath), ".sigarda-clone-")
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "prepare clone failed: "+err.Error())
+			}
+			defer os.RemoveAll(tmp)
+			cloneArgs = append(cloneArgs, "--no-checkout", "--", payload.Repo, tmp)
+			if output, err := r.executor.RunShell(ctx, "git", cloneArgs...); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
+			}
+			if err := os.Rename(filepath.Join(tmp, ".git"), filepath.Join(payload.RootPath, ".git")); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "install repository failed: "+err.Error())
+			}
+			if output, err := r.executor.RunShell(ctx, "git", "-C", payload.RootPath, "checkout", "-f", "HEAD", "--", "."); err != nil {
+				_ = os.RemoveAll(filepath.Join(payload.RootPath, ".git"))
+				return echo.NewHTTPError(http.StatusInternalServerError, "git checkout failed: "+strings.TrimSpace(output))
+			}
 		}
 		if haveSiteUser {
 			if out, err := r.executor.RunShell(ctx, "chown", "-R", fmt.Sprintf("%d:%d", siteUID, siteGID), payload.RootPath); err != nil {
@@ -1303,8 +1450,11 @@ func (r *Router) sslIssueTask(c echo.Context) error {
 		}
 	}
 
-	// Update nginx config to include SSL
-	slog.Info("agent: ssl.issue success, updating nginx config", "domain", payload.Domain)
+	// Serve the new certificate (the vhost was created with the placeholder).
+	if err := r.serveLetsEncryptCert(ctx, payload.Domain); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "certificate issued but not installed in nginx: "+err.Error())
+	}
+	slog.Info("agent: ssl.issue success, certificate installed in nginx", "domain", payload.Domain)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"ok":        true,
@@ -1350,7 +1500,11 @@ func (r *Router) sslRenewTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "certbot renew failed: "+output)
 	}
 
-	// Reload nginx so renewed cert takes effect
+	// Make sure the vhost serves the Let's Encrypt certificate (vhosts
+	// written before this fix still point at the placeholder), then reload.
+	if err := r.serveLetsEncryptCert(ctx, payload.Domain); err != nil {
+		slog.Warn("agent: ssl.renew could not install the certificate in nginx", "domain", payload.Domain, "error", err)
+	}
 	_, _ = r.executor.RunShell(ctx, "nginx", "-s", "reload")
 	slog.Info("agent: nginx reloaded after ssl.renew", "domain", payload.Domain)
 
@@ -1376,10 +1530,11 @@ func (r *Router) sslRenewTask(c echo.Context) error {
 func (r *Router) logsReadTask(c echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
-		SiteID int64  `json:"site_id"`
-		Domain string `json:"domain"`
-		Type   string `json:"type"`
-		Lines  int    `json:"lines"`
+		SiteID     int64  `json:"site_id"`
+		Domain     string `json:"domain"`
+		Type       string `json:"type"`
+		Lines      int    `json:"lines"`
+		PHPVersion string `json:"php_version"`
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
@@ -1388,8 +1543,8 @@ func (r *Router) logsReadTask(c echo.Context) error {
 	if payload.Lines <= 0 || payload.Lines > 10000 {
 		payload.Lines = 100
 	}
-	if payload.Type != "access" && payload.Type != "error" {
-		return echo.NewHTTPError(http.StatusBadRequest, "type must be access or error")
+	if payload.Type != "access" && payload.Type != "error" && payload.Type != "php" {
+		return echo.NewHTTPError(http.StatusBadRequest, "type must be access, error or php")
 	}
 
 	if !isValidDomain(payload.Domain) {
@@ -1397,6 +1552,9 @@ func (r *Router) logsReadTask(c echo.Context) error {
 	}
 
 	logPath := filepath.Join(r.logDir, payload.Domain+"."+payload.Type+".log")
+	if payload.Type == "php" {
+		logPath = phpFPMLogPath(payload.PHPVersion)
+	}
 	exists, _ := r.executor.Stat(ctx, logPath)
 	if !exists {
 		return c.JSON(http.StatusOK, map[string]any{
@@ -1495,16 +1653,14 @@ func (r *Router) backupCreateTask(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, "database dump failed: "+strings.TrimSpace(output))
 			}
 		}
-		output, err = r.executor.RunShell(ctx, "tar", "-czf", backupFile,
-			"--exclude=backups", "--exclude=node_modules", "--exclude=vendor",
-			"--exclude=.git", "--exclude=.env", "--exclude=cache",
-			"-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath),
+		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath),
 			"-C", bundleDir, "database_dumps")
+		output, err = r.executor.RunShell(ctx, "tar", args...)
 	} else {
-		output, err = r.executor.RunShell(ctx, "tar", "-czf", backupFile,
-			"--exclude=backups", "--exclude=node_modules", "--exclude=vendor",
-			"--exclude=.git", "--exclude=.env", "--exclude=cache",
-			"-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath))
+		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath))
+		output, err = r.executor.RunShell(ctx, "tar", args...)
 	}
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "tar failed: "+strings.TrimSpace(output))
@@ -1581,7 +1737,7 @@ func (r *Router) dumpDatabase(ctx context.Context, dbType, dbUser, dbPassword, d
 	case "postgres":
 		env := []string{"PGPASSWORD=" + dbPassword}
 		return r.executor.RunToFileEnv(ctx, env, dumpFile, "pg_dump",
-			"-U"+dbUser, "-h", "localhost", "--no-owner", "--no-acl", dbName)
+			"-U"+dbUser, "-h", "localhost", "--no-owner", "--no-acl", "--clean", "--if-exists", dbName)
 	default:
 		return errUnsupportedDBType.Error(), errUnsupportedDBType
 	}
@@ -1629,11 +1785,12 @@ func normalizeS3Endpoint(endpoint string) string {
 func (r *Router) backupRestoreTask(c echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
-		BackupID   int64  `json:"backup_id"`
-		SiteID     int64  `json:"site_id"`
-		Domain     string `json:"domain"`
-		BackupPath string `json:"backup_path"`
-		RootPath   string `json:"root_path"`
+		BackupID   int64             `json:"backup_id"`
+		SiteID     int64             `json:"site_id"`
+		Domain     string            `json:"domain"`
+		BackupPath string            `json:"backup_path"`
+		RootPath   string            `json:"root_path"`
+		Databases  []restoreDatabase `json:"databases"`
 		S3Config   *struct {
 			Bucket    string `json:"bucket"`
 			Endpoint  string `json:"endpoint"`
@@ -1662,7 +1819,11 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, "ensure dir failed: "+err.Error())
 		}
 
-		localFile := filepath.Join(siteBackupDir, fmt.Sprintf("restore_%d.tar.gz", payload.BackupID))
+		ext := ".tar.gz"
+		if isSQLDump(backupPath) {
+			ext = ".sql"
+		}
+		localFile := filepath.Join(siteBackupDir, fmt.Sprintf("restore_%d%s", payload.BackupID, ext))
 		endpoint := normalizeS3Endpoint(payload.S3Config.Endpoint)
 		awsArgs := []string{
 			"s3", "cp", backupPath, localFile,
@@ -1693,6 +1854,19 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "backup file not found")
 	}
 
+	// A database backup is a single SQL dump: import it, files stay as they are.
+	if isSQLDump(backupPath) {
+		db, ok := pickDumpDatabase(payload.Databases, filepath.Base(backupPath))
+		if !ok {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "none of the site's databases matches this dump; recreate the database first")
+		}
+		if out, err := r.importDatabaseDump(ctx, db, backupPath); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "database import failed: "+strings.TrimSpace(out+" "+err.Error()))
+		}
+		slog.Info("agent: backup.restore (database)", "backup_id", payload.BackupID, "db", db.Name)
+		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "database " + db.Name + " restored", "databases_restored": []string{db.Name}})
+	}
+
 	tmpDir, err := os.MkdirTemp(r.backupDir, "restore-*")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "create restore temp dir failed: "+err.Error())
@@ -1708,6 +1882,13 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 	extractedRoot := filepath.Join(tmpDir, filepath.Base(payload.RootPath))
 	if exists, _ := r.executor.Stat(ctx, extractedRoot); !exists {
 		return echo.NewHTTPError(http.StatusInternalServerError, "backup archive missing expected site root")
+	}
+
+	// A full backup carries database dumps: import them before the files are
+	// swapped, so a failed import leaves the site's files untouched.
+	dbsRestored, dbsSkipped, err := r.importBundleDumps(ctx, filepath.Join(tmpDir, "database_dumps"), payload.Databases)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "database "+err.Error()+" (site files left unchanged)")
 	}
 	if err := os.MkdirAll(filepath.Dir(payload.RootPath), 0755); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "create parent dir failed: "+err.Error())
@@ -1753,6 +1934,25 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "move restored root failed: "+err.Error())
 	}
 
+	// Archives leave out the top-level paths in siteBackupExcludedTop
+	// (secrets, dependencies, the site's own backups): carry them over from
+	// the previous root, so a restore neither breaks the app (.env, vendor)
+	// nor deletes the site's local backups.
+	if oldRoot != "" {
+		for _, name := range siteBackupExcludedTop {
+			from, to := filepath.Join(oldRoot, name), filepath.Join(payload.RootPath, name)
+			if _, err := os.Lstat(from); err != nil {
+				continue
+			}
+			if _, err := os.Lstat(to); err == nil {
+				continue // the archive has its own copy
+			}
+			if err := movePath(from, to); err != nil {
+				slog.Warn("agent: backup.restore could not keep "+name, "backup_id", payload.BackupID, "error", err)
+			}
+		}
+	}
+
 	// Restore succeeded — discard the staged old copy (best effort).
 	if oldRoot != "" {
 		if err := os.RemoveAll(oldRoot); err != nil {
@@ -1763,11 +1963,20 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 
 	slog.Info("agent: backup.restore", "backup_id", payload.BackupID, "site_id", payload.SiteID)
 
+	msg := "backup restored"
+	if len(dbsRestored) > 0 {
+		msg += "; databases imported: " + strings.Join(dbsRestored, ", ")
+	}
+	if len(dbsSkipped) > 0 {
+		msg += "; dumps without a matching database skipped: " + strings.Join(dbsSkipped, ", ")
+	}
 	return c.JSON(http.StatusOK, map[string]any{
-		"ok":              true,
-		"files_extracted": filesExtracted,
-		"message":         "backup restored",
-		"root_path":       payload.RootPath,
+		"ok":                 true,
+		"files_extracted":    filesExtracted,
+		"message":            msg,
+		"root_path":          payload.RootPath,
+		"databases_restored": dbsRestored,
+		"databases_skipped":  dbsSkipped,
 	})
 }
 
@@ -2341,4 +2550,79 @@ func readGPU() *gpuInfo {
 	gpu.PowerDraw = powerSum / float64(validCount)
 	gpu.FanSpeed = fanSum / float64(validCount)
 	return gpu
+}
+
+// letsEncryptCert returns the site's Let's Encrypt certificate and key when
+// certbot has issued them on this server ("" "" = use the placeholder).
+func (r *Router) letsEncryptCert(domain string) (string, string) {
+	live := filepath.Join(r.leDir, "live", domain)
+	cert, key := filepath.Join(live, "fullchain.pem"), filepath.Join(live, "privkey.pem")
+	if _, err := os.Stat(cert); err != nil {
+		return "", ""
+	}
+	if _, err := os.Stat(key); err != nil {
+		return "", ""
+	}
+	return cert, key
+}
+
+// serveLetsEncryptCert switches the site's vhost from the placeholder
+// certificate to the Let's Encrypt one after certbot issued or renewed it.
+// The previous vhost is restored when nginx -t fails.
+func (r *Router) serveLetsEncryptCert(ctx context.Context, domain string) error {
+	cert, key := r.letsEncryptCert(domain)
+	if cert == "" {
+		return fmt.Errorf("no Let's Encrypt certificate for %s on this server", domain)
+	}
+	path := filepath.Join(r.nginxConfDir, domain+".conf")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil // no vhost (yet): the next site.create picks the certificate up
+	}
+	old := string(raw)
+	updated := strings.ReplaceAll(old, "ssl_certificate "+nginx.DefaultSSLCertificate+";", "ssl_certificate "+cert+";")
+	updated = strings.ReplaceAll(updated, "ssl_certificate_key "+nginx.DefaultSSLCertificateKey+";", "ssl_certificate_key "+key+";")
+	if updated == old {
+		return nil // already served (or a custom vhost)
+	}
+	if err := r.executor.WriteFile(ctx, path, updated, 0644); err != nil {
+		return err
+	}
+	if out, err := r.executor.RunShell(ctx, "nginx", "-t"); err != nil {
+		_ = r.executor.WriteFile(ctx, path, old, 0644)
+		return fmt.Errorf("nginx -t failed with the new certificate: %s", strings.TrimSpace(out))
+	}
+	if out, err := r.executor.RunShell(ctx, "nginx", "-s", "reload"); err != nil {
+		return fmt.Errorf("nginx reload failed: %s", strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// siteBackupExcludedTop are the site root entries file backups leave out.
+var siteBackupExcludedTop = []string{"backups", "backup", "node_modules", "vendor", ".git", ".env"}
+
+// siteBackupExcludes returns tar arguments excluding those entries at the
+// top of the site root only (the old unanchored --exclude=cache/backups
+// also dropped e.g. storage/framework/cache and any nested "backups" dir).
+func siteBackupExcludes(rootPath string) []string {
+	base := filepath.Base(rootPath)
+	args := []string{"--anchored"}
+	for _, name := range siteBackupExcludedTop {
+		args = append(args, "--exclude="+base+"/"+name)
+	}
+	return args
+}
+
+// phpFPMLogPath is the PHP-FPM log of a version (or the first one present).
+func phpFPMLogPath(version string) string {
+	if version != "" && siteinput.PHPVersion(version) == nil {
+		return "/var/log/php" + version + "-fpm.log"
+	}
+	for _, v := range []string{"8.4", "8.3", "8.2", "8.1", "8.0", "7.4"} {
+		p := "/var/log/php" + v + "-fpm.log"
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "/var/log/php8.3-fpm.log"
 }

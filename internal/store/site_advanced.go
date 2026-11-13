@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -100,13 +101,16 @@ func (s *varnishStore) Upsert(ctx context.Context, v *SiteVarnish) error {
 // ─── Security ───────────────────────────────────────────────
 
 type SiteSecurity struct {
-	ID                int64     `json:"id"`
-	SiteID            int64     `json:"site_id"`
-	BasicAuthEnabled  bool      `json:"basic_auth_enabled"`
-	BasicAuthUsername string    `json:"basic_auth_username"`
-	BasicAuthPassword string    `json:"basic_auth_password"`
-	BlockedIPs        []string  `json:"blocked_ips"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                int64    `json:"id"`
+	SiteID            int64    `json:"site_id"`
+	BasicAuthEnabled  bool     `json:"basic_auth_enabled"`
+	BasicAuthUsername string   `json:"basic_auth_username"`
+	BasicAuthPassword string   `json:"basic_auth_password"`
+	BlockedIPs        []string `json:"blocked_ips"`
+	// AllowedIPs is not stored with the settings: it carries the site's
+	// "allow" IP restrictions to the vhost (anyone else is denied).
+	AllowedIPs []string  `json:"allowed_ips,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type SecurityRepository interface {
@@ -141,13 +145,17 @@ func (s *securityStore) Upsert(ctx context.Context, sec *SiteSecurity) error {
 	if sec.BasicAuthEnabled {
 		enabled = 1
 	}
-	// Hash password with bcrypt if provided
-	hashedPassword := sec.BasicAuthPassword
+	// Hash a new password; an empty one keeps the stored hash ("leave empty
+	// to keep the current password"), so saving other settings never wipes it.
+	var hashedPassword string
 	if sec.BasicAuthPassword != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(sec.BasicAuthPassword), bcrypt.DefaultCost)
-		if err == nil {
-			hashedPassword = string(hash)
+		if err != nil {
+			return fmt.Errorf("hash basic auth password: %w", err)
 		}
+		hashedPassword = string(hash)
+	} else if existing, err := s.GetBySiteID(ctx, sec.SiteID); err == nil && existing != nil {
+		hashedPassword = existing.BasicAuthPassword
 	}
 	blockedRaw, _ := json.Marshal(sec.BlockedIPs)
 	if sec.BlockedIPs == nil {

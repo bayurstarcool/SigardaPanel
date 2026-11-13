@@ -39,4 +39,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash -n installer/install.sh && bash -n scripts/release.sh
-      - run: sudo apt-get install -y shellcheck && shellcheck -S error installer/install.sh scripts/release.sh
+      - run: sudo apt-get install -y shellcheck && shellcheck -S error installer/install.sh installer/agent-update.sh scripts/release.sh
+      - run: bash scripts/test-installers.sh

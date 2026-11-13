@@ -89,6 +89,10 @@ func (h *siteHandler) updatePHPConfig(c echo.Context) error {
 	if site.Runtime != "php" {
 		return echo.NewHTTPError(http.StatusBadRequest, "site is not a PHP runtime")
 	}
+	if site.Status == "suspended" {
+		// Regenerating the vhost would replace the suspension placeholder.
+		return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+	}
 
 	var body struct {
 		Version string `json:"php_version"`

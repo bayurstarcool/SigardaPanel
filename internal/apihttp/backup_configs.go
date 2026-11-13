@@ -81,6 +81,11 @@ func (h *backupConfigHandler) create(c echo.Context) error {
 	}
 
 	body.CronExpr = strings.TrimSpace(body.CronExpr)
+	if body.CronExpr != "" {
+		if err := validateBackupCron(body.CronExpr); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+	}
 	if body.CronExpr == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "cron_expr required")
 	}
@@ -181,6 +186,9 @@ func (h *backupConfigHandler) update(c echo.Context) error {
 	}
 	if body.CronExpr != nil {
 		existing.CronExpr = strings.TrimSpace(*body.CronExpr)
+		if err := validateBackupCron(existing.CronExpr); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 	}
 	if body.Enabled != nil {
 		existing.Enabled = *body.Enabled

@@ -97,6 +97,14 @@ func (c *Client) Execute(ctx context.Context, jobType, payload string) (*TaskRes
 	if resp.StatusCode >= 400 {
 		return result, agentResponseError(resp.StatusCode, result, responseBody)
 	}
+	// A 200 that explicitly says {"ok": false} (e.g. an app that did not
+	// start) is a failed task, not a success.
+	var flag struct {
+		OK *bool `json:"ok"`
+	}
+	if json.Unmarshal(responseBody, &flag) == nil && flag.OK != nil && !*flag.OK {
+		return result, agentResponseError(http.StatusUnprocessableEntity, result, responseBody)
+	}
 
 	return result, nil
 }
@@ -153,6 +161,8 @@ func endpointForType(t string) string {
 		return "/tasks/backup/create"
 	case jobmodel.TypeBackupRestore:
 		return "/tasks/backup/restore"
+	case jobmodel.TypeSiteTransfer:
+		return "/tasks/site/transfer"
 	case jobmodel.TypeBackupDelete:
 		return "/tasks/backup/delete"
 	case jobmodel.TypeDBBackupCreate:

@@ -48,7 +48,7 @@ func (h *stackHandler) dockerContainers(c echo.Context) error {
 	if allowed, restricted := h.tenantContainerNames(c); restricted {
 		result = filterContainers(result, allowed)
 	}
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // tenantContainerNames returns the docker container names a non-admin user may
@@ -67,6 +67,8 @@ func (h *stackHandler) tenantContainerNames(c echo.Context) (allowed map[string]
 	allowed = map[string]bool{}
 	add := func(site *store.Site) {
 		if site != nil {
+			allowed[fmt.Sprintf("sp-site-%d", site.ID)] = true
+			// Containers created before names carried the site id.
 			allowed["site-"+strings.ReplaceAll(site.Name, " ", "-")] = true
 		}
 	}
@@ -120,7 +122,9 @@ func (h *stackHandler) containerBelongsTo(server *store.Server, containerID stri
 		id, _ := m["id"].(string)
 		name, _ := m["name"].(string)
 		name = strings.TrimPrefix(name, "/")
-		if allowed[name] && containerID != "" && (containerID == name || (id != "" && (strings.HasPrefix(id, containerID) || strings.HasPrefix(containerID, id)))) {
+		// Exact matches only: the name, the full id or the 12-character short
+		// id. A shorter prefix could make docker act on another container.
+		if allowed[name] && containerID != "" && (containerID == name || (id != "" && (containerID == id || (len(containerID) >= 12 && strings.HasPrefix(id, containerID))))) {
 			return true
 		}
 	}
@@ -181,7 +185,7 @@ func (h *stackHandler) dockerContainerLogs(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // dockerContainerExec proxies to agent POST /tasks/docker/container/exec.
@@ -205,7 +209,7 @@ func (h *stackHandler) dockerImages(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // dockerSearchImages queries Docker Hub for image suggestions.
@@ -311,7 +315,7 @@ func (h *stackHandler) dockerVolumes(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // dockerVolumeCreate proxies to agent POST /tasks/docker/volume/create.
@@ -340,7 +344,7 @@ func (h *stackHandler) dockerNetworks(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // dockerNetworkCreate proxies to agent POST /tasks/docker/network/create.
@@ -369,7 +373,7 @@ func (h *stackHandler) dockerInfo(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // dockerDiskUsage proxies to agent GET /tasks/docker/disk-usage.
@@ -388,7 +392,7 @@ func (h *stackHandler) dockerDiskUsage(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // pm2Manage proxies to agent POST /tasks/pm2/manage.
@@ -413,7 +417,7 @@ func (h *stackHandler) pm2Manage(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // emailManage proxies mail-server actions (status, list, install, …) to the
@@ -439,7 +443,7 @@ func (h *stackHandler) emailManage(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // dockerContainerProxy is a generic proxy for Docker container actions.
@@ -475,7 +479,7 @@ func (h *stackHandler) dockerContainerProxy(c echo.Context, action string) error
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // resolveServer extracts server ID from URL params and resolves agent info.
@@ -515,7 +519,7 @@ func (h *stackHandler) firewallStatus(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // firewallEnable proxies to agent POST /tasks/firewall/enable.
@@ -559,7 +563,7 @@ func (h *stackHandler) firewallRules(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // firewallReset proxies to agent POST /tasks/firewall/reset.
@@ -588,7 +592,7 @@ func (h *stackHandler) firewallProxy(c echo.Context, action string) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // ─── Redis Management Proxy Handlers ──────────────────────────────────────
@@ -609,7 +613,7 @@ func (h *stackHandler) redisStats(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // redisFlush proxies to agent POST /tasks/redis/flush.
@@ -633,7 +637,7 @@ func (h *stackHandler) redisInfo(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // redisFlushDB proxies to agent POST /tasks/redis/flushdb.
@@ -662,7 +666,7 @@ func (h *stackHandler) redisProxy(c echo.Context, action string) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // agentRequest makes an HTTP request to the agent.
@@ -744,7 +748,7 @@ func (h *stackHandler) fail2banStatus(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // fail2banJail proxies to agent GET /tasks/fail2ban/jail?name=...
@@ -764,7 +768,7 @@ func (h *stackHandler) fail2banJail(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // fail2banUnban proxies to agent POST /tasks/fail2ban/unban.
@@ -808,7 +812,7 @@ func (h *stackHandler) botBlockerManage(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 func (h *stackHandler) fail2banProxy(c echo.Context, action string) error {
@@ -831,7 +835,7 @@ func (h *stackHandler) fail2banProxy(c echo.Context, action string) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // ─── Server Specs & Benchmarks ─────────────────────────────────────────────

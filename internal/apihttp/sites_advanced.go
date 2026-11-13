@@ -1,18 +1,19 @@
 package apihttp
 
 import (
-	"bytes"
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"net/url"
 	"regexp"
+	"sigardapanel/internal/jobmodel"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
@@ -21,222 +22,68 @@ import (
 	"sigardapanel/internal/store"
 )
 
-const sshdConfigFile = "/etc/ssh/sshd_config.d/sigardapanel-ssh.conf"
 
 var sshUsernameRegex = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
 
-// runCmd is a simple helper to run a shell command
-func runCmd(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s failed: %s", name, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// readFstab reads /etc/fstab and returns non-empty lines
-func readFstab() ([]string, error) {
-	b, err := os.ReadFile("/etc/fstab")
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Split(string(b), "\n")
-	var out []string
-	for _, l := range lines {
-		if strings.TrimSpace(l) != "" {
-			out = append(out, l)
+// sshAccountsOnServer lists every SSH/FTP account of sites on serverID
+// (the agent writes the sshd chroot config for all of them), optionally
+// leaving one username out and adding another.
+func (h *siteHandler) sshAccountsOnServer(ctx context.Context, serverID int64, without, add string) []map[string]string {
+	all, _ := h.store.SSH.ListAll(ctx)
+	sites := map[int64]int64{}
+	out := []map[string]string{}
+	for _, u := range all {
+		srv, ok := sites[u.SiteID]
+		if !ok {
+			if st, err := h.store.Sites.GetByID(ctx, u.SiteID); err == nil && st != nil {
+				srv = st.ServerID
+			}
+			sites[u.SiteID] = srv
 		}
-	}
-	return out, nil
-}
-
-// writeFstab writes lines back to /etc/fstab
-func writeFstab(lines []string) error {
-	content := strings.Join(lines, "\n") + "\n"
-	return os.WriteFile("/etc/fstab", []byte(content), 0644)
-}
-
-// sshUserExists checks if a Linux user already exists
-func sshUserExists(username string) bool {
-	return runCmd("id", "-u", username) == nil
-}
-
-// generateSSHConfig rebuilds the entire sshd Match config from all SSH users in the DB
-func (h *siteHandler) generateSSHConfig(ctx echo.Context) error {
-	users, err := h.store.SSH.ListAll(ctx.Request().Context())
-	if err != nil {
-		return err
-	}
-	var sb strings.Builder
-	sb.WriteString("# Managed by SigardaPanel - do not edit manually\n")
-	sb.WriteString("# ChrootDirectory jails for SSH/FTP users\n\n")
-	for _, u := range users {
-		if u.Username == "" || u.HomeDir == "" {
+		if srv != serverID || u.Username == without || u.Username == "" {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("Match User %s\n", u.Username))
-		sb.WriteString(fmt.Sprintf("    ChrootDirectory %s\n", u.HomeDir))
-		sb.WriteString("    X11Forwarding no\n")
-		sb.WriteString("    AllowTcpForwarding no\n")
-		sb.WriteString("    PasswordAuthentication no\n")
-		sb.WriteString("    AuthenticationMethods publickey\n")
-		sb.WriteString("\n")
+		out = append(out, map[string]string{"username": u.Username, "home_dir": u.HomeDir})
 	}
-	if err := os.MkdirAll("/etc/ssh/sshd_config.d", 0755); err != nil {
-		return err
+	if add != "" {
+		out = append(out, map[string]string{"username": add, "home_dir": "/home/" + add})
 	}
-	if err := os.WriteFile(sshdConfigFile, []byte(sb.String()), 0644); err != nil {
-		return err
-	}
-	// Only reload if there are users configured
-	if len(users) > 0 {
-		if err := runCmd("systemctl", "reload", "ssh"); err != nil {
-			// Non-fatal — config was written
-			fmt.Printf("warning: sshd reload failed: %v\n", err)
+	return out
+}
+
+// removeSiteSSHAccounts deprovisions every SSH/FTP account of a site on its
+// server (used when the site is deleted; their jails bind-mount the site).
+func (h *siteHandler) removeSiteSSHAccounts(ctx context.Context, site *store.Site) {
+	users, _ := h.store.SSH.ListBySiteID(ctx, site.ID)
+	for _, u := range users {
+		code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/delete",
+			map[string]any{"username": u.Username, "accounts": h.sshAccountsOnServer(ctx, site.ServerID, u.Username, "")}, 2*time.Minute)
+		if err != nil || code >= 400 {
+			slog.Warn("site delete: ssh account not removed", "site_id", site.ID, "user", u.Username, "error", err, "message", agentMessage(out, ""))
+			continue
 		}
+		_ = h.store.SSH.Delete(ctx, site.ID, u.ID)
+	}
+}
+
+// siteAgentCall calls the agent of the server that hosts site.
+func (h *siteHandler) siteAgentCall(ctx context.Context, site *store.Site, method, path string, body any, timeout time.Duration) (int, map[string]any, error) {
+	server, err := h.store.Servers.GetByID(ctx, site.ServerID)
+	if err != nil || server == nil || !server.AgentURL.Valid || server.AgentURL.String == "" || server.AgentToken == "" {
+		return 0, nil, fmt.Errorf("the site's server has no reachable agent")
+	}
+	return stackAgentRequest(ctx, method, agentBase(server)+path, server.AgentToken, body, timeout)
+}
+
+// vhostRootGuard: raw vhost editing can read and write any file through nginx
+// directives, i.e. it is root on the site's server; on the panel host that is
+// super_admin power.
+func (h *siteHandler) vhostRootGuard(ctx context.Context, sess *store.Session, site *store.Site) error {
+	server, _ := h.store.Servers.GetByID(ctx, site.ServerID)
+	if server != nil && isLocalServer(*server) && !isSessionSuperAdmin(ctx, h.store, sess) {
+		return echo.NewHTTPError(http.StatusForbidden, "editing raw vhosts on the panel host requires a super admin")
 	}
 	return nil
-}
-
-// provisionSSHUser creates the Linux user, generates SSH key pair, and sets up chroot jail
-// sshPublicKey and sshPrivateKey are output parameters filled with generated keys.
-func (h *siteHandler) provisionSSHUser(ctx echo.Context, username, password, sshKeys, homeDir, siteRoot string) (sshPublicKey, sshPrivateKey string, err error) {
-	// 1. Check user doesn't already exist
-	if sshUserExists(username) {
-		return "", "", fmt.Errorf("user %s already exists on the system", username)
-	}
-
-	// 2. Create Linux user
-	if err := runCmd("useradd", "-m", "-s", "/bin/bash", username); err != nil {
-		return "", "", fmt.Errorf("create user: %w", err)
-	}
-
-	// 3. Lock password (no password auth — SSH keys only)
-	_ = runCmd("passwd", "-l", username)
-
-	// 4. Generate SSH key pair
-	sshDir := filepath.Join(homeDir, ".ssh")
-	_ = os.MkdirAll(sshDir, 0700)
-	keyFile := filepath.Join(sshDir, "id_ed25519")
-
-	// Generate ed25519 key (no passphrase)
-	if err := runCmd("ssh-keygen", "-t", "ed25519", "-f", keyFile, "-N", "", "-C", username+"@sigardapanel"); err != nil {
-		// Fallback to RSA 4096 if ed25519 not supported
-		_ = runCmd("ssh-keygen", "-t", "rsa", "-b", "4096", "-f", keyFile, "-N", "", "-C", username+"@sigardapanel")
-	}
-
-	// Read generated keys
-	if pkBytes, readErr := os.ReadFile(keyFile); readErr == nil {
-		sshPrivateKey = string(pkBytes)
-	}
-	if pubBytes, readErr := os.ReadFile(keyFile + ".pub"); readErr == nil {
-		sshPublicKey = string(pubBytes)
-	}
-
-	// Set authorized_keys
-	if sshPublicKey != "" {
-		_ = os.WriteFile(filepath.Join(sshDir, "authorized_keys"), []byte(strings.TrimSpace(sshPublicKey)+"\n"), 0600)
-	}
-	// Also add any user-provided SSH keys
-	if sshKeys != "" {
-		existing, _ := os.ReadFile(filepath.Join(sshDir, "authorized_keys"))
-		// Split by newline and write each key on its own line
-		for _, line := range strings.Split(strings.TrimSpace(sshKeys), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				existing = append(existing, []byte(line+"\n")...)
-			}
-		}
-		_ = os.WriteFile(filepath.Join(sshDir, "authorized_keys"), existing, 0600)
-	}
-	_ = runCmd("chown", "-R", username+":"+username, sshDir)
-
-	// 5. Chroot setup: home dir must be owned by root for ChrootDirectory
-	_ = runCmd("chown", "root:root", homeDir)
-	_ = runCmd("chmod", "755", homeDir)
-
-	// 6. Bind mount system directories (same as before)
-	sysDirs := []string{"/bin", "/lib", "/lib64", "/usr"}
-	for _, d := range sysDirs {
-		dst := filepath.Join(homeDir, d)
-		_ = os.MkdirAll(dst, 0755)
-		_ = runCmd("mount", "--bind", d, dst)
-		_ = runCmd("mount", "-o", "remount,bind,ro", dst)
-		if lines, err := readFstab(); err == nil {
-			fstabLine := fmt.Sprintf("%s %s none bind,ro 0 0  # sigardapanel:%s", d, dst, username)
-			lines = append(lines, fstabLine)
-			_ = writeFstab(lines)
-		}
-	}
-
-	// 7. Create minimal /etc inside jail (same as before)
-	etcDir := filepath.Join(homeDir, "etc")
-	_ = os.MkdirAll(etcDir, 0755)
-	uidOut, _ := exec.Command("id", "-u", username).CombinedOutput()
-	gidOut, _ := exec.Command("id", "-g", username).CombinedOutput()
-	uidStr := strings.TrimSpace(string(uidOut))
-	gidStr := strings.TrimSpace(string(gidOut))
-	_ = os.WriteFile(filepath.Join(etcDir, "passwd"),
-		[]byte(fmt.Sprintf("root:x:0:0:root:/root:/sbin/nologin\n%s:x:%s:%s::/:/bin/bash\n", username, uidStr, gidStr)), 0644)
-	_ = os.WriteFile(filepath.Join(etcDir, "group"),
-		[]byte(fmt.Sprintf("root:x:0:\n%s:x:%s:\n", username, gidStr)), 0644)
-	if _, err := os.Stat("/etc/resolv.conf"); err == nil {
-		resolv, _ := os.ReadFile("/etc/resolv.conf")
-		_ = os.WriteFile(filepath.Join(etcDir, "resolv.conf"), resolv, 0644)
-	}
-
-	// 8. Create mount point inside jail
-	htdocsDir := filepath.Join(homeDir, "htdocs")
-	if err := os.MkdirAll(htdocsDir, 0755); err != nil {
-		return "", "", fmt.Errorf("create mount point: %w", err)
-	}
-
-	// 9. Bind mount the site root into the jail
-	if siteRoot != "" {
-		_ = runCmd("mount", "--bind", siteRoot, htdocsDir)
-		_ = runCmd("chown", username+":"+username, htdocsDir)
-		if lines, err := readFstab(); err == nil {
-			fstabLine := fmt.Sprintf("%s %s none bind 0 0  # sigardapanel:%s", siteRoot, htdocsDir, username)
-			lines = append(lines, fstabLine)
-			if err := writeFstab(lines); err != nil {
-				fmt.Printf("warning: cannot write fstab: %v\n", err)
-			}
-		}
-	}
-
-	return sshPublicKey, sshPrivateKey, nil
-}
-
-// deprovisionSSHUser removes the Linux user and cleans up
-func (h *siteHandler) deprovisionSSHUser(ctx echo.Context, username, homeDir string) {
-	if username == "" {
-		return
-	}
-
-	// 1. Remove fstab entry
-	htdocsDir := filepath.Join(homeDir, "htdocs")
-	marker := fmt.Sprintf("# sigardapanel:%s", username)
-	if lines, err := readFstab(); err == nil {
-		var filtered []string
-		for _, l := range lines {
-			if strings.Contains(l, marker) || strings.Contains(l, htdocsDir) {
-				continue
-			}
-			filtered = append(filtered, l)
-		}
-		_ = writeFstab(filtered)
-	}
-
-	// 2. Unmount bind mounts (site + system dirs)
-	sysDirs := []string{"/usr", "/lib64", "/lib", "/bin"}
-	for _, d := range sysDirs {
-		_ = runCmd("umount", "-l", filepath.Join(homeDir, d))
-	}
-	_ = runCmd("umount", "-l", htdocsDir)
-
-	// 3. Delete Linux user (home dir too)
-	_ = runCmd("userdel", "-r", username)
 }
 
 func (h *siteHandler) getVhost(c echo.Context) error {
@@ -246,260 +93,124 @@ func (h *siteHandler) getVhost(c echo.Context) error {
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
 	}
-
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
+	if err != nil || site == nil || !h.canAccess(c.Request().Context(), sess, site) {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
-	// Access check: user must be admin, owner, or assigned to this site
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
-	}
-
-	nginxConfDir := "/etc/nginx/sites-enabled"
-	nginxConfigPath := filepath.Join(nginxConfDir, site.Domain+".conf")
-
-	// Try reading from live nginx config first
-	liveConfig, readErr := os.ReadFile(nginxConfigPath)
-	var config string
-	var source string = "db"
-	var exists bool = false
-
-	if readErr == nil {
-		config = string(liveConfig)
-		source = "nginx"
-		exists = true
-	} else {
-		// Fall back to DB
-		vhost, dbErr := h.store.Vhosts.GetBySiteID(c.Request().Context(), id)
-		if dbErr == nil {
-			config = vhost.Config
-			exists = true
+	// The live vhost is on the site's server; the DB copy is the fallback.
+	config, source, exists, path := "", "db", false, ""
+	code, out, err := h.siteAgentCall(c.Request().Context(), site, http.MethodGet, "/tasks/vhost/get?domain="+url.QueryEscape(site.Domain), nil, 15*time.Second)
+	if err == nil && code == http.StatusOK {
+		path, _ = out["path"].(string)
+		if e, _ := out["exists"].(bool); e {
+			config, _ = out["config"].(string)
+			source, exists = "nginx", true
 		}
 	}
-
+	if !exists {
+		if vhost, dbErr := h.store.Vhosts.GetBySiteID(c.Request().Context(), id); dbErr == nil {
+			config, exists = vhost.Config, true
+		}
+	}
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-		"site_id":      id,
-		"domain":       site.Domain,
-		"vhost_config": config,
-		"source":       source,
-		"exists":       exists,
-		"config_path":  nginxConfigPath,
+		"site_id": id, "domain": site.Domain, "vhost_config": config,
+		"source": source, "exists": exists, "config_path": path,
 	}, RequestID: rid})
 }
 
 func (h *siteHandler) updateVhost(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
+	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
 	}
-
-	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
+	site, err := h.store.Sites.GetByID(ctx, id)
+	if err != nil || site == nil || !h.checkSitePermission(ctx, sess, site, "write") {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-
-	// Permission check: admin, owner, or user with write+ permission on this site
-	if !h.checkSitePermission(c.Request().Context(), sess, site, "write") {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	if err := h.vhostRootGuard(ctx, sess, site); err != nil {
+		return err
 	}
-
+	if site.Status == "suspended" {
+		return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+	}
 	var body struct {
 		Config string `json:"vhost_config"`
 	}
-	if err := c.Bind(&body); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
+	if err := c.Bind(&body); err != nil || strings.TrimSpace(body.Config) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "vhost_config required")
 	}
 
-	// 1. Save to DB as backup
-	if err := h.store.Vhosts.Upsert(c.Request().Context(), id, body.Config); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/vhost/put", map[string]any{"domain": site.Domain, "config": body.Config}, 2*time.Minute)
+	if err != nil || code >= 400 {
+		msg := "the site's agent is unreachable"
+		if err == nil {
+			msg = agentMessage(out, "agent error")
+		}
+		return echo.NewHTTPError(http.StatusBadGateway, "vhost not saved: "+msg)
 	}
-
-	h.store.NotifySiteUsers(c.Request().Context(), id, "vhost_updated", "Vhost Updated", "Nginx vhost configuration was updated", "info", "site", id)
-
-	// 2. Check if nginx is available and write to nginx conf dir
-	nginxPath, nginxErr := exec.LookPath("nginx")
-	nginxConfDir := "/etc/nginx/sites-enabled"
-	nginxConfAvailableDir := "/etc/nginx/sites-available"
-
-	if nginxErr == nil {
-		// Ensure dirs exist
-		os.MkdirAll(nginxConfDir, 0755)
-		os.MkdirAll(nginxConfAvailableDir, 0755)
-
-		// Write config BOTH to sites-available AND sites-enabled
-		nginxConfigPath := filepath.Join(nginxConfDir, site.Domain+".conf")
-		nginxAvailablePath := filepath.Join(nginxConfAvailableDir, site.Domain+".conf")
-
-		// Remember the previous config so a failed `nginx -t` can be rolled
-		// back instead of leaving a broken file that fails every later reload.
-		prevEnabled, prevEnabledErr := os.ReadFile(nginxConfigPath)
-		prevAvailable, prevAvailableErr := os.ReadFile(nginxAvailablePath)
-		restore := func() {
-			if prevEnabledErr == nil {
-				os.WriteFile(nginxConfigPath, prevEnabled, 0644)
-			} else {
-				os.Remove(nginxConfigPath)
-			}
-			if prevAvailableErr == nil {
-				os.WriteFile(nginxAvailablePath, prevAvailable, 0644)
-			} else {
-				os.Remove(nginxAvailablePath)
-			}
-		}
-
-		// Write to sites-enabled directly
-		if writeErr := os.WriteFile(nginxConfigPath, []byte(body.Config), 0644); writeErr != nil {
-			return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-				"status":  "saved_db_only",
-				"message": "Config saved to DB, but failed to write nginx config: " + writeErr.Error(),
-				"db_only": true,
-			}, RequestID: rid})
-		}
-
-		// Also write to sites-available (for proper management)
-		os.WriteFile(nginxAvailablePath, []byte(body.Config), 0644)
-
-		// Run nginx -t
-		cmd := exec.Command(nginxPath, "-t")
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			restore()
-			return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-				"status":         "saved_nginx_invalid",
-				"message":        "nginx -t failed, previous config restored. Check syntax:\n" + stderr.String(),
-				"nginx_error":    stderr.String(),
-				"config_path":    nginxConfigPath,
-				"reload_attempt": false,
-			}, RequestID: rid})
-		}
-
-		// Try reload nginx
-		reloadCmd := exec.Command("systemctl", "reload", "nginx")
-		var reloadOut bytes.Buffer
-		reloadCmd.Stderr = &reloadOut
-		reloadErr := reloadCmd.Run()
-		reloadOK := reloadErr == nil
-
-		msg := "✅ Nginx config written to " + nginxConfigPath
-		if reloadOK {
-			msg += " and nginx reloaded"
-		} else {
-			msg += " (nginx reload skipped: " + strings.TrimSpace(reloadOut.String()) + ")"
-		}
-
+	if status, _ := out["status"].(string); status != "success" {
+		nginxErr, _ := out["nginx_error"].(string)
 		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-			"status":         "success",
-			"message":        msg,
-			"config_path":    nginxConfigPath,
-			"reload_attempt": true,
-			"reload_ok":      reloadOK,
+			"status": "saved_nginx_invalid", "message": "nginx -t failed, previous config kept. Check syntax:\n" + nginxErr,
+			"nginx_error": nginxErr, "config_path": out["path"], "reload_attempt": false,
 		}, RequestID: rid})
 	}
-
+	// Only a vhost nginx accepted is kept as the stored copy.
+	if err := h.store.Vhosts.Upsert(ctx, id, body.Config); err != nil {
+		slog.Warn("vhost: store copy failed", "site_id", id, "error", err)
+	}
+	h.store.NotifySiteUsers(ctx, id, "vhost_updated", "Vhost Updated", "Nginx vhost configuration was updated", "info", "site", id)
+	if sess != nil {
+		h.audit.RecordAction(ctx, sess.UserID, audit.ActionSiteUpdate, audit.ResourceSite, id, map[string]any{"domain": site.Domain, "section": "vhost"})
+	}
+	reloadOK, _ := out["reload_ok"].(bool)
+	msg := "Nginx config saved"
+	if reloadOK {
+		msg += " and nginx reloaded"
+	} else {
+		msg += " (nginx reload failed: " + fmt.Sprint(out["reload_output"]) + ")"
+	}
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-		"status":  "saved_db_only",
-		"message": "Config saved to DB. nginx not available on this server.",
-		"db_only": true,
+		"status": "success", "message": msg, "config_path": out["path"], "reload_attempt": true, "reload_ok": reloadOK,
 	}, RequestID: rid})
 }
 
-// validateVhost validates nginx config by writing to temp file and running nginx -t
+// validateVhost runs nginx -t with the candidate vhost on the site's server.
 func (h *siteHandler) validateVhost(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
+	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
 	}
-
-	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
+	site, err := h.store.Sites.GetByID(ctx, id)
+	// Validation briefly installs the candidate: same rights as saving.
+	if err != nil || site == nil || !h.checkSitePermission(ctx, sess, site, "write") {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
-
-	// Access check: user must be admin, owner, or assigned to this site
-	if !h.canAccess(c.Request().Context(), sess, site) {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	if err := h.vhostRootGuard(ctx, sess, site); err != nil {
+		return err
 	}
-
 	var body struct {
 		Config string `json:"vhost_config"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
-
-	nginxPath, err := exec.LookPath("nginx")
-	if err != nil {
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/vhost/validate", map[string]any{"domain": site.Domain, "config": body.Config}, time.Minute)
+	if err != nil || code >= 400 {
 		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-			"valid":   false,
-			"warning": true,
-			"message": "nginx binary not found on this server. Config will be saved to DB.",
+			"valid": false, "warning": true, "message": "Could not reach the site's agent to validate the config.",
 		}, RequestID: rid})
 	}
-
-	// Strategy: temporarily SWAP the live config with the new one, run nginx -t (which has full
-	// system context — modules, log_formats, SSL certs), then restore. No domain rewriting needed.
-	livePath := filepath.Join("/etc/nginx/sites-enabled", site.Domain+".conf")
-	backupPath := livePath + ".sigarda-bak"
-	hadOriginal := false
-	if _, err := os.Stat(livePath); err == nil {
-		if err := os.Rename(livePath, backupPath); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to backup live config: "+err.Error())
-		}
-		hadOriginal = true
-	}
-	// Write new config in place of the live one
-	if err := os.WriteFile(livePath, []byte(body.Config), 0644); err != nil {
-		if hadOriginal {
-			os.Rename(backupPath, livePath)
-		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to write test config: "+err.Error())
-	}
-	// Always restore original after test
-	defer func() {
-		os.Remove(livePath)
-		if hadOriginal {
-			os.Rename(backupPath, livePath)
-		}
-	}()
-
-	// Run real nginx -t
-	cmd := exec.Command(nginxPath, "-t")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// Filter: keep only emerg/error lines + test result; strip warn noise from other sites
-		raw := stderr.String()
-		var kept []string
-		for _, l := range strings.Split(raw, "\n") {
-			if strings.Contains(l, "[emerg]") || strings.Contains(l, "[error]") ||
-				strings.Contains(l, "test failed") || strings.Contains(l, "syntax is") {
-				kept = append(kept, l)
-			}
-		}
-		msg := strings.Join(kept, "\n")
-		if msg == "" {
-			msg = raw
-		}
-		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-			"valid":   false,
-			"warning": false,
-			"message": msg,
-		}, RequestID: rid})
-	}
-
+	valid, _ := out["valid"].(bool)
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-		"valid":   true,
-		"warning": false,
-		"message": "nginx configuration syntax is valid ✓",
+		"valid": valid, "warning": false, "message": out["message"],
 	}, RequestID: rid})
 }
 
@@ -615,8 +326,32 @@ func (h *siteHandler) updateSecurity(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
-	if body.BlockedIPs == nil {
-		body.BlockedIPs = []string{}
+	ctx := c.Request().Context()
+	if site.Status == "suspended" {
+		return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+	}
+	// Every value ends up in the nginx vhost: only plain IPs/CIDRs and a
+	// simple username are accepted.
+	blocked, err := nginx.NormalizeBlockedIPs(body.BlockedIPs)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	body.BasicAuthUsername = strings.TrimSpace(body.BasicAuthUsername)
+	if body.BasicAuthEnabled {
+		if !nginx.ValidBasicAuthUsername(body.BasicAuthUsername) {
+			return echo.NewHTTPError(http.StatusBadRequest, "basic auth username must be 1-64 characters of A-Z a-z 0-9 . _ -")
+		}
+		if len(body.BasicAuthPassword) > 72 {
+			return echo.NewHTTPError(http.StatusBadRequest, "basic auth password must be at most 72 characters")
+		}
+		if body.BasicAuthPassword == "" {
+			existing, _ := h.store.Security.GetBySiteID(ctx, id)
+			if existing == nil || existing.BasicAuthPassword == "" {
+				return echo.NewHTTPError(http.StatusBadRequest, "set a basic auth password")
+			}
+		} else if len(body.BasicAuthPassword) < 6 {
+			return echo.NewHTTPError(http.StatusBadRequest, "basic auth password must be at least 6 characters")
+		}
 	}
 
 	sec := &store.SiteSecurity{
@@ -624,55 +359,28 @@ func (h *siteHandler) updateSecurity(c echo.Context) error {
 		BasicAuthEnabled:  body.BasicAuthEnabled,
 		BasicAuthUsername: body.BasicAuthUsername,
 		BasicAuthPassword: body.BasicAuthPassword,
-		BlockedIPs:        body.BlockedIPs,
+		BlockedIPs:        blocked,
 	}
-	if err := h.store.Security.Upsert(c.Request().Context(), sec); err != nil {
+	if err := h.store.Security.Upsert(ctx, sec); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
-	h.store.NotifySiteUsers(c.Request().Context(), id, "security_changed", "Security Updated", "Site security settings were changed", "warning", "site", id)
-
-	// Write or remove htpasswd file based on basic auth state
-	if body.BasicAuthEnabled && body.BasicAuthUsername != "" && body.BasicAuthPassword != "" {
-		// Re-read to get the hashed password
-		stored, err := h.store.Security.GetBySiteID(c.Request().Context(), id)
-		if err == nil && stored.BasicAuthPassword != "" {
-			nginx.WriteHtpasswd(site.Domain, stored.BasicAuthUsername, stored.BasicAuthPassword)
-		}
-	} else {
-		nginx.RemoveHtpasswd(site.Domain)
+	// The site's own agent regenerates the vhost (with these settings, which
+	// the worker adds to every site.create payload) on the server that hosts
+	// the site, tests it with nginx -t and keeps the old vhost on failure.
+	job, err := h.enqueueVhostRegen(ctx, site, "Apply security settings for "+site.Domain)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to enqueue the vhost update")
 	}
 
-	// Regenerate nginx vhost with security settings
-	if nginxPath, err := exec.LookPath("nginx"); err == nil {
-		var port int
-		if site.AppPort.Valid {
-			port = int(site.AppPort.Int64)
-		}
-		sec, _ := h.store.Security.GetBySiteID(c.Request().Context(), id)
-		if vhostCfg, err := nginx.GenerateVhost(site, port, sec); err == nil {
-			nginxConfDir := "/etc/nginx/sites-enabled"
-			nginxAvailableDir := "/etc/nginx/sites-available"
-			os.MkdirAll(nginxConfDir, 0755)
-			os.MkdirAll(nginxAvailableDir, 0755)
-			enabledPath := filepath.Join(nginxConfDir, site.Domain+".conf")
-			availablePath := filepath.Join(nginxAvailableDir, site.Domain+".conf")
-			os.WriteFile(enabledPath, []byte(vhostCfg), 0644)
-			os.WriteFile(availablePath, []byte(vhostCfg), 0644)
-			// Validate and reload
-			cmd := exec.Command(nginxPath, "-t")
-			if err := cmd.Run(); err == nil {
-				exec.Command("systemctl", "reload", "nginx").Run()
-			}
-		}
-	}
+	h.store.NotifySiteUsers(ctx, id, "security_changed", "Security Updated", "Site security settings were changed", "warning", "site", id)
 
 	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, id, map[string]any{
 		"domain":  site.Domain,
 		"section": "security",
 	})
 
-	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Security updated"}, RequestID: rid})
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "queued", "message": "Security settings saved; applying them to the site", "job_id": job.ID}, RequestID: rid})
 }
 
 func (h *siteHandler) getSshFtp(c echo.Context) error {
@@ -744,20 +452,24 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 	}
 
 	homeDir := "/home/" + body.Username
-
-	// Determine site root for bind mount
-	siteRoot := site.RootPath
-	if siteRoot == "" && site.SystemUser.Valid && site.Domain != "" {
-		siteRoot = "/home/" + site.SystemUser.String + "/htdocs/" + site.Domain
+	ctx := c.Request().Context()
+	if site.RootPath == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "the site has no root path")
 	}
-
-	// Provision Linux user with chroot — generates SSH key pair
-	pubKey, privKey, err := h.provisionSSHUser(c, body.Username, body.Password, body.SSHKeys, homeDir, siteRoot)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "user provisioning failed: "+err.Error())
+	// The account (a chrooted Linux user) is created on the site's server.
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/create", map[string]any{
+		"username": body.Username, "site_root": site.RootPath, "ssh_keys": body.SSHKeys,
+		"accounts": h.sshAccountsOnServer(ctx, site.ServerID, "", body.Username),
+	}, 3*time.Minute)
+	if err != nil && code == 0 {
+		return echo.NewHTTPError(http.StatusBadGateway, "the site's agent is unreachable")
 	}
+	if code >= 400 {
+		return agentHTTPError(code, out)
+	}
+	pubKey, _ := out["ssh_public_key"].(string)
+	privKey, _ := out["ssh_private_key"].(string)
 
-	// Save to database
 	user := &store.SiteSSHUser{
 		SiteID:        id,
 		Username:      body.Username,
@@ -767,15 +479,11 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 		SSHPublicKey:  pubKey,
 	}
 	user.HomeDir = homeDir
-	if err := h.store.SSH.Create(c.Request().Context(), user); err != nil {
-		// Clean up the Linux user since DB save failed
-		h.deprovisionSSHUser(c, body.Username, homeDir)
+	if err := h.store.SSH.Create(ctx, user); err != nil {
+		// Undo on the server: the account must not exist without its record.
+		h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/delete",
+			map[string]any{"username": body.Username, "accounts": h.sshAccountsOnServer(ctx, site.ServerID, body.Username, "")}, 2*time.Minute)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
-	}
-
-	// Regenerate sshd config (now includes the new user from DB)
-	if err := h.generateSSHConfig(c); err != nil {
-		fmt.Printf("warning: generateSSHConfig failed: %v\n", err)
 	}
 
 	h.audit.RecordAction(c.Request().Context(), userID, "ssh_user_create", audit.ResourceSite, id, map[string]any{
@@ -783,7 +491,12 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 		"username": body.Username,
 	})
 
-	return c.JSON(http.StatusCreated, httpjson.Success{Data: map[string]any{"status": "success", "message": "SSH/FTP user created"}, RequestID: rid})
+	// The generated key pair is shown once (the UI displays it right after
+	// creation; it used to read these fields from a response without them).
+	return c.JSON(http.StatusCreated, httpjson.Success{Data: map[string]any{
+		"status": "success", "message": "SSH/FTP user created",
+		"username": body.Username, "ssh_public_key": pubKey, "ssh_private_key": privKey,
+	}, RequestID: rid})
 }
 
 func (h *siteHandler) deleteSshFtp(c echo.Context) error {
@@ -805,8 +518,19 @@ func (h *siteHandler) deleteSshFtp(c echo.Context) error {
 		return err
 	}
 
-	// Deprovision Linux user (unmount, delete user, cleanup)
-	h.deprovisionSSHUser(c, user.Username, user.HomeDir)
+	ctx := c.Request().Context()
+	site, _ := h.store.Sites.GetByID(ctx, user.SiteID)
+	if site == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	}
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/delete",
+		map[string]any{"username": user.Username, "accounts": h.sshAccountsOnServer(ctx, site.ServerID, user.Username, "")}, 2*time.Minute)
+	if err != nil && code == 0 {
+		return echo.NewHTTPError(http.StatusBadGateway, "the site's agent is unreachable")
+	}
+	if code >= 400 {
+		return agentHTTPError(code, out)
+	}
 
 	// Remove from database
 	if err := h.store.SSH.Delete(c.Request().Context(), user.SiteID, sshID); err != nil {
@@ -814,11 +538,6 @@ func (h *siteHandler) deleteSshFtp(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusNotFound, "SSH user not found")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
-	}
-
-	// Regenerate sshd config
-	if err := h.generateSSHConfig(c); err != nil {
-		fmt.Printf("warning: generateSSHConfig failed: %v\n", err)
 	}
 
 	h.audit.RecordAction(c.Request().Context(), userID, "ssh_user_delete", audit.ResourceSite, user.SiteID, map[string]any{
@@ -883,6 +602,28 @@ func (h *siteHandler) getSSHPrivateKey(c echo.Context) error {
 	}, RequestID: rid})
 }
 
+// syncSiteCron installs the site's complete cron job list on its server
+// (/etc/cron.d, run as the site's Linux user from the site root).
+func (h *siteHandler) syncSiteCron(ctx context.Context, site *store.Site, jobs []store.SiteCronJob) error {
+	if len(jobs) > 0 && (!site.SystemUser.Valid || site.SystemUser.String == "") {
+		return echo.NewHTTPError(http.StatusConflict, "this site has no Linux user to run cron jobs as")
+	}
+	list := make([]map[string]string, 0, len(jobs))
+	for _, j := range jobs {
+		list = append(list, map[string]string{"schedule": j.Schedule, "command": j.Command})
+	}
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/cron/sync", map[string]any{
+		"site_id": site.ID, "system_user": site.SystemUser.String, "root_path": site.RootPath, "jobs": list,
+	}, 30*time.Second)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, "could not reach the site's server: "+err.Error())
+	}
+	if code >= 400 {
+		return agentHTTPError(code, out)
+	}
+	return nil
+}
+
 func (h *siteHandler) listCron(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
@@ -940,15 +681,30 @@ func (h *siteHandler) createCron(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
-	if body.Command == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "command required")
-	}
 	if body.Schedule == "" {
 		body.Schedule = "* * * * *"
 	}
+	body.Schedule = strings.Join(strings.Fields(body.Schedule), " ")
+	body.Command = strings.TrimSpace(body.Command)
+	if err := validateSiteCron(body.Schedule, body.Command); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if site.Status == "suspended" {
+		return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+	}
 
+	ctx := c.Request().Context()
+	existing, err := h.store.Cron.ListBySiteID(ctx, id)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
 	job := &store.SiteCronJob{SiteID: id, Schedule: body.Schedule, Command: body.Command}
-	if err := h.store.Cron.Create(c.Request().Context(), job); err != nil {
+	// Installed on the server first: a job the server refused is not recorded.
+	if err := h.syncSiteCron(ctx, site, append(existing, *job)); err != nil {
+		return err
+	}
+	if err := h.store.Cron.Create(ctx, job); err != nil {
+		_ = h.syncSiteCron(ctx, site, existing)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -989,8 +745,28 @@ func (h *siteHandler) deleteCron(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
+	ctx := c.Request().Context()
+	existing, err := h.store.Cron.ListBySiteID(ctx, siteID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
+	remaining := make([]store.SiteCronJob, 0, len(existing))
+	found := false
+	for _, j := range existing {
+		if j.ID == cronID {
+			found = true
+			continue
+		}
+		remaining = append(remaining, j)
+	}
+	if !found {
+		return echo.NewHTTPError(http.StatusNotFound, "cron job not found")
+	}
+	if err := h.syncSiteCron(ctx, site, remaining); err != nil {
+		return err
+	}
 	// Scoped to the site in the URL: a cron job of another site is not found.
-	if err := h.store.Cron.Delete(c.Request().Context(), siteID, cronID); err != nil {
+	if err := h.store.Cron.Delete(ctx, siteID, cronID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "cron job not found")
 		}
@@ -1003,4 +779,33 @@ func (h *siteHandler) deleteCron(c echo.Context) error {
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Cron job deleted"}, RequestID: rid})
+}
+
+// enqueueVhostRegen queues a site.create job that only regenerates the
+// site's vhost on its server. The worker fills the payload with the site's
+// stored settings (runtime, PHP, app port, proxy URL, security).
+func (h *siteHandler) enqueueVhostRegen(ctx context.Context, site *store.Site, desc string) (*jobmodel.Job, error) {
+	return enqueueSiteVhostRegen(ctx, h.store, site, desc)
+}
+
+func enqueueSiteVhostRegen(ctx context.Context, st *store.Store, site *store.Site, desc string) (*jobmodel.Job, error) {
+	payload, _ := json.Marshal(map[string]any{
+		"site_id":     site.ID,
+		"name":        site.Name,
+		"domain":      site.Domain,
+		"runtime":     site.Runtime,
+		"root_path":   site.RootPath,
+		"vhost_regen": true,
+	})
+	job := &jobmodel.Job{
+		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
+		SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
+		Type:        jobmodel.TypeSiteCreate,
+		Description: desc,
+		Payload:     string(payload),
+	}
+	if err := st.Jobs.Create(ctx, job); err != nil {
+		return nil, err
+	}
+	return job, nil
 }

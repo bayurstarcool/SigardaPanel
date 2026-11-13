@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
@@ -261,6 +262,11 @@ func (h *siteHandler) create(c echo.Context) error {
 			body.DockerVolume, body.DockerRestart, body.DockerLanguage, body.RootPath); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
+		// The container is named after the site id (sp-site-<id>): custom
+		// names could collide with, and replace, another site's container.
+		if body.DockerName != "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "docker_name is assigned by the panel (sp-site-<id>); leave it empty")
+		}
 	}
 	if body.ManagedBy != "sigardapanel" && body.ManagedBy != "cloudpanel" && body.ManagedBy != "external" {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid managed_by")
@@ -498,6 +504,17 @@ func (h *siteHandler) delete(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
+	// SSH/FTP jails bind-mount the site root: remove them on the server
+	// first (their rows used to vanish with the site while the Linux users,
+	// mounts and keys stayed, and lost their chroot on the next sshd sync).
+	h.removeSiteSSHAccounts(c.Request().Context(), site)
+	// Its cron jobs would otherwise keep running from a deleted root.
+	if jobs, _ := h.store.Cron.ListBySiteID(c.Request().Context(), id); len(jobs) > 0 {
+		if err := h.syncSiteCron(c.Request().Context(), site, nil); err != nil {
+			slog.Warn("api: remove cron jobs of deleted site", "site_id", id, "error", err)
+		}
+	}
+
 	// Clean up databases before deleting site. Mirror the dedicated
 	// delete-database endpoint: drop the real MySQL database (not just its
 	// record), enqueue the agent job as a fallback, then remove the record —
@@ -701,8 +718,27 @@ func (h *siteHandler) updateConfig(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 			}
 		}
+		changed := *body.ProxyPassURL != site.ProxyPassURL.String
+		if changed && site.Runtime == "proxy" {
+			if *body.ProxyPassURL == "" {
+				return echo.NewHTTPError(http.StatusBadRequest, "a proxy site needs a proxy_pass_url")
+			}
+			if site.Status == "suspended" {
+				return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+			}
+		}
 		if err := h.store.Sites.UpdateProxyPassURL(c.Request().Context(), id, *body.ProxyPassURL); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		// The vhost carries the upstream: regenerate it, or the change
+		// would only show in the panel.
+		if changed && site.Runtime == "proxy" {
+			fresh, _ := h.store.Sites.GetByID(c.Request().Context(), id)
+			if fresh != nil {
+				if _, err := h.enqueueVhostRegen(c.Request().Context(), fresh, "Point "+fresh.Domain+" at its new upstream"); err != nil {
+					slog.Warn("api: queue vhost regen after proxy change", "site_id", id, "error", err)
+				}
+			}
 		}
 	}
 
@@ -948,7 +984,33 @@ func (h *siteHandler) transfer(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "cannot transfer to yourself")
 	}
 
-	if err := h.store.Sites.Transfer(c.Request().Context(), id, target.ID); err != nil {
+	if site.Status == "suspended" {
+		return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+	}
+	// SSH/FTP jails bind-mount the current root path.
+	if accts, _ := h.store.SSH.ListBySiteID(c.Request().Context(), id); len(accts) > 0 {
+		return echo.NewHTTPError(http.StatusConflict, "remove the site's SSH/FTP accounts before transferring it")
+	}
+	// Cron jobs run as the current owner's Linux user from the current root.
+	if jobs, _ := h.store.Cron.ListBySiteID(c.Request().Context(), id); len(jobs) > 0 {
+		return echo.NewHTTPError(http.StatusConflict, "remove the site's cron jobs before transferring it")
+	}
+	// The files move on the site's server first (site.transfer job); owner,
+	// root path and system user change only when that succeeded, then the
+	// vhost is regenerated for the new path.
+	newRoot := store.TransferRoot(target.Username, site.Domain)
+	payload, _ := json.Marshal(map[string]any{
+		"site_id": site.ID, "domain": site.Domain, "old_root": site.RootPath, "new_root": newRoot,
+		"system_user": target.Username, "new_owner_id": target.ID,
+	})
+	job := &jobmodel.Job{
+		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
+		SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
+		Type:        jobmodel.TypeSiteTransfer,
+		Description: fmt.Sprintf("Transfer %s to %s", site.Domain, target.Username),
+		Payload:     string(payload),
+	}
+	if err := h.store.Jobs.Create(c.Request().Context(), job); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -957,11 +1019,8 @@ func (h *siteHandler) transfer(c echo.Context) error {
 		"to":   target.ID,
 	})
 
-	h.store.Notify(c.Request().Context(), site.OwnerID.Int64, "site_transferred", "Site Transferred", fmt.Sprintf("Transferred %s to %s", site.Domain, target.Username), "info", "site", id)
-	h.store.Notify(c.Request().Context(), target.ID, "site_received", "Site Received", fmt.Sprintf("You received %s", site.Domain), "success", "site", id)
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      map[string]any{"transferred": true, "site_id": id, "new_owner_email": body.NewOwnerEmail, "new_owner_id": target.ID},
+	return c.JSON(http.StatusAccepted, httpjson.Success{
+		Data:      map[string]any{"transferred": false, "status": "queued", "job_id": job.ID, "site_id": id, "new_owner_email": body.NewOwnerEmail, "new_owner_id": target.ID},
 		RequestID: rid,
 	})
 }
@@ -1086,16 +1145,15 @@ func (h *siteHandler) usage(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
+	// du runs on the site's server (the API host may not have the files).
 	var diskUsedBytes int64
 	if site.RootPath != "" {
-		out, err := execCommand("du", "-sb", site.RootPath)
-		if err == nil {
-			parts := strings.SplitN(out, "\t", 2)
-			if len(parts) >= 1 {
-				if sz, parseErr := strconv.ParseInt(parts[0], 10, 64); parseErr == nil {
-					diskUsedBytes = sz
-				}
-			}
+		code, out, err := h.siteAgentCall(c.Request().Context(), site, http.MethodPost, "/tasks/site/usage", map[string]any{"root_path": site.RootPath}, 2*time.Minute)
+		if err != nil || code >= 400 {
+			return echo.NewHTTPError(http.StatusBadGateway, "could not get the disk usage from the site's server")
+		}
+		if v, ok := out["disk_used_bytes"].(float64); ok {
+			diskUsedBytes = int64(v)
 		}
 	}
 
@@ -1128,7 +1186,7 @@ func (h *siteHandler) gitBranches(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // gitLog proxies to agent GET /tasks/git/log.
@@ -1151,20 +1209,25 @@ func (h *siteHandler) gitLog(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // gitRollback proxies to agent POST /tasks/git/rollback.
 func (h *siteHandler) gitRollback(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-	site, server, err := h.resolveSiteAndServer(c)
+	// Changing the deployed code needs write permission on the site (read
+	// assignees could do it, owners with the user role could not).
+	site, server, err := h.resolveSiteAndServerPerm(c, "write")
 	if err != nil {
 		return err
 	}
-	reqBody, _ := io.ReadAll(c.Request().Body)
-	var body map[string]any
-	json.Unmarshal(reqBody, &body)
-	body["root_path"] = site.RootPath
+	var req struct {
+		Commit string `json:"commit"`
+	}
+	if err := c.Bind(&req); err != nil || strings.TrimSpace(req.Commit) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "commit is required")
+	}
+	body := map[string]any{"commit": strings.TrimSpace(req.Commit), "root_path": site.RootPath}
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/rollback"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
@@ -1174,20 +1237,25 @@ func (h *siteHandler) gitRollback(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // gitCheckout proxies to agent POST /tasks/git/checkout.
 func (h *siteHandler) gitCheckout(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-	site, server, err := h.resolveSiteAndServer(c)
+	// Changing the deployed code needs write permission on the site (read
+	// assignees could do it, owners with the user role could not).
+	site, server, err := h.resolveSiteAndServerPerm(c, "write")
 	if err != nil {
 		return err
 	}
-	reqBody, _ := io.ReadAll(c.Request().Body)
-	var body map[string]any
-	json.Unmarshal(reqBody, &body)
-	body["root_path"] = site.RootPath
+	var req struct {
+		Branch string `json:"branch"`
+	}
+	if err := c.Bind(&req); err != nil || strings.TrimSpace(req.Branch) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "branch is required")
+	}
+	body := map[string]any{"branch": strings.TrimSpace(req.Branch), "root_path": site.RootPath}
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/checkout"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
@@ -1197,11 +1265,17 @@ func (h *siteHandler) gitCheckout(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // resolveSiteAndServer resolves site and its server from URL params.
 func (h *siteHandler) resolveSiteAndServer(c echo.Context) (*store.Site, *store.Server, error) {
+	return h.resolveSiteAndServerPerm(c, "read")
+}
+
+// resolveSiteAndServerPerm is resolveSiteAndServer requiring a permission
+// level on the site, checked before anything about the server is revealed.
+func (h *siteHandler) resolveSiteAndServerPerm(c echo.Context, perm string) (*store.Site, *store.Server, error) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
@@ -1212,7 +1286,8 @@ func (h *siteHandler) resolveSiteAndServer(c echo.Context) (*store.Site, *store.
 	}
 	// Ownership / assignment check: without it any logged-in user could read
 	// another tenant's repository (branches, history) or roll it back.
-	if !h.canAccess(c.Request().Context(), sessionFromEcho(c), site) {
+	if !h.canAccess(c.Request().Context(), sessionFromEcho(c), site) ||
+		(perm != "read" && !h.checkSitePermission(c.Request().Context(), sessionFromEcho(c), site, perm)) {
 		return nil, nil, echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 	server, err := h.store.Servers.GetByID(c.Request().Context(), site.ServerID)
@@ -1238,9 +1313,10 @@ func (h *siteHandler) appResourceUsage(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
 	}
 
-	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	_ = id
+	site, err := h.getSiteForUserPerm(c, sitePermRead)
+	if err != nil {
+		return err
 	}
 
 	server, err := h.store.Servers.GetByID(c.Request().Context(), site.ServerID)
@@ -1301,9 +1377,9 @@ func (h *siteHandler) appUpdateResourceLimits(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
 	}
 
-	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	site, err := h.getSiteForUserPerm(c, sitePermWrite)
+	if err != nil {
+		return err
 	}
 
 	var body struct {
@@ -1313,8 +1389,8 @@ func (h *siteHandler) appUpdateResourceLimits(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
 
-	if body.MemoryMax <= 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "memory_max is required (MB)")
+	if body.MemoryMax < 64 || body.MemoryMax > 65536 {
+		return echo.NewHTTPError(http.StatusBadRequest, "memory_max must be 64-65536 (MB)")
 	}
 
 	// Update memory limit in DB
@@ -1322,18 +1398,23 @@ func (h *siteHandler) appUpdateResourceLimits(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "update failed")
 	}
 
-	// Restart the app to apply new limits
-	server, err := h.store.Servers.GetByID(c.Request().Context(), site.ServerID)
-	if err != nil || server == nil || !server.AgentURL.Valid || server.AgentToken == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "agent not configured")
+	// Apply the new limit: app.restart rewrites the systemd unit with
+	// MemoryMax (a bare "systemctl restart" kept the old limit).
+	if site.AppStatus.String == "running" {
+		payload, _ := json.Marshal(map[string]any{
+			"site_id": site.ID, "domain": site.Domain, "root_path": site.RootPath,
+			"system_user": site.SystemUser.String, "app_port": site.AppPort.Int64,
+			"app_command": site.AppCommand.String, "app_memory_max": body.MemoryMax,
+		})
+		if err := h.store.Jobs.Create(c.Request().Context(), &jobmodel.Job{
+			ServerID: sql.NullInt64{Int64: site.ServerID, Valid: true},
+			SiteID:   sql.NullInt64{Int64: site.ID, Valid: true},
+			Type:     jobmodel.TypeAppRestart,
+			Payload:  string(payload),
+		}); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to enqueue the restart")
+		}
 	}
-
-	svcName := fmt.Sprintf("sigarda-app-%d", site.ID)
-	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/command/exec"
-	restartPayload := map[string]string{
-		"command": fmt.Sprintf("systemctl restart %s", svcName),
-	}
-	agentRequest("POST", agentURL, server.AgentToken, restartPayload)
 
 	h.audit.RecordAction(c.Request().Context(), sessionFromEcho(c).UserID, audit.ActionSiteUpdate, "site", id, map[string]any{
 		"memory_max": body.MemoryMax,

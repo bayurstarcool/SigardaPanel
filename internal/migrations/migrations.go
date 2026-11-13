@@ -95,6 +95,7 @@ var AllMigrations = []Migration{
 	NormalizeSSLExpiresAtSchema,
 	UserAPIKeysSchema,
 	ServerAgentVersionSchema,
+	BackupProviderSchema,
 }
 
 func Down(db *sql.DB) error {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sigardapanel/internal/auth"
 	"strings"
 	"testing"
 
@@ -124,10 +125,15 @@ func TestTerminal_TicketFlow(t *testing.T) {
 		t.Error("unknown ticket must fail")
 	}
 
-	// Admin gets a root shell (no user= param) and cannot be spoofed via the client.
-	code, ticket, _ = requestTicket(t, e, adminToken, map[string]any{"server_id": srv.ID})
+	// The fake agent is on loopback, i.e. the panel host: a root shell there
+	// is super_admin only, and a super_admin cannot be spoofed via the client.
+	if code, _, _ := requestTicket(t, e, adminToken, map[string]any{"server_id": srv.ID}); code != http.StatusForbidden {
+		t.Fatalf("admin root ticket on the panel host: %d", code)
+	}
+	superToken := roleToken(t, s, ctx, "root-terminal", auth.RoleSuperAdmin)
+	code, ticket, _ = requestTicket(t, e, superToken, map[string]any{"server_id": srv.ID})
 	if code != http.StatusOK {
-		t.Fatalf("admin ticket: %d", code)
+		t.Fatalf("super_admin ticket: %d", code)
 	}
 	conn, _, err = websocket.DefaultDialer.Dial(wsURL+ticket+"&user=someoneelse", nil)
 	if err != nil {

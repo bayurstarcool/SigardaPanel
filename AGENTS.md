@@ -158,6 +158,8 @@ sigardapanel
 ├── logs         tail
 ├── metrics      latest|list|gpu
 ├── system       disk-usage|updates
+├── panel-update status|check|apply|auto|backups|rollback|agents|update-agents|agents-auto
+│                                             (alias self-update; super_admin)
 ├── user         list|create|update|reset-password|delete
 ├── apikey       list|create|revoke
 ├── audit        list|purge
@@ -465,6 +467,16 @@ shows would take other packages with it.
 - `GET /api/v1/agents/install` — Agent install script
 - `POST /api/v1/agents/tokens` — Create registration token
 - `GET/PUT /api/v1/settings/retention` — Retention settings
+- `GET /api/v1/system/panel-update` — Installed/latest release, update status (`?refresh=1` re-checks GitHub; super_admin)
+- `POST /api/v1/system/panel-update` — Install the latest release (202; super_admin, interactive session)
+- `GET /api/v1/system/panel-update/summary` — Cached `{current_version, latest_tag, update_available}` for the header badge (super_admin)
+- `PUT /api/v1/system/panel-update/settings` — `{auto_update, auto_update_window: {start,end}|null}`, partial (super_admin)
+- `GET /api/v1/system/panel-update/backups` — Pre-update backups (super_admin)
+- `POST /api/v1/system/panel-update/rollback` — `{backup}`: restore binary, web, database (202; super_admin)
+- `GET /api/v1/system/agent-updates` — Agent version + updater state per server, `target_version` (super_admin)
+- `POST /api/v1/system/agent-updates` — `{server_ids}` or `{all:true}`: update remote agents to the panel version (super_admin)
+- `PUT /api/v1/system/agent-updates/settings` — `{auto_update}` for remote agents (super_admin)
+- `POST /api/v1/servers/:id/agent-update` — Update one remote agent (202; super_admin)
 - `POST /api/v1/databases/phpmyadmin-credentials` — phpMyAdmin login
 - `POST /api/v1/databases/phpmyadmin-reset-passwords` — Reset passwords
 - `GET /api/v1/database-server` — DB server info
@@ -508,6 +520,114 @@ location /api/ws/ {
     proxy_send_timeout 3600s;
 }
 ```
+
+## Security Rules (feature audit, Nov 2026)
+
+These are enforced in code and covered by tests; keep them when changing handlers.
+
+- **super_admin only**: service tokens, backup configs, exec-sql, phpMyAdmin password
+  reset, SSL renew-all, panel update/rollback, agent updates. Non-super admins see only
+  their own audit entries and the site mappings of users they created, and can change or
+  delete only `user`-role accounts they created.
+- **Panel host = super_admin**: on the local server (loopback agent) container
+  create/exec/compose/images/volumes/networks, firewall, fail2ban, bot blocker, pm2,
+  mail, redis flush and the root terminal need super_admin
+  (`requireSuperAdminOnPanelHost`); these server actions are audited (`auditServerAction`).
+- **Agent errors are errors**: proxied agent calls go through `agentProxyResponse`
+  (agent status >= 400, or `ok:false` on non-GET, becomes an API error); `apiFetch`
+  throws on any non-2xx; job results with an explicit `ok:false` fail the job.
+- **Sessions**: a password change revokes the user's other sessions; an admin reset
+  revokes all and sets `password_changed_at = NULL`. 2FA management rejects API keys and
+  impersonation; replacing recovery codes needs a TOTP code; disabling 2FA deletes them.
+  Cookie-authenticated unsafe requests need a same-site Origin/Sec-Fetch-Site
+  (`cookieCSRFGuard`).
+- **Vhosts**: security settings (blocked IPs = IP/CIDR only, basic-auth user
+  `[A-Za-z0-9._-]`) are applied by the site's agent via a `site.create` regeneration; the
+  worker adds stored settings (security, port, proxy URL, PHP) to every `site.create`
+  payload and sets `vhost_regen` for existing sites (no status change, no `ssl.issue`,
+  refused for suspended sites). `nginx.GenerateVhost` re-validates everything; issued
+  Let's Encrypt certificates are installed in the vhost; `/backups/` is denied.
+- **Agent URLs**: `scheme://host[:port]` only; loopback and link-local refused, private
+  addresses need `SIGARDAPANEL_ALLOW_PRIVATE_AGENTS`.
+- **MySQL accounts are global**: site writers may only grant accounts the panel manages
+  for sites they can manage; system accounts are never grantable; granting never changes
+  a password; privileges/host are validated.
+- **Backups**: downloads refuse symlinks/paths outside the backup dirs; retention counts
+  only completed backups (per database); excludes are top-level only and restore keeps
+  `.env`/`vendor`/`backups` from the current root.
+- **Firewall**: rules are validated and built in ufw syntax; enable keeps SSH/80/443/agent
+  open; deny-for-everyone or deleting the last allow of those ports is refused.
+
+### Site operations run on the site's agent
+
+The API process is sandboxed (ProtectSystem/ProtectHome) and sites may live on other
+servers, so it never touches site files or host config itself. Each feature calls the
+site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
+
+| Feature | Agent route / job | Notes |
+|---|---|---|
+| File manager | `POST /tasks/files/op`, `/tasks/files/upload`, `GET /tasks/files/download` | `internal/sitefs`; owner = site user |
+| Raw vhost | `/tasks/vhost/get`, `/validate`, `/put` | put keeps the file only if `nginx -t` passes |
+| Disk usage, logs | `/tasks/site/usage`, `/tasks/logs/read` | |
+| SSH/FTP accounts | `/tasks/sshftp/create`, `/delete` | jails, fstab marker, sshd `-t` before reload |
+| Transfer | job `site.transfer` → `/tasks/site/transfer` | record + vhost regen only after the move; refused with SSH accounts, cron jobs or when suspended |
+| Cron | `/tasks/cron/sync` | `/etc/cron.d/sigardapanel-site-<id>`, runs as the site user (never root/system users) from the root; recorded only after the server accepted it; paused while suspended (`.suspended`), removed on delete |
+| IP restrictions | vhost regen | worker merges deny rules into blocked IPs and allow rules into an allowlist ending in `deny all` |
+| Backup files | job `backup.delete` (`store.QueueBackupFileDelete`) | never `os.Remove` in the API/worker; `clear_storage_path` for copies already on S3 |
+| Restore | `backup.restore` with `databases` | dumps imported before files are swapped; `.sql` backups import only |
+
+- **Backups remember their provider** (`backups.provider_id`, set by the worker from the
+  job's `s3_config`); `store.BackupProviderFor` resolves backup → site → default for
+  delete/restore/download/retention. Expired backups' S3 copies are deleted too.
+- **Login lock**: 20 failures per account in 15 min lock the account, except for
+  addresses it signed in from in the last 90 days (audit log); 10/IP/15 min applies.
+- **Docker sites** use the container `sp-site-<id>` (custom names refused); tenant
+  container actions match name, full id or 12-char short id only.
+- **Agent re-registration** from a known agent URL re-binds that server row.
+- **Cloudflare API tokens** are encrypted at rest (`secrets.Encrypt`).
+
+## Panel Self-Update
+
+Settings → **Panel update** (super_admin). `internal/selfupdate` looks up the latest
+GitHub release (cached; tags must be `vX.Y.Z`) and compares versions. The API
+(`internal/apihttp/panel_update.go`) asks the panel host's own agent
+(`SIGARDAPANEL_AGENT_URL`, must be loopback) to install it; the agent
+(`internal/agenthttp/panel_update.go`, `GET|POST /tasks/panel/update`) writes the
+installer embedded in the binary (`installer/embed.go` → `installer/install.sh`) to
+`/var/lib/sigardapanel-update/` and runs `install.sh update` with
+`SIGARDA_VERSION=<tag>` in the transient unit `sigardapanel-update.service`
+(`systemd-run --collect`), so it survives the agent/API/web restarts. Signature
+check, backup and rollback are the installer's. The agent refuses dev builds,
+hosts without `/etc/sigardapanel/panel.env`, non-newer tags, a second run and a
+failed preflight (systemd-run, free space for backup/download/binary). A new start
+archives the previous run to `history/` (last 10, shown in the card).
+`StartPanelUpdateChecker` (1 min after start, then hourly) announces the result of
+the latest run once (`panel_update_reported_run`), notifies super admins once per new
+release and, with `app_settings.panel_auto_update=true` and inside
+`panel_auto_update_window` ("start-end" local hours), starts one update per release
+(`panel_update_auto_tag`). `watchPanelUpdate` follows a started update and announces
+its result without waiting for the hourly tick. `selfupdate.Checker` shares one lookup
+between callers, retries a failed lookup after 5 min and never caches a lookup the
+caller cancelled. CLI: `internal/commands/panelupdate.go`.
+
+Rollback: `install.sh rollback [BACKUP|list]` (`make_backup`/`restore_backup` are shared
+with `update`; backups carry `VERSION`, `TARGET`, `KIND` = update|pre-rollback). It
+backs up the current state first and restores it if the rolled-back panel is unhealthy.
+Agent `GET /tasks/panel/backups`, `POST /tasks/panel/rollback {backup}` run it in the same
+unit as updates and write a `hold` file (the version rolled back from); `POST
+/tasks/panel/update {tag, auto:true}` refuses held versions, a manual update clears the hold.
+
+Remote agents: the same updater type with kind `agent` (`newAgentUpdater`) runs the
+embedded `installer/agent-update.sh <tag>` in `sigardapanel-agent-update.service`
+(`GET|POST /tasks/agent/update`; refused on the panel host and without
+`/etc/sigardapanel/agent.env`). API: `internal/apihttp/agent_update.go` — target is the
+panel's version, any 404 from an agent means "too old: reinstall once";
+`agentUpdateTick` (with the panel tick) announces results (`agent_update_reported_<id>`)
+and with `agent_auto_update=true` starts one update per server and release
+(`agent_update_tried_<id>`). The release key is pinned in install.sh, agent-update.sh
+and `releasePublicKey` (checked by `scripts/test-installers.sh`, which also runs
+`scripts/test-installer-sandbox.sh` and `scripts/test-agent-update-sandbox.sh`). Injected agent routers get a
+runner that executes nothing (`RouterOptions.PanelUpdate*`). `build.sh` must copy `installer/`.
 
 ## Fail2ban Management
 

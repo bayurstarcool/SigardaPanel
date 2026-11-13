@@ -271,6 +271,22 @@ func (h *TwoFactorHandler) generateRecoveryCodes(c echo.Context) error {
 		})
 	}
 
+	// The first set is handed out right after enabling 2FA. Replacing an
+	// existing set needs a current authenticator code: a stolen session must
+	// not be able to mint codes that log in without the second factor.
+	if n, _ := h.store.TwoFactor.CountRecoveryCodes(c.Request().Context(), userID); n > 0 {
+		var body struct {
+			Code string `json:"code"`
+		}
+		_ = c.Bind(&body)
+		secret, err := h.store.TwoFactor.GetTOTPSecret(c.Request().Context(), userID)
+		if body.Code == "" || err != nil || secret == "" || !totp.Validate(body.Code, secret) {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error": "enter a current authenticator code to replace your recovery codes",
+			})
+		}
+	}
+
 	// Generate 10 recovery codes
 	codes := make([]string, 10)
 	codeHashes := make([]string, 10)

@@ -121,3 +121,37 @@ func computeHMAC(body []byte, secret string) string {
 	h.Write(body)
 	return "sha256=" + hex.EncodeToString(h.Sum(nil))
 }
+
+// webhookSecret answers GET /api/v1/sites/:id/webhook (site admins): the
+// deploy URL path and secret, creating the secret on first use. POST
+// /api/v1/sites/:id/webhook/rotate replaces it (the old one stops working).
+func (h *siteHandler) webhookSecret(c echo.Context) error {
+	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+	ctx := c.Request().Context()
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid id")
+	}
+	site, err := h.store.Sites.GetByID(ctx, id)
+	if err != nil || site == nil || !h.checkSitePermission(ctx, sessionFromEcho(c), site, "admin") {
+		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	}
+	rotate := c.Request().Method == http.MethodPost
+	secret := site.WebhookSecret.String
+	if rotate || secret == "" {
+		if secret, err = h.store.Sites.GenerateWebhookSecret(ctx, id); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+	}
+	if rotate {
+		var userID int64
+		if sess := sessionFromEcho(c); sess != nil {
+			userID = sess.UserID
+		}
+		h.audit.RecordAction(ctx, userID, "webhook_secret_rotate", "site", id, map[string]any{"domain": site.Domain})
+	}
+	return c.JSON(http.StatusOK, map[string]any{"data": map[string]any{
+		"path":   fmt.Sprintf("/api/v1/webhooks/deploy/%d", id),
+		"secret": secret,
+	}, "request_id": rid})
+}

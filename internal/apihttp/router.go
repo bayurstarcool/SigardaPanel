@@ -60,6 +60,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// Request timeout middleware
 	e.Use(TimeoutMiddleware())
 
+	// Cookie-authenticated state changes must come from this site.
+	e.Use(cookieCSRFGuard)
+
 	// Custom HTTP error handler to use our JSON format
 	e.HTTPErrorHandler = customErrorHandler
 
@@ -93,12 +96,12 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// Two-Factor Authentication (2FA) endpoints
 	tfaH := newTwoFactorHandler(s)
-	e.POST("/api/v1/auth/2fa/setup", tfaH.setup2FA, RequireAuth(s))
-	e.POST("/api/v1/auth/2fa/enable", tfaH.enable2FA, RequireAuth(s))
-	e.POST("/api/v1/auth/2fa/disable", tfaH.disable2FA, RequireAuth(s))
+	e.POST("/api/v1/auth/2fa/setup", tfaH.setup2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
+	e.POST("/api/v1/auth/2fa/enable", tfaH.enable2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
+	e.POST("/api/v1/auth/2fa/disable", tfaH.disable2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
 	e.POST("/api/v1/auth/2fa/verify", tfaH.verify2FA, RequireAuth(s))
 	e.GET("/api/v1/auth/2fa/status", tfaH.status2FA, RequireAuth(s))
-	e.POST("/api/v1/auth/2fa/recovery-codes", tfaH.generateRecoveryCodes, RequireAuth(s))
+	e.POST("/api/v1/auth/2fa/recovery-codes", tfaH.generateRecoveryCodes, RequireAuth(s), RequireUserSession, rejectImpersonation)
 
 	// Member routes (separate database)
 	if memberDB != nil {
@@ -155,6 +158,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.DELETE("/api/v1/sites/:id", sitesH.delete, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/deploy", sitesH.deploy, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/config", sitesH.updateConfig, RequireAuth(s))
+	e.GET("/api/v1/sites/:id/webhook", sitesH.webhookSecret, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/webhook/rotate", sitesH.webhookSecret, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/reload-nginx", sitesH.reloadNginx, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/suspend", sitesH.suspend, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/sites/:id/resume", sitesH.resume, RequireAuth(s), RequireAdmin(s))
@@ -179,7 +184,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/sites/:id/ssl", sslH.status, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/ssl/issue", sslH.issue, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/ssl/renew", sslH.renew, RequireAuth(s))
-	e.POST("/api/v1/ssl/renew-all", sslH.renewAll, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/ssl/renew-all", sslH.renewAll, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin)) // acts on every tenant's sites
 
 	// App process management (node/go/python runtimes)
 	e.GET("/api/v1/sites/:id/app/status", sitesH.appStatus, RequireAuth(s))
@@ -188,7 +193,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/sites/:id/app/restart", sitesH.appRestart, RequireAuth(s))
 	e.PUT("/api/v1/sites/:id/app/config", sitesH.appUpdateConfig, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/app/resource-usage", sitesH.appResourceUsage, RequireAuth(s))
-	e.PUT("/api/v1/sites/:id/app/resource-limits", sitesH.appUpdateResourceLimits, RequireAuth(s), RequireAdmin(s))
+	e.PUT("/api/v1/sites/:id/app/resource-limits", sitesH.appUpdateResourceLimits, RequireAuth(s))
 
 	// PHP runtime config (per-site version + php.ini)
 	e.GET("/api/v1/sites/:id/php/config", sitesH.getPHPConfig, RequireAuth(s))
@@ -203,7 +208,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/sites/:id/vhost", sitesH.getVhost, RequireAuth(s))
 	// Raw vhost editing can read/write arbitrary files via nginx directives, so it is admin-only.
 	e.PUT("/api/v1/sites/:id/vhost", sitesH.updateVhost, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/sites/:id/vhost/validate", sitesH.validateVhost, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/vhost/validate", sitesH.validateVhost, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/sites/:id/varnish", sitesH.getVarnish, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/varnish/purge", sitesH.purgeVarnish, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/security", sitesH.getSecurity, RequireAuth(s))
@@ -269,13 +274,28 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// ─── Backup Configs ────────────────────────────────────
 	bcfgH := newBackupConfigHandler(s, auditRec)
-	e.GET("/api/v1/backup-configs", bcfgH.list, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/backup-configs", bcfgH.create, RequireAuth(s), RequireAdmin(s))
-	e.PATCH("/api/v1/backup-configs/:id", bcfgH.update, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/backup-configs/:id", bcfgH.delete, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/backup-configs/:id/run", bcfgH.run, RequireAuth(s), RequireAdmin(s))
+	e.GET("/api/v1/backup-configs", bcfgH.list, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/backup-configs", bcfgH.create, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.PATCH("/api/v1/backup-configs/:id", bcfgH.update, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.DELETE("/api/v1/backup-configs/:id", bcfgH.delete, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/backup-configs/:id/run", bcfgH.run, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// ─── Retention Settings ─────────────────────────────────
+	// Panel self-update (super_admin, interactive session)
+	puH := &panelUpdateHandler{store: s, db: db, audit: auditRec}
+	e.GET("/api/v1/system/panel-update", puH.status, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/system/panel-update", puH.start, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/system/panel-update/summary", puH.summary, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/system/panel-update/backups", puH.backups, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/system/panel-update/rollback", puH.rollback, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	// Remote agent updates (super_admin, interactive session)
+	auH := &agentUpdateHandler{store: s, db: db, audit: auditRec}
+	e.GET("/api/v1/system/agent-updates", auH.list, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/system/agent-updates", auH.startMany, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.PUT("/api/v1/system/agent-updates/settings", auH.settings, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/servers/:id/agent-update", auH.startOne, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.PUT("/api/v1/system/panel-update/settings", puH.settings, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+
 	e.GET("/api/v1/settings/retention", getRetention(db), RequireAuth(s), RequireAdmin(s))
 	e.PUT("/api/v1/settings/retention", setRetention(db), RequireAuth(s), RequireAdmin(s))
 
@@ -288,9 +308,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/servers/:id/gpu", metricH.gpu, RequireAuth(s))
 	// Service Tokens (admin only)
 	stH := newServiceTokenHandler(s)
-	e.GET("/api/v1/service-tokens", stH.list, RequireAuth(s), RequireAdmin(s), RequireUserSession)
-	e.POST("/api/v1/service-tokens", stH.create, RequireAuth(s), RequireAdmin(s), RequireUserSession)
-	e.DELETE("/api/v1/service-tokens/:id", stH.revoke, RequireAuth(s), RequireAdmin(s), RequireUserSession)
+	e.GET("/api/v1/service-tokens", stH.list, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/service-tokens", stH.create, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.DELETE("/api/v1/service-tokens/:id", stH.revoke, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// Alert endpoints (admin only)
 	alertH := newAlertHandler(s, auditRec)
@@ -329,10 +349,10 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// phpMyAdmin credentials (internal only — localhost calls for auto-login)
 	e.GET("/api/v1/databases/:id/pma-credentials", dbH.pmaCredentials, RequireAuth(s))
-	e.POST("/api/v1/databases/exec-sql", dbH.execSQL, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/databases/exec-sql", dbH.execSQL, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// Reset passwords for imported users (admin only)
-	e.POST("/api/v1/databases/phpmyadmin-reset-passwords", dbH.phpMyAdminResetPasswords, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/databases/phpmyadmin-reset-passwords", dbH.phpMyAdminResetPasswords, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// Database server management
 	dbServerH := newDBServerHandler(s, auditRec)
@@ -341,7 +361,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/database-server/import", dbServerH.importDatabases, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
 
 	// Audit log endpoint (admin only)
-	auditH := audit.NewHandler(s.AuditLogs, RequireAdmin(s))
+	auditH := audit.NewHandler(s.AuditLogs, scopeAuditLogs(s))
 	auditGroup := e.Group("/api/v1", RequireAuth(s))
 	auditH.Register(auditGroup)
 	// Purging old audit entries is global and destructive: super_admin with
@@ -405,52 +425,52 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/servers/:id/docker/container/start", stackH.dockerContainerStart, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/servers/:id/docker/container/stop", stackH.dockerContainerStop, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/servers/:id/docker/container/restart", stackH.dockerContainerRestart, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/container/remove", stackH.dockerContainerRemove, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/container/create", stackH.dockerContainerCreate, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/container/remove", stackH.dockerContainerRemove, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/container/create", stackH.dockerContainerCreate, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/container/logs", stackH.dockerContainerLogs, RequireAuth(s))
-	e.POST("/api/v1/servers/:id/docker/container/exec", stackH.dockerContainerExec, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/container/exec", stackH.dockerContainerExec, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/images", stackH.dockerImages, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/:id/docker/images/search", stackH.dockerSearchImages, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/compose/up", stackH.dockerComposeUp, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/compose/down", stackH.dockerComposeDown, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/image/pull", stackH.dockerImagePull, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/image/remove", stackH.dockerImageRemove, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/compose/up", stackH.dockerComposeUp, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/compose/down", stackH.dockerComposeDown, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/image/pull", stackH.dockerImagePull, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/image/remove", stackH.dockerImageRemove, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/volumes", stackH.dockerVolumes, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/volume/create", stackH.dockerVolumeCreate, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/volume/remove", stackH.dockerVolumeRemove, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/volume/create", stackH.dockerVolumeCreate, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/volume/remove", stackH.dockerVolumeRemove, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/networks", stackH.dockerNetworks, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/network/create", stackH.dockerNetworkCreate, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/network/remove", stackH.dockerNetworkRemove, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/docker/network/create", stackH.dockerNetworkCreate, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/network/remove", stackH.dockerNetworkRemove, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/info", stackH.dockerInfo, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/:id/docker/disk-usage", stackH.dockerDiskUsage, RequireAuth(s), RequireAdmin(s))
 
 	// ─── Git Deploy v2 ──
 	e.GET("/api/v1/sites/:id/git/branches", sitesH.gitBranches, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/git/log", sitesH.gitLog, RequireAuth(s))
-	e.POST("/api/v1/sites/:id/git/rollback", sitesH.gitRollback, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/sites/:id/git/checkout", sitesH.gitCheckout, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/sites/:id/git/rollback", sitesH.gitRollback, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/git/checkout", sitesH.gitCheckout, RequireAuth(s))
 
 	// ─── Firewall (UFW) Management ──
 	e.GET("/api/v1/servers/:id/firewall/status", stackH.firewallStatus, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/enable", stackH.firewallEnable, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/disable", stackH.firewallDisable, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/allow", stackH.firewallAllow, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/deny", stackH.firewallDeny, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/delete", stackH.firewallDelete, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/firewall/enable", stackH.firewallEnable, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/disable", stackH.firewallDisable, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/allow", stackH.firewallAllow, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/deny", stackH.firewallDeny, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/delete", stackH.firewallDelete, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/firewall/rules", stackH.firewallRules, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/firewall/reset", stackH.firewallReset, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/firewall/reset", stackH.firewallReset, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── PM2 Process Management ──
-	e.POST("/api/v1/servers/:id/pm2/manage", stackH.pm2Manage, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/pm2/manage", stackH.pm2Manage, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Mail server (proxied to the agent) ──
-	e.POST("/api/v1/servers/:id/email/manage", stackH.emailManage, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/email/manage", stackH.emailManage, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Redis Management ──
 	e.GET("/api/v1/servers/:id/redis/stats", stackH.redisStats, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/redis/flush", stackH.redisFlush, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/redis/flush", stackH.redisFlush, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/redis/info", stackH.redisInfo, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/redis/flushdb", stackH.redisFlushDB, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/redis/flushdb", stackH.redisFlushDB, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Threat Monitor (admin only) ──
 	smH := newSecurityMonitorHandler(s, auditRec)
@@ -462,13 +482,13 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/servers/:id/fail2ban/status", stackH.fail2banStatus, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/:id/security/overview", stackH.securityOverview, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/:id/fail2ban/jail", stackH.fail2banJail, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/fail2ban/unban", stackH.fail2banUnban, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/fail2ban/ban", stackH.fail2banBan, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/fail2ban/enable", stackH.fail2banEnable, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/fail2ban/disable", stackH.fail2banDisable, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/fail2ban/unban", stackH.fail2banUnban, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/fail2ban/ban", stackH.fail2banBan, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/fail2ban/enable", stackH.fail2banEnable, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/fail2ban/disable", stackH.fail2banDisable, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Bot Blocker Management ──
-	e.POST("/api/v1/servers/:id/bot-blocker/manage", stackH.botBlockerManage, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/bot-blocker/manage", stackH.botBlockerManage, RequireAuth(s), RequireAdmin(s), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Server Specs & Benchmarks ─────────────────────────────
 	e.GET("/api/v1/servers/:id/specs", stackH.serverSpecs, RequireAuth(s))

@@ -4,6 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"sigardapanel/internal/audit"
+	"strconv"
 	"strings"
 	"time"
 
@@ -336,5 +339,128 @@ func featureMinTier(feature string) string {
 		return "enterprise"
 	default:
 		return "free"
+	}
+}
+
+// scopeAuditLogs admits admins to the audit log; a non-super admin only
+// sees their own entries (the log holds every tenant's actions, including
+// super_admin command lines).
+func scopeAuditLogs(s *store.Store) echo.MiddlewareFunc {
+	admin := RequireAdmin(s)
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return admin(func(c echo.Context) error {
+			if role, _ := c.Get(roleKey).(string); role != auth.RoleSuperAdmin {
+				sess := sessionFromEcho(c)
+				if sess == nil {
+					return echo.NewHTTPError(http.StatusForbidden, "access denied")
+				}
+				c.Set(audit.ForceUserIDKey, sess.UserID)
+			}
+			return next(c)
+		})
+	}
+}
+
+// requireSuperAdminOnPanelHost guards actions that are root on the server
+// (container create/exec with host mounts, firewall, fail2ban, pm2, mail):
+// on the panel host they are as good as super_admin power (database,
+// encryption key), so only a super_admin may run them there. Remote servers
+// keep the route's own role check.
+func requireSuperAdminOnPanelHost(s *store.Store) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+			if err != nil || id <= 0 {
+				return next(c)
+			}
+			server, err := s.Servers.GetByID(c.Request().Context(), id)
+			if err != nil || server == nil || !isLocalServer(*server) {
+				return next(c)
+			}
+			if role, _ := c.Get(roleKey).(string); role == auth.RoleSuperAdmin {
+				return next(c)
+			}
+			if sess := sessionFromEcho(c); sess != nil && isSessionSuperAdmin(c.Request().Context(), s, sess) {
+				return next(c)
+			}
+			return echo.NewHTTPError(http.StatusForbidden, "on the panel host this action requires a super admin")
+		}
+	}
+}
+
+// auditServerAction records a successful server-level action (firewall,
+// fail2ban, containers, mail, ...) in the audit log: these change the
+// server for everyone and used to leave no trace.
+func auditServerAction(rec *audit.Recorder) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			err := next(c)
+			if err != nil || c.Response().Status >= 400 {
+				return err
+			}
+			id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+			var uid int64
+			if sess := sessionFromEcho(c); sess != nil {
+				uid = sess.UserID
+			}
+			path := c.Path() // e.g. /api/v1/servers/:id/firewall/deny
+			action := "server." + strings.ReplaceAll(strings.TrimPrefix(path, "/api/v1/servers/:id/"), "/", ".")
+			rec.RecordAction(c.Request().Context(), uid, action, audit.ResourceServer, id, map[string]any{"method": c.Request().Method})
+			return nil
+		}
+	}
+}
+
+// rejectImpersonation refuses requests made while impersonating another
+// user (e.g. an admin changing that user's 2FA).
+func rejectImpersonation(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if sess := sessionFromEcho(c); sess != nil && sess.ImpersonatedBy.Valid {
+			return echo.NewHTTPError(http.StatusForbidden, "not available while impersonating a user")
+		}
+		return next(c)
+	}
+}
+
+// cookieCSRFGuard protects state-changing requests authenticated by the
+// session cookie alone (requests sent straight to /api/v1 by a browser):
+// the browser's Origin (or Sec-Fetch-Site) must be this site. SameSite=Strict
+// still sends the cookie from sibling subdomains, and some handlers parse
+// bodies regardless of Content-Type, so a cross-site text/plain form POST
+// would otherwise work. Requests with an Authorization header (the web
+// app's proxy, the CLI, API keys) are not cookie-based and pass.
+func cookieCSRFGuard(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		r := c.Request()
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			return next(c)
+		}
+		if r.Header.Get("Authorization") != "" {
+			return next(c)
+		}
+		if _, err := r.Cookie(sessionCookieName); err != nil {
+			return next(c)
+		}
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+			if site == "same-origin" || site == "none" {
+				return next(c)
+			}
+			return echo.NewHTTPError(http.StatusForbidden, "cross-site request refused")
+		}
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			if ref := r.Header.Get("Referer"); ref != "" {
+				origin = ref
+			}
+		}
+		if origin == "" {
+			return next(c) // not a browser
+		}
+		u, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(u.Host, r.Host) {
+			return echo.NewHTTPError(http.StatusForbidden, "cross-site request refused")
+		}
+		return next(c)
 	}
 }

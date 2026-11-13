@@ -49,7 +49,7 @@
     if (!auth.user) { window.location.href = '/login'; return; }
     await load();
     // Providers and schedules are admin-only endpoints.
-    await Promise.all([isAdmin ? loadProviders() : null, isAdmin ? loadConfigs() : null, loadSites(), loadDatabases()]);
+    await Promise.all([isAdmin ? loadProviders() : null, hasRole(auth.user?.role, 'super_admin') ? loadConfigs() : null, loadSites(), loadDatabases()]);
   });
 
   async function load() {

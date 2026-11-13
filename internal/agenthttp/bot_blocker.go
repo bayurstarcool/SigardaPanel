@@ -1,11 +1,13 @@
 package agenthttp
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -133,171 +135,263 @@ func (r *Router) listBotBlockerRules(c echo.Context) error {
 	})
 }
 
-// addBotAgent adds User-Agent patterns to block.
-func (r *Router) addBotAgent(c echo.Context, agents []string) error {
-	ctx := c.Request().Context()
+// Bot blocker config files (variables so tests can point them elsewhere).
+var (
+	botAgentsConf = "/etc/nginx/conf.d/bot-blocker.conf"
+	botIPsConf    = "/etc/nginx/conf.d/bot-ips.conf"
+)
 
-	for _, agent := range agents {
-		if !isShellSafe(agent) {
-			return echo.NewHTTPError(http.StatusBadRequest, "invalid agent pattern: "+agent)
+// botAgentRe: user-agent fragments only (they go into an nginx map as a
+// quoted case-insensitive regex).
+var botAgentRe = regexp.MustCompile(`^[A-Za-z0-9._ /-]{1,64}$`)
+
+// botRule is one user-agent map entry: 1 blocks, 0 allows (the default
+// config allowlists curl/wget).
+type botRule struct{ pattern, value string }
+
+// botRuleOf parses a map line in either the current quoted or the old
+// unquoted format (ok=false when it is not a pattern line).
+func botRuleOf(line string) (botRule, bool) {
+	t := strings.TrimSpace(line)
+	for _, pre := range []string{"\"~*(", "~*("} {
+		if !strings.HasPrefix(t, pre) {
+			continue
+		}
+		rest := t[len(pre):]
+		end := strings.LastIndex(rest, ")")
+		if end < 0 {
+			return botRule{}, false
+		}
+		value := "1"
+		if f := strings.Fields(strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(rest[end+1:], "\"")), ";")); len(f) > 0 && (f[0] == "0" || f[0] == "1") {
+			value = f[0]
+		}
+		return botRule{pattern: rest[:end], value: value}, true
+	}
+	return botRule{}, false
+}
+
+func renderBotAgents(rules []botRule) string {
+	lines := make([]string, 0, len(rules))
+	for _, r := range rules {
+		lines = append(lines, fmt.Sprintf("    \"~*(%s)\" %s;", r.pattern, r.value))
+	}
+	return "# SigardaPanel Bot Blocker - User Agent Map\n" +
+		"map $http_user_agent $bad_bot {\n" +
+		"    default 0;\n" +
+		strings.Join(lines, "\n") + "\n" +
+		"    \"\" 1;\n" +
+		"}\n"
+}
+
+func renderBotIPs(ips []string) string {
+	lines := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		lines = append(lines, "deny "+ip+";")
+	}
+	return "# SigardaPanel Bot Blocker - IP Blocklist\n" + strings.Join(lines, "\n") + "\n"
+}
+
+func currentBotAgents() []botRule {
+	content, _ := readFileContent(botAgentsConf)
+	var out []botRule
+	for _, l := range strings.Split(content, "\n") {
+		if r, ok := botRuleOf(l); ok {
+			out = append(out, r)
 		}
 	}
+	return out
+}
 
-	currentConfig, _ := readFileContent("/etc/nginx/conf.d/bot-blocker.conf")
-	if currentConfig == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "bot blocker not enabled")
+func addBotRules(rules []botRule, agents []string) []botRule {
+	have := map[string]bool{}
+	for _, r := range rules {
+		have[r.pattern] = true
 	}
-
-	var newLines []string
-	for _, agent := range agents {
-		newLines = append(newLines, fmt.Sprintf("    ~*(%s) 1;", agent))
+	for _, a := range agents {
+		if !have[a] {
+			have[a] = true
+			rules = append(rules, botRule{pattern: a, value: "1"})
+		}
 	}
+	return rules
+}
 
-	// Find the LAST closing brace to insert before it
-	lastBrace := strings.LastIndex(currentConfig, "}")
-	if lastBrace < 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid nginx config format")
+func removeBotRules(rules []botRule, agents []string) []botRule {
+	drop := map[string]bool{}
+	for _, a := range agents {
+		drop[a] = true
 	}
-	config := currentConfig[:lastBrace] + strings.Join(newLines, "\n") + "\n" + currentConfig[lastBrace:]
-
-	if err := writeFileSecure("/etc/nginx/conf.d/bot-blocker.conf", config, 0644); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update config")
+	var out []botRule
+	for _, r := range rules {
+		if !drop[r.pattern] {
+			out = append(out, r)
+		}
 	}
+	return out
+}
 
-	if _, err := r.executor.RunShell(ctx, "nginx", "-t"); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "nginx config test failed")
+func currentBotIPs() []string {
+	content, _ := readFileContent(botIPsConf)
+	var out []string
+	for _, l := range strings.Split(content, "\n") {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "deny ") && strings.HasSuffix(t, ";") {
+			out = append(out, strings.TrimSuffix(strings.TrimPrefix(t, "deny "), ";"))
+		}
+	}
+	return out
+}
+
+// applyNginxConf writes the given files, runs nginx -t and restores the
+// previous contents when the test fails (a config nginx cannot parse must
+// never stay on disk: every later reload would fail).
+func (r *Router) applyNginxConf(ctx context.Context, files map[string]string) error {
+	type prev struct {
+		data   []byte
+		exists bool
+	}
+	old := map[string]prev{}
+	for path, content := range files {
+		data, err := os.ReadFile(path)
+		old[path] = prev{data: data, exists: err == nil}
+		if err := writeFileSecure(path, content, 0644); err != nil {
+			for p, o := range old {
+				if o.exists {
+					_ = os.WriteFile(p, o.data, 0644)
+				} else {
+					_ = os.Remove(p)
+				}
+			}
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	if out, err := r.executor.RunShell(ctx, "nginx", "-t"); err != nil {
+		for p, o := range old {
+			if o.exists {
+				_ = os.WriteFile(p, o.data, 0644)
+			} else {
+				_ = os.Remove(p)
+			}
+		}
+		return fmt.Errorf("nginx config test failed, change reverted: %s", strings.TrimSpace(out))
 	}
 	r.executor.RunShell(ctx, "systemctl", "reload", "nginx")
+	return nil
+}
 
-	return c.JSON(http.StatusOK, map[string]any{
-		"ok":      true,
-		"message": fmt.Sprintf("Added %d bot agent patterns", len(agents)),
-	})
+func uniqueAppend(list []string, add ...string) []string {
+	seen := map[string]bool{}
+	for _, v := range list {
+		seen[v] = true
+	}
+	for _, v := range add {
+		if !seen[v] {
+			seen[v] = true
+			list = append(list, v)
+		}
+	}
+	return list
+}
+
+func without(list []string, drop []string) []string {
+	rm := map[string]bool{}
+	for _, d := range drop {
+		rm[d] = true
+	}
+	var out []string
+	for _, v := range list {
+		if !rm[v] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// addBotAgent adds User-Agent patterns to block.
+func (r *Router) addBotAgent(c echo.Context, agents []string) error {
+	for _, agent := range agents {
+		if !botAgentRe.MatchString(agent) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid agent pattern (letters, digits, space . _ / - only): "+agent)
+		}
+	}
+	if content, _ := readFileContent(botAgentsConf); content == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "bot blocker not enabled")
+	}
+	all := addBotRules(currentBotAgents(), agents)
+	if err := r.applyNginxConf(c.Request().Context(), map[string]string{botAgentsConf: renderBotAgents(all)}); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": fmt.Sprintf("Added %d bot agent patterns", len(agents))})
 }
 
 // removeBotAgent removes User-Agent patterns.
 func (r *Router) removeBotAgent(c echo.Context, agents []string) error {
-	ctx := c.Request().Context()
-
-	currentConfig, _ := readFileContent("/etc/nginx/conf.d/bot-blocker.conf")
-	if currentConfig == "" {
+	if content, _ := readFileContent(botAgentsConf); content == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "bot blocker not enabled")
 	}
-
-	config := currentConfig
-	for _, agent := range agents {
-		config = strings.ReplaceAll(config, fmt.Sprintf("    ~*(%s) 1;", agent), "")
+	rest := removeBotRules(currentBotAgents(), agents)
+	if err := r.applyNginxConf(c.Request().Context(), map[string]string{botAgentsConf: renderBotAgents(rest)}); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-
-	if err := writeFileSecure("/etc/nginx/conf.d/bot-blocker.conf", config, 0644); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update config")
-	}
-
-	if _, err := r.executor.RunShell(ctx, "nginx", "-t"); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "nginx config test failed")
-	}
-	r.executor.RunShell(ctx, "systemctl", "reload", "nginx")
-
-	return c.JSON(http.StatusOK, map[string]any{
-		"ok":      true,
-		"message": fmt.Sprintf("Removed %d bot agent patterns", len(agents)),
-	})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": fmt.Sprintf("Removed %d bot agent patterns", len(agents))})
 }
 
 // addBotIP adds IPs to block.
 func (r *Router) addBotIP(c echo.Context, ips []string) error {
-	ctx := c.Request().Context()
-
 	for _, ip := range ips {
 		if !isValidIP(ip) {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid IP: "+ip)
 		}
 	}
-
-	var denyLines []string
-	for _, ip := range ips {
-		denyLines = append(denyLines, fmt.Sprintf("deny %s;", ip))
+	all := uniqueAppend(currentBotIPs(), ips...)
+	if err := r.applyNginxConf(c.Request().Context(), map[string]string{botIPsConf: renderBotIPs(all)}); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-
-	config := "# SigardaPanel Bot Blocker - IP Blocklist\n" + strings.Join(denyLines, "\n") + "\n"
-
-	if err := appendFileSecure("/etc/nginx/conf.d/bot-ips.conf", config, 0644); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to add IPs")
-	}
-
-	if _, err := r.executor.RunShell(ctx, "nginx", "-t"); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "nginx config test failed")
-	}
-	r.executor.RunShell(ctx, "systemctl", "reload", "nginx")
-
-	return c.JSON(http.StatusOK, map[string]any{
-		"ok":      true,
-		"message": fmt.Sprintf("Added %d IPs to blocklist", len(ips)),
-	})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": fmt.Sprintf("Added %d IPs to blocklist", len(ips))})
 }
 
-// removeBotIP removes IPs from blocklist.
+// removeBotIP removes IPs from the blocklist (exact matches only).
 func (r *Router) removeBotIP(c echo.Context, ips []string) error {
-	ctx := c.Request().Context()
-
+	var valid []string
 	for _, ip := range ips {
-		removeLineFromFile("/etc/nginx/conf.d/bot-ips.conf", ip)
+		if ip = strings.TrimSpace(ip); ip != "" {
+			valid = append(valid, ip)
+		}
 	}
-
-	if _, err := r.executor.RunShell(ctx, "nginx", "-t"); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "nginx config test failed")
+	if len(valid) == 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "no IP to remove")
 	}
-	r.executor.RunShell(ctx, "systemctl", "reload", "nginx")
-
-	return c.JSON(http.StatusOK, map[string]any{
-		"ok":      true,
-		"message": fmt.Sprintf("Removed %d IPs from blocklist", len(ips)),
-	})
+	rest := without(currentBotIPs(), valid)
+	if err := r.applyNginxConf(c.Request().Context(), map[string]string{botIPsConf: renderBotIPs(rest)}); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": fmt.Sprintf("Removed %d IPs from blocklist", len(valid))})
 }
 
-// updateBotBlocker updates the entire bot blocker configuration.
+// updateBotBlocker replaces the whole bot blocker configuration.
 func (r *Router) updateBotBlocker(c echo.Context, agents, ips []string) error {
-	ctx := c.Request().Context()
-
-	var agentLines []string
+	var goodAgents []botRule
+	var goodIPs []string
 	for _, agent := range agents {
-		if isShellSafe(agent) {
-			agentLines = append(agentLines, fmt.Sprintf("    ~*(%s) 1;", agent))
+		if !botAgentRe.MatchString(agent) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid agent pattern: "+agent)
 		}
 	}
-
-	config := "# SigardaPanel Bot Blocker - User Agent Map\n" +
-		"map $http_user_agent $bad_bot {\n" +
-		"    default 0;\n" +
-		strings.Join(agentLines, "\n") + "\n" +
-		"    \"\" 1;\n" +
-		"}\n"
-
-	if err := writeFileSecure("/etc/nginx/conf.d/bot-blocker.conf", config, 0644); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to write config")
-	}
-
-	var ipLines []string
+	goodAgents = addBotRules(nil, agents)
 	for _, ip := range ips {
-		if isValidIP(ip) {
-			ipLines = append(ipLines, fmt.Sprintf("deny %s;", ip))
+		if !isValidIP(ip) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid IP: "+ip)
 		}
+		goodIPs = uniqueAppend(goodIPs, ip)
 	}
-
-	ipConfig := "# SigardaPanel Bot Blocker - IP Blocklist\n" + strings.Join(ipLines, "\n") + "\n"
-	if err := writeFileSecure("/etc/nginx/conf.d/bot-ips.conf", ipConfig, 0644); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to write IP config")
+	if err := r.applyNginxConf(c.Request().Context(), map[string]string{
+		botAgentsConf: renderBotAgents(goodAgents),
+		botIPsConf:    renderBotIPs(goodIPs),
+	}); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-
-	if _, err := r.executor.RunShell(ctx, "nginx", "-t"); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "nginx config test failed")
-	}
-	r.executor.RunShell(ctx, "systemctl", "reload", "nginx")
-
-	return c.JSON(http.StatusOK, map[string]any{
-		"ok":      true,
-		"message": "Bot blocker updated",
-	})
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "Bot blocker updated"})
 }
 
 // --- Helper functions ---

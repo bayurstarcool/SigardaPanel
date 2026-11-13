@@ -14,6 +14,7 @@
     Globe, ShieldCheck, Database, Folder, Zap, Settings, Users, Package,
     Lock, LoaderCircle, ExternalLink, Trash2, Pause, Play, Copy, Check, Pencil, Save,
     UserPlus, Mail, Code, Shield, Clock, ScrollText, Upload, Key, GitBranch, TriangleAlert, Server,
+    RefreshCw,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
@@ -108,11 +109,23 @@
     try { await apiFetch(auth.token, 'POST', `sites/${siteId}/config`, { git_repo: gitRepo, git_branch: gitBranch || 'main' }); site = { ...site, git_repo: gitRepo, git_branch: gitBranch || 'main' }; gitEditing = false; toasts.success('Git config saved.'); }
     catch (e: any) { toasts.error(e.message || 'Failed'); } finally { gitBusy = false; }
   }
+  // Deploy webhook: URL + secret for GitHub/Gitea/GitLab, shown on demand.
+  let webhook = $state<{ url: string; secret: string } | null>(null);
+  let webhookBusy = $state(false);
+  async function loadWebhook(rotate = false) {
+    if (rotate && !confirm('Rotate the webhook secret? The old secret stops working; update it in your git host.')) return;
+    webhookBusy = true;
+    try {
+      const d = await apiFetch(auth.token, rotate ? 'POST' : 'GET', rotate ? `sites/${siteId}/webhook/rotate` : `sites/${siteId}/webhook`);
+      webhook = { url: `${window.location.origin}${d.path}`, secret: d.secret };
+      if (rotate) toasts.success('Webhook secret rotated');
+    } catch (e: any) { toasts.error(e.message || 'Failed'); } finally { webhookBusy = false; }
+  }
   function startEditGit() { gitRepo = site.git_repo || ''; gitBranch = site.git_branch || 'main'; gitEditing = true; }
 
   async function doTransfer() {
     if (!transferEmail) return; transferBusy = true;
-    try { await apiFetch(auth.token, 'POST', `sites/${siteId}/transfer`, { new_owner_email: transferEmail }); toasts.success('Site transferred'); showTransfer = false; transferEmail = ''; }
+    try { await apiFetch(auth.token, 'POST', `sites/${siteId}/transfer`, { new_owner_email: transferEmail }); toasts.success('Transfer queued: the files move on the server, then ownership changes'); showTransfer = false; transferEmail = ''; }
     catch (e: any) { toasts.error(e.message); } finally { transferBusy = false; }
   }
 
@@ -384,6 +397,23 @@
             {@render row('Branch', site.git_branch || 'main', { mono: true })}
             {@render row('Last commit', site.git_commit?.slice(0, 8) || '—', { mono: true })}
           </dl>
+          {#if isAdmin}
+            <div class="border-t border-line px-5 py-3">
+              {#if webhook}
+                <dl class="space-y-2 text-[13px]">
+                  <div><dt class="label">Webhook URL</dt><dd class="font-mono break-all text-fg">{webhook.url}</dd></div>
+                  <div><dt class="label">Secret</dt><dd class="font-mono break-all text-fg">{webhook.secret}</dd></div>
+                </dl>
+                <p class="hint mt-2">Add this URL as a push webhook (content type JSON) with the secret. GitHub and Gitea sign with it; GitLab sends it as the token.</p>
+                <div class="mt-2 flex gap-2">
+                  <button onclick={() => loadWebhook(true)} disabled={webhookBusy} class="btn btn-secondary btn-sm"><RefreshCw size={14} /> Rotate secret</button>
+                  <button onclick={() => (webhook = null)} class="btn btn-ghost btn-sm">Hide</button>
+                </div>
+              {:else}
+                <button onclick={() => loadWebhook()} disabled={webhookBusy} class="btn btn-ghost btn-sm">Show deploy webhook</button>
+              {/if}
+            </div>
+          {/if}
         {:else}
           <p class="card-body text-[13px] text-muted">No git repository configured. Click Configure to set up git deploy.</p>
         {/if}

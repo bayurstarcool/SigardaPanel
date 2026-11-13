@@ -246,4 +246,3 @@ func (sc *SecurityCollector) checkServer(ctx context.Context, serverID int64, na
 		)
 	}
 }
-

@@ -464,3 +464,24 @@ func (h *stackHandler) commandExec(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, httpjson.Success{Data: out, RequestID: rid})
 }
+
+// agentProxyResponse answers a proxied agent call. An agent error (HTTP
+// status >= 400) becomes an API error, and so does {"ok": false} on a
+// state-changing request; the web UI only treats responses with an "error"
+// key as failures, so these used to show up as successes ("Container
+// started", "IP banned") although nothing happened. GET answers with
+// ok:false are passed through: pages show them as "not installed" states.
+func agentProxyResponse(c echo.Context, rid string, status int, result map[string]any) error {
+	if status >= 400 {
+		if result == nil {
+			result = map[string]any{}
+		}
+		return agentHTTPError(status, result)
+	}
+	if c.Request().Method != http.MethodGet {
+		if ok, isBool := result["ok"].(bool); isBool && !ok {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, agentMessage(result, "the server's agent reported a failure"))
+		}
+	}
+	return c.JSON(status, httpjson.Success{Data: result, RequestID: rid})
+}

@@ -2,12 +2,14 @@ package apihttp
 
 import (
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
+	"sigardapanel/internal/config"
 	"strconv"
 	"strings"
 
@@ -24,11 +26,50 @@ var (
 )
 
 func isValidAgentURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
-		return false
+	_, err := normalizeAgentURL(raw, false)
+	return err == nil
+}
+
+// lookupAgentHost resolves an agent hostname (tests replace it).
+var lookupAgentHost = net.LookupIP
+
+// normalizeAgentURL validates an agent URL entered by an admin and returns
+// it as scheme://host[:port]. The panel sends the server's agent token to
+// this URL and returns the answers, so it must be an agent, not an internal
+// endpoint: no path, query, fragment or credentials, never link-local
+// (cloud metadata) or loopback (the panel host's own services, unless
+// allowLoopback for the panel's own server), and private addresses only
+// when SIGARDAPANEL_ALLOW_PRIVATE_AGENTS is set.
+func normalizeAgentURL(raw string, allowLoopback bool) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", fmt.Errorf("invalid agent_url (http(s)://host:port)")
 	}
-	return parsed.Scheme == "http" || parsed.Scheme == "https"
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Contains(raw, "#") || (parsed.Path != "" && parsed.Path != "/") {
+		return "", fmt.Errorf("agent_url must be just http(s)://host:port (no path, query or credentials)")
+	}
+	host := parsed.Hostname()
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else if strings.EqualFold(host, "localhost") {
+		ips = []net.IP{net.ParseIP("127.0.0.1")}
+	} else if resolved, err := lookupAgentHost(host); err == nil {
+		ips = resolved
+	}
+	for _, ip := range ips {
+		switch {
+		case ip.IsLoopback():
+			if !allowLoopback {
+				return "", fmt.Errorf("agent_url points at this panel host; the panel's own agent is managed automatically")
+			}
+		case ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified():
+			return "", fmt.Errorf("agent_url host %s is not allowed", ip)
+		case ip.IsPrivate() && !config.AllowPrivateAgents():
+			return "", fmt.Errorf("agent_url host %s is a private address; set SIGARDAPANEL_ALLOW_PRIVATE_AGENTS=true in panel.env to use private agents", ip)
+		}
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
 // isLocalServer reports whether the server is the panel host itself, i.e.
@@ -136,8 +177,12 @@ func (h *serverHandler) create(c echo.Context) error {
 	if body.IPAddress != "" && net.ParseIP(body.IPAddress) == nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid ip_address")
 	}
-	if body.AgentURL != "" && !isValidAgentURL(body.AgentURL) {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid agent_url")
+	if body.AgentURL != "" {
+		norm, err := normalizeAgentURL(body.AgentURL, false)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		body.AgentURL = norm
 	}
 
 	token, err := auth.NewToken()
@@ -217,9 +262,9 @@ func (h *serverHandler) update(c echo.Context) error {
 	}
 
 	if body.AgentURL != nil {
-		u := strings.TrimSpace(*body.AgentURL)
-		if !isValidAgentURL(u) {
-			return echo.NewHTTPError(http.StatusBadRequest, "invalid agent_url (http(s)://host:port)")
+		u, err := normalizeAgentURL(*body.AgentURL, isLocalServer(*server))
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 		if isLocalServer(*server) && !isLoopbackAgentURL(u) {
 			return echo.NewHTTPError(http.StatusBadRequest, "the panel's own server must keep its local agent URL")
@@ -403,6 +448,11 @@ func (h *serverHandler) regenerateToken(c echo.Context) error {
 	}
 	if server == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "server not found")
+	}
+	if isLocalServer(*server) {
+		// The panel host's agent reads its token from agent.env: a new token
+		// in the database alone would lock the panel out of its own agent.
+		return echo.NewHTTPError(http.StatusConflict, "the panel host's agent token is rotated with: sigardapanel server token")
 	}
 
 	token, err := auth.NewToken()

@@ -177,7 +177,8 @@ func NextCronRun(cronExpr string, after time.Time) time.Time {
 	hours := parseCronField(fields[1], 0, 23)
 	daysOfMonth := parseCronField(fields[2], 1, 31)
 	months := parseCronField(fields[3], 1, 12)
-	daysOfWeek := parseCronField(fields[4], 0, 6) // 0=Sunday
+	// 0 and 7 are both Sunday (the validator accepts 7, the matcher did not).
+	daysOfWeek := normalizeDOW(parseCronField(fields[4], 0, 7))
 
 	// Search forward up to ~366 days to find next match
 	next := after.Add(1 * time.Minute)
@@ -244,10 +245,15 @@ func parseCronField(field string, min, max int) []int {
 		if strings.Contains(part, "/") {
 			parts := strings.SplitN(part, "/", 2)
 			var start, end int
-			if parts[0] == "*" {
-				start = min
-				end = max
-			} else {
+			switch {
+			case parts[0] == "*":
+				start, end = min, max
+			case strings.Contains(parts[0], "-"):
+				// range with a step: 9-17/4 → 9, 13, 17
+				b := strings.SplitN(parts[0], "-", 2)
+				start, _ = strconv.Atoi(b[0])
+				end, _ = strconv.Atoi(b[1])
+			default:
 				start, _ = strconv.Atoi(parts[0])
 				end = max
 			}
@@ -341,4 +347,16 @@ func scanBackupScheduleRows(rows *sql.Rows, bs *BackupSchedule) error {
 		&bs.ID, &bs.SiteID, &bs.ProviderID, &bs.CronExpr, &bs.BackupType,
 		&bs.Enabled, &bs.LastRunAt, &bs.NextRunAt, &bs.CreatedAt, &bs.UpdatedAt,
 	)
+}
+
+// normalizeDOW maps day-of-week 7 to 0 (both mean Sunday).
+func normalizeDOW(days []int) []int {
+	set := map[int]bool{}
+	for _, d := range days {
+		if d == 7 {
+			d = 0
+		}
+		set[d] = true
+	}
+	return toSlice(set)
 }

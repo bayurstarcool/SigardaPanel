@@ -25,6 +25,9 @@ type SessionRepository interface {
 	GetByTokenHash(ctx context.Context, hash string) (*Session, error)
 	Revoke(ctx context.Context, id int64) error
 	RevokeByTokenHash(ctx context.Context, hash string) error
+	// RevokeAllForUser revokes every active session of userID except
+	// exceptID (0 = revoke all). Used after a password change.
+	RevokeAllForUser(ctx context.Context, userID, exceptID int64) error
 	CleanupExpired(ctx context.Context) error
 	RevokeOldest(ctx context.Context, userID int64, maxSessions int) error
 	CountActive(ctx context.Context, userID int64) (int, error)
@@ -83,6 +86,16 @@ func (s *SQLiteSessionStore) Revoke(ctx context.Context, id int64) error {
 		`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("revoke session: %w", err)
+	}
+	return nil
+}
+
+// RevokeAllForUser revokes every active session of a user except exceptID.
+func (s *SQLiteSessionStore) RevokeAllForUser(ctx context.Context, userID, exceptID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id != ? AND revoked_at IS NULL`, userID, exceptID)
+	if err != nil {
+		return fmt.Errorf("revoke sessions for user: %w", err)
 	}
 	return nil
 }

@@ -43,7 +43,7 @@ func (h *orderHandler) listOrders(c echo.Context) error {
 	// Resolve usernames and plan names
 	userCache := make(map[int64]string)
 	planCache := make(map[int64]string)
-	var out []orderJSON
+	out := []orderJSON{} // never null: the page treats null as "no data"
 	for _, o := range orders {
 		username := userCache[o.UserID]
 		if username == "" {

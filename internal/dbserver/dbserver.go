@@ -479,6 +479,17 @@ func (m *MySQLConn) GrantPrivileges(ctx context.Context, username, host, dbName,
 	return err
 }
 
+// RevokeAll removes username@host's privileges on dbName (the account and
+// its access to other databases stay).
+func (m *MySQLConn) RevokeAll(ctx context.Context, username, host, dbName string) error {
+	q := fmt.Sprintf("REVOKE ALL PRIVILEGES ON `%s`.* FROM '%s'@'%s'", safeIdent(dbName), safeIdent(username), safeIdent(host))
+	if _, err := m.db.ExecContext(ctx, q); err != nil {
+		return err
+	}
+	_, err := m.db.ExecContext(ctx, "FLUSH PRIVILEGES")
+	return err
+}
+
 // Exec executes a raw SQL statement (for ALTER DATABASE etc).
 func (m *MySQLConn) Exec(query string) (sql.Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

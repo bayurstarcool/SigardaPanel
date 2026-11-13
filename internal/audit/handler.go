@@ -27,6 +27,10 @@ type AuditLogFilter struct {
 	Action   string
 }
 
+// ForceUserIDKey is the echo context key a middleware sets (int64) to
+// restrict the listing to one user's entries, whatever the query says.
+const ForceUserIDKey = "audit_force_user_id"
+
 // Handler provides HTTP endpoints for audit logs.
 type Handler struct {
 	store   AuditLogStore
@@ -76,6 +80,9 @@ func (h *Handler) List(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid user_id")
 		}
 		filter.UserID = n
+	}
+	if forced, ok := c.Get(ForceUserIDKey).(int64); ok {
+		filter.UserID = forced
 	}
 
 	filter.Resource = c.QueryParam("resource")

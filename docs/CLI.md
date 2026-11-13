@@ -14,7 +14,7 @@ sigardapanel <command> [subcommand] --help
   [Output formats](#output-formats) · [Exit codes](#exit-codes) · [Conventions](#conventions)
 - Commands: [services & bootstrap](#services--bootstrap) · [session](#session) ·
   [server](#server) · [site](#site) · [ssl](#ssl) · [job](#job) · [backup](#backup) ·
-  [db](#db) · [logs](#logs) · [metrics](#metrics) · [system](#system) · [user](#user) ·
+  [db](#db) · [logs](#logs) · [metrics](#metrics) · [system](#system) · [panel-update](#panel-update) · [user](#user) ·
   [apikey](#apikey) · [audit](#audit) · [notification](#notification) ·
   [channels](#channels) · [alerts](#alerts) · [docker](#docker) · [git](#git) ·
   [firewall](#firewall) · [redis](#redis) · [cloudpanel](#cloudpanel)
@@ -347,6 +347,36 @@ sigardapanel metrics gpu --server ID [-o FORMAT]
 sigardapanel system disk-usage --server ID [-o FORMAT]
 sigardapanel system updates --server ID               # admin; runs apt on the server
 ```
+
+
+## panel-update
+
+Update the panel itself (super_admin, logged-in session; API keys are refused).
+Same updater as Settings → Panel update: signed release, backup, automatic rollback.
+
+```
+sigardapanel panel-update [status] [-o FORMAT]   # installed/latest release, auto-update, last run
+sigardapanel panel-update check [-o FORMAT]      # same, but asks GitHub again now
+sigardapanel panel-update apply [--yes] [--no-wait] [--timeout 45m]
+sigardapanel panel-update auto on|off [--window START-END|any]
+sigardapanel panel-update backups [-o FORMAT]    # backups made before each update
+sigardapanel panel-update rollback BACKUP [--yes] [--no-wait]
+sigardapanel panel-update agents [-o FORMAT]     # agent version/update state per server
+sigardapanel panel-update update-agents --all | --server ID [--server ID...] [--yes]
+sigardapanel panel-update agents-auto on|off
+```
+
+- `rollback` restores binary, web app **and database** from the backup (changes made
+  since are lost; the current state is backed up first and restored if the rolled-back
+  panel is unhealthy) and follows it, also to releases that predate this command.
+- `update-agents` updates remote agents to the panel's version; `--all` picks every
+  remote server whose agent is older. Exit 1 if any could not be started.
+
+- `apply` follows the update (prints the installer log) until it finishes; it
+  keeps polling while the API restarts. Exit 0 when the panel runs the new
+  version, 1 when the update failed (and was rolled back).
+- `auto --window 2-5` limits automatic updates to 02:00–05:00 server time;
+  `--window any` clears the window. `self-update` is an alias of `panel-update`.
 
 ## user
 

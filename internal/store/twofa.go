@@ -20,6 +20,7 @@ type TwoFactorRepository interface {
 	StoreRecoveryCodes(ctx context.Context, userID int64, codeHashes []string) error
 	VerifyRecoveryCode(ctx context.Context, userID int64, codeHash string) (bool, error)
 	DeleteRecoveryCodes(ctx context.Context, userID int64) error
+	CountRecoveryCodes(ctx context.Context, userID int64) (int, error)
 }
 
 // SQLiteTwoFactorStore implements TwoFactorRepository with SQLite.
@@ -183,7 +184,19 @@ func (s *SQLiteTwoFactorStore) DisableTOTP(ctx context.Context, userID int64) er
 	if err != nil {
 		return fmt.Errorf("disable totp: %w", err)
 	}
-	return nil
+	// Recovery codes belong to the old setup: leaked codes must not bypass
+	// a 2FA set up again later.
+	return s.DeleteRecoveryCodes(ctx, userID)
+}
+
+// CountRecoveryCodes returns how many unused recovery codes a user has.
+func (s *SQLiteTwoFactorStore) CountRecoveryCodes(ctx context.Context, userID int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM two_factor_recovery_codes WHERE user_id = ? AND used = 0`, userID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count recovery codes: %w", err)
+	}
+	return n, nil
 }
 
 // IsTOTPEnabled checks if TOTP 2FA is enabled for a user.

@@ -89,6 +89,10 @@ func Run(ctx context.Context) error {
 	securityCollector.Start(ctx)
 	defer securityCollector.Stop()
 
+	// Look for new panel releases (notifies super admins; installs them
+	// when auto-update is enabled under Settings).
+	apihttp.StartPanelUpdateChecker(ctx, s, database)
+
 	// Start periodic session cleanup (every 1 hour)
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
@@ -135,10 +139,12 @@ func Run(ctx context.Context) error {
 	}
 
 	server := &http.Server{
-		Addr:         cfg.Addr,
-		Handler:      apihttp.NewRouter(s, database, memberDB),
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
+		Addr:    cfg.Addr,
+		Handler: apihttp.NewRouter(s, database, memberDB),
+		// Bodies (file uploads, backups) may take minutes; the headers may not.
+		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
 	}
 
 	errCh := make(chan error, 1)

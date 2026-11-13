@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"sigardapanel/internal/agentclient"
 	"sigardapanel/internal/jobmodel"
+	"sigardapanel/internal/nginx"
 	"sigardapanel/internal/notify"
 	"sigardapanel/internal/secrets"
 	"sigardapanel/internal/store"
@@ -245,6 +247,20 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	} else {
 		slog.Warn("worker: decrypt job payload failed", "job_id", job.ID, "error", derr)
 	}
+	// site.create is also how a site's vhost is regenerated (PHP, app port,
+	// security changes): the site's stored settings complete the payload,
+	// and the site's status before the job decides what success means.
+	var siteBefore *store.Site
+	if job.Type == jobmodel.TypeSiteCreate && job.SiteID.Valid {
+		siteBefore, _ = w.store.Sites.GetByID(ctx, job.SiteID.Int64)
+		enriched, err := w.siteCreatePayload(ctx, siteBefore, dispatchPayload)
+		if err != nil {
+			_ = w.store.Jobs.MarkCompleted(ctx, job.ID, false, "", err.Error())
+			slog.Warn("worker: site.create refused", "id", job.ID, "error", err)
+			return
+		}
+		dispatchPayload = enriched
+	}
 	result, execErr := agent.Execute(ctx, job.Type, dispatchPayload)
 
 	if execErr != nil {
@@ -272,7 +288,7 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 
 		// A site whose creation failed must not stay "pending" forever: show
 		// it as failed so the operator sees it and can delete/recreate it.
-		if job.Type == jobmodel.TypeSiteCreate && job.SiteID.Valid {
+		if job.Type == jobmodel.TypeSiteCreate && job.SiteID.Valid && siteIsNew(siteBefore) {
 			if err := w.store.Sites.UpdateStatus(ctx, job.SiteID.Int64, "failed"); err != nil {
 				slog.Error("worker: mark site failed", "id", job.SiteID.Int64, "error", err)
 			}
@@ -345,9 +361,13 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	case jobmodel.TypeSiteCreate:
 		if job.SiteID.Valid {
 			siteID := job.SiteID.Int64
-			// Update site status to active
-			if err := w.store.Sites.UpdateStatus(ctx, siteID, "active"); err != nil {
-				slog.Error("worker: update site status", "id", siteID, "error", err)
+			isNew := siteIsNew(siteBefore)
+			// Only the initial creation activates a site: a vhost
+			// regeneration must never change its status.
+			if isNew {
+				if err := w.store.Sites.UpdateStatus(ctx, siteID, "active"); err != nil {
+					slog.Error("worker: update site status", "id", siteID, "error", err)
+				}
 			}
 
 			// Update conf_file from agent response
@@ -363,9 +383,10 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 				}
 			}
 
-			// Auto-enqueue SSL issuance for new sites
+			// Auto-enqueue SSL issuance for new sites only (not on every
+			// vhost regeneration).
 			site, err := w.store.Sites.GetByID(ctx, siteID)
-			if err == nil && site != nil && site.Domain != "" {
+			if isNew && err == nil && site != nil && site.Domain != "" && site.SSLStatus.String != "active" {
 				// Get owner email for Let's Encrypt
 				// No owner e-mail: the agent registers without a contact
 				// address (it used to register every install's Let's
@@ -393,6 +414,36 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			}
 		}
 
+	case jobmodel.TypeSiteTransfer:
+		// The files are in place on the server: now the panel follows.
+		var p struct {
+			SiteID     int64  `json:"site_id"`
+			NewOwnerID int64  `json:"new_owner_id"`
+			Domain     string `json:"domain"`
+			SystemUser string `json:"system_user"`
+		}
+		if json.Unmarshal([]byte(job.Payload), &p) == nil && p.SiteID > 0 && p.NewOwnerID > 0 {
+			before, _ := w.store.Sites.GetByID(ctx, p.SiteID)
+			if err := w.store.Sites.Transfer(ctx, p.SiteID, p.NewOwnerID); err != nil {
+				slog.Error("worker: transfer site record", "site_id", p.SiteID, "error", err)
+				break
+			}
+			if site, _ := w.store.Sites.GetByID(ctx, p.SiteID); site != nil {
+				regen, _ := json.Marshal(map[string]any{
+					"site_id": site.ID, "name": site.Name, "domain": site.Domain,
+					"runtime": site.Runtime, "root_path": site.RootPath, "vhost_regen": true,
+				})
+				_ = w.store.Jobs.Create(ctx, &jobmodel.Job{
+					ServerID: job.ServerID, SiteID: job.SiteID, Type: jobmodel.TypeSiteCreate,
+					Description: "Point the vhost of " + site.Domain + " at its new root", Payload: string(regen),
+				})
+			}
+			if before != nil && before.OwnerID.Valid {
+				w.store.Notify(ctx, before.OwnerID.Int64, "site_transferred", "Site Transferred", fmt.Sprintf("Transferred %s to %s", p.Domain, p.SystemUser), "info", "site", p.SiteID)
+			}
+			w.store.Notify(ctx, p.NewOwnerID, "site_received", "Site Received", fmt.Sprintf("You received %s", p.Domain), "success", "site", p.SiteID)
+		}
+
 	case jobmodel.TypeSSLIssue, jobmodel.TypeSSLRenew:
 		// Both must record the new expiry: if a renewal left the old date in
 		// place, the scheduler would keep re-queuing it (and alerting) every minute.
@@ -412,8 +463,17 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 		// Parse backup_id from job payload and persist actual local/S3 path from agent result.
 		var payloadData struct {
 			BackupID int64 `json:"backup_id"`
+			S3Config *struct {
+				Bucket    string `json:"bucket"`
+				Endpoint  string `json:"endpoint"`
+				AccessKey string `json:"access_key"`
+			} `json:"s3_config"`
 		}
-		if err := json.Unmarshal([]byte(job.Payload), &payloadData); err == nil && payloadData.BackupID > 0 {
+		rawPayload := job.Payload
+		if dec, derr := secrets.DecryptPayload(rawPayload); derr == nil {
+			rawPayload = dec // s3_config's keys are stored encrypted
+		}
+		if err := json.Unmarshal([]byte(rawPayload), &payloadData); err == nil && payloadData.BackupID > 0 {
 			localPath := ""
 			s3Path := ""
 			if result != nil {
@@ -442,17 +502,17 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 					slog.Error("worker: update backup s3_path", "id", payloadData.BackupID, "error", err)
 				} else {
 					slog.Info("worker: backup s3_path saved", "id", payloadData.BackupID, "s3_path", s3Path)
-					// Delete local file after successful S3 upload to save disk space
-					if localPath != "" && !strings.HasPrefix(localPath, "s3://") {
-						if err := os.Remove(localPath); err != nil {
-							slog.Warn("worker: failed to remove local backup after S3 upload", "path", localPath, "error", err)
-						} else {
-							slog.Info("worker: removed local backup after S3 upload", "path", localPath, "backup_id", payloadData.BackupID)
-							// Clear storage_path since local file is gone
-							if err := w.store.Backups.ClearStoragePath(ctx, payloadData.BackupID); err != nil {
-								slog.Error("worker: clear storage_path", "id", payloadData.BackupID, "error", err)
-							}
+					// Remember which provider holds the copy: deleting or
+					// restoring it later must not follow a changed default.
+					if c := payloadData.S3Config; c != nil {
+						if pid := w.store.ProviderIDForS3(ctx, c.Bucket, c.Endpoint, c.AccessKey); pid > 0 {
+							_ = w.store.Backups.SetProvider(ctx, payloadData.BackupID, pid)
 						}
+					}
+					// The local copy is no longer needed: the site's agent removes
+					// it, and the worker clears storage_path once it is gone.
+					if err := w.store.QueueBackupFileDelete(ctx, payloadData.BackupID, job.SiteID.Int64, localPath, true); err != nil {
+						slog.Warn("worker: queue removal of local backup after S3 upload", "id", payloadData.BackupID, "error", err)
 					}
 				}
 			}
@@ -472,23 +532,29 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			} else if len(deleted) > 0 {
 				// Clean up S3 files and local files for the deleted backups
 				site, _ := w.store.Sites.GetByID(ctx, job.SiteID.Int64)
-				var provider *store.BackupStorageProvider
-				if site != nil && site.BackupProviderID.Valid && site.BackupProviderID.Int64 > 0 {
-					provider, _ = w.store.BackupProviders.GetByID(ctx, site.BackupProviderID.Int64)
-				}
-				if provider == nil {
-					provider, _ = w.store.BackupProviders.GetDefault(ctx)
-				}
-
 				for _, b := range deleted {
+					provider := w.store.BackupProviderFor(ctx, &b, site)
 					if b.S3Path.Valid && b.S3Path.String != "" && provider != nil {
 						slog.Info("worker: deleting S3 file for expired backup", "backup_id", b.ID, "s3_path", b.S3Path.String)
 						w.deleteS3Object(ctx, provider, b.S3Path.String)
 					}
 					if b.StoragePath.Valid && b.StoragePath.String != "" && !strings.HasPrefix(b.StoragePath.String, "s3://") {
-						_ = os.Remove(b.StoragePath.String)
+						if err := w.store.QueueBackupFileDelete(ctx, b.ID, b.SiteID, b.StoragePath.String, false); err != nil {
+							slog.Warn("worker: queue backup.delete", "backup_id", b.ID, "error", err)
+						}
 					}
 				}
+			}
+		}
+
+	case jobmodel.TypeBackupDelete:
+		var p struct {
+			BackupID int64 `json:"backup_id"`
+			Clear    bool  `json:"clear_storage_path"`
+		}
+		if json.Unmarshal([]byte(job.Payload), &p) == nil && p.Clear && p.BackupID > 0 {
+			if err := w.store.Backups.ClearStoragePath(ctx, p.BackupID); err != nil {
+				slog.Error("worker: clear storage_path", "id", p.BackupID, "error", err)
 			}
 		}
 
@@ -525,6 +591,10 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 }
 
 func (w *Worker) deleteS3Object(ctx context.Context, provider *store.BackupStorageProvider, s3Path string) {
+	deleteS3Object(ctx, provider, s3Path)
+}
+
+func deleteS3Object(ctx context.Context, provider *store.BackupStorageProvider, s3Path string) {
 	if provider == nil || s3Path == "" {
 		return
 	}
@@ -573,4 +643,91 @@ func parseCertEndDate(s string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t.UTC(), true
+}
+
+// siteIsNew reports whether a site.create job creates the site (rather
+// than regenerating the vhost of an existing one).
+func siteIsNew(site *store.Site) bool {
+	if site == nil {
+		return true
+	}
+	switch site.Status {
+	case "", "pending", "creating", "failed":
+		return true
+	}
+	return false
+}
+
+// dedupeIPs canonicalises IPs/CIDRs and drops duplicates and invalid entries.
+func dedupeIPs(in []string) []string {
+	out := []string{}
+	for _, v := range in {
+		if norm, err := nginx.NormalizeBlockedIPs([]string{v}); err == nil && len(norm) == 1 && !slices.Contains(out, norm[0]) {
+			out = append(out, norm[0])
+		}
+	}
+	return out
+}
+
+// siteCreatePayload completes a site.create payload from the stored site:
+// fields the caller did not send (app port, proxy URL, PHP settings) and the
+// site's security settings, so a regeneration never drops them. Jobs for a
+// suspended site are refused: the agent would replace the suspension
+// placeholder with the live vhost.
+func (w *Worker) siteCreatePayload(ctx context.Context, site *store.Site, raw string) (string, error) {
+	if site == nil {
+		return raw, nil
+	}
+	if site.Status == "suspended" {
+		return "", fmt.Errorf("site %s is suspended; resume it before changing its configuration", site.Domain)
+	}
+	var p map[string]any
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return raw, nil
+	}
+	setIfMissing := func(key string, v any, ok bool) {
+		if _, has := p[key]; !has && ok {
+			p[key] = v
+		}
+	}
+	setIfMissing("port", site.AppPort.Int64, site.AppPort.Valid && site.AppPort.Int64 > 0)
+	setIfMissing("proxy_pass_url", site.ProxyPassURL.String, site.ProxyPassURL.Valid && site.ProxyPassURL.String != "")
+	setIfMissing("php_version", site.PHPVersion.String, site.PHPVersion.Valid && site.PHPVersion.String != "")
+	setIfMissing("php_ini", site.PHPIni.String, site.PHPIni.Valid && site.PHPIni.String != "")
+	if !siteIsNew(site) {
+		// An existing site: regenerate the vhost only (no starter files, no
+		// container re-creation).
+		p["vhost_regen"] = true
+	}
+	// The site's IP restrictions join its security settings: "deny" rules
+	// with the blocked IPs, "allow" rules as an allowlist (everyone else
+	// gets 403).
+	var blocked, allowed []string
+	sec, _ := w.store.Security.GetBySiteID(ctx, site.ID)
+	if sec != nil {
+		blocked = append(blocked, sec.BlockedIPs...)
+	}
+	if rules, err := w.store.IPRestrictions.List(ctx, site.ID); err == nil {
+		for _, r := range rules {
+			if r.Action == "allow" {
+				allowed = append(allowed, r.IP)
+			} else {
+				blocked = append(blocked, r.IP)
+			}
+		}
+	}
+	if sec != nil || len(blocked) > 0 || len(allowed) > 0 {
+		security := map[string]any{"blocked_ips": dedupeIPs(blocked), "allowed_ips": dedupeIPs(allowed)}
+		if sec != nil {
+			security["basic_auth_enabled"] = sec.BasicAuthEnabled
+			security["basic_auth_username"] = sec.BasicAuthUsername
+			security["basic_auth_hash"] = sec.BasicAuthPassword
+		}
+		p["security"] = security
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return raw, nil
+	}
+	return string(b), nil
 }

@@ -106,7 +106,7 @@ func (r *Router) managePM2(c echo.Context) error {
 		if payload.AppName == "" {
 			return echo.NewHTTPError(http.StatusBadRequest, "app_name required")
 		}
-		output, err := r.executor.RunShell(ctx, "pm2", "logs", payload.AppName, "--lines", "100")
+		output, err := r.executor.RunShell(ctx, "pm2", "logs", payload.AppName, "--lines", "100", "--nostream")
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "logs failed: "+err.Error())
 		}

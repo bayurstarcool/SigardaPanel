@@ -101,10 +101,23 @@ func (h *dbHandler) createDatabase(c echo.Context) error {
 	if body.Collation == "" {
 		body.Collation = "utf8mb4_unicode_ci"
 	}
+	if !dbCharsetRe.MatchString(body.Charset) || !dbCharsetRe.MatchString(body.Collation) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid charset or collation")
+	}
+	if existing, _ := h.store.Databases.ListAll(c.Request().Context()); existing != nil {
+		for _, d := range existing {
+			if d.Name == body.Name && d.Type == body.Type {
+				return echo.NewHTTPError(http.StatusConflict, "a database with this name already exists")
+			}
+		}
+	}
 
+	// The record carries the real database name: it used to say "sp_<name>"
+	// while MySQL got "<name>", so delete, grants, phpMyAdmin and backups
+	// all targeted a database that did not exist.
 	database := &store.Database{
 		SiteID:    siteID,
-		Name:      "sp_" + body.Name,
+		Name:      body.Name,
 		Type:      body.Type,
 		Charset:   body.Charset,
 		Collation: body.Collation,
@@ -129,7 +142,10 @@ func (h *dbHandler) createDatabase(c echo.Context) error {
 
 	// Fallback: enqueue agent job if direct MySQL failed
 	jobID := int64(0)
-	if !mysqlOK && body.Type == "mysql" {
+	// PostgreSQL databases are created by the site's agent (there is no
+	// direct connection); MySQL falls back to the agent when the direct
+	// connection failed.
+	if (!mysqlOK && body.Type == "mysql") || body.Type == "postgres" {
 		payload := fmt.Sprintf(`{"database_id":%d,"site_id":%d,"name":%q,"type":%q}`,
 			database.ID, siteID, body.Name, body.Type)
 		job := &jobmodel.Job{
@@ -291,6 +307,11 @@ func (h *dbHandler) rotateDBUserPassword(c echo.Context) error {
 	dbUser, _ := h.store.DBUsers.GetByID(c.Request().Context(), uID)
 	if dbUser == nil || dbUser.DatabaseID != dbID {
 		return echo.NewHTTPError(http.StatusNotFound, "user not found")
+	}
+	// The account may also serve other tenants' databases: only rotate a
+	// password the caller controls everywhere it is used.
+	if isReservedMySQLUser(dbUser.Username) || !h.ownsMySQLUser(c.Request().Context(), sess, dbUser.Username) {
+		return echo.NewHTTPError(http.StatusForbidden, "this database user is shared with databases you cannot manage")
 	}
 
 	// Generate new random password
@@ -498,6 +519,17 @@ func (h *dbHandler) createDBUser(c echo.Context) error {
 	if !dbNameRegex.MatchString(body.Username) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid username")
 	}
+	if isReservedMySQLUser(body.Username) {
+		return echo.NewHTTPError(http.StatusBadRequest, "this username is reserved")
+	}
+	// MySQL account names are global across tenants: never "create" (and
+	// then rotate the password of) an account that already exists.
+	if rows, _ := h.store.DBUsers.ListByUsername(c.Request().Context(), body.Username); len(rows) > 0 {
+		return echo.NewHTTPError(http.StatusConflict, "a database user with this name already exists; add it with \"grant existing user\" if it is yours")
+	}
+	if database.Type == "mysql" && h.mysqlUserExists(c.Request().Context(), body.Username) {
+		return echo.NewHTTPError(http.StatusConflict, "a MySQL user with this name already exists on the server")
+	}
 	if err := siteinput.DBPassword(body.Password); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
@@ -652,6 +684,23 @@ func (h *dbHandler) deleteDBUser(c echo.Context) error {
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "user not found")
+	}
+
+	// The same account may be assigned to other databases: then only its
+	// access to this one is revoked, the account itself stays.
+	shared := false
+	if rows, _ := h.store.DBUsers.ListByUsername(c.Request().Context(), dbUser.Username); len(rows) > 1 {
+		shared = true
+	}
+	if database.Type == "mysql" && shared {
+		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
+			return conn.RevokeAll(c.Request().Context(), dbUser.Username, dbUser.HostPattern, database.Name)
+		})
+		h.audit.RecordAction(c.Request().Context(), userID, "dbuser_revoke", "dbuser", dbUser.ID, nil)
+		if err := h.store.DBUsers.Delete(c.Request().Context(), dbUser.ID); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"user_id": dbUser.ID, "revoked": true}, RequestID: rid})
 	}
 
 	// Delete from MySQL directly first
@@ -1148,12 +1197,29 @@ func (h *dbHandler) grantExistingUser(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
-	if body.Username == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "username required")
+	if !dbNameRegex.MatchString(body.Username) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid username")
+	}
+	if isReservedMySQLUser(body.Username) {
+		return echo.NewHTTPError(http.StatusForbidden, "this database user cannot be granted")
 	}
 	body.HostPattern = canonicalDBHost(body.HostPattern)
+	if err := siteinput.DBHost(body.HostPattern); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
 	if body.Privileges == "" {
 		body.Privileges = "ALL"
+	}
+	// Privileges go into the GRANT statement: "ALL ON *.* TO ... --" would
+	// grant global rights.
+	if err := siteinput.DBPrivileges(body.Privileges); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	// MySQL accounts are global: a site writer may only add accounts the
+	// panel manages for sites they can manage (never root or other
+	// tenants' users). Super admins may add any non-system account.
+	if !isSessionSuperAdmin(c.Request().Context(), h.store, sess) && !h.ownsMySQLUser(c.Request().Context(), sess, body.Username) {
+		return echo.NewHTTPError(http.StatusForbidden, "you can only add database users that belong to your own sites")
 	}
 
 	// Check if this exact user@host is already assigned to this database.
@@ -1200,19 +1266,11 @@ func (h *dbHandler) grantExistingUser(c echo.Context) error {
 		})
 	}
 
-	// Generate password for phpMyAdmin auto-login
-	newPassword := generateDBPassword()
-	hashed, _ := auth.HashPassword(newPassword)
-	encPassword := ""
-	if database.Type == "mysql" {
-		enc, err := h.store.DBStore.EncryptPassword(newPassword)
-		if err == nil {
-			encPassword = enc
-		}
-		// Set the password in MySQL for the user
-		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
-			return conn.ChangePassword(c.Request().Context(), body.Username, body.HostPattern, newPassword)
-		})
+	// Granting never changes the account's password (it is in use by the
+	// account's other databases); the stored credentials are reused.
+	hashed, encPassword := "", ""
+	if others, _ := h.store.DBUsers.ListByUsername(c.Request().Context(), body.Username); len(others) > 0 {
+		hashed, encPassword = others[0].PasswordHash, others[0].EncryptedPassword
 	}
 
 	dbUser := &store.DBUser{
@@ -1233,7 +1291,6 @@ func (h *dbHandler) grantExistingUser(c echo.Context) error {
 		Data: map[string]any{
 			"user_id":  dbUser.ID,
 			"username": body.Username,
-			"password": newPassword,
 		},
 		RequestID: rid,
 	})
@@ -1283,9 +1340,13 @@ func (h *dbHandler) listAvailableMySQLUsers(c echo.Context) error {
 	}
 	available := make([]userEntry, 0)
 	seen := make(map[string]bool)
+	super := isSessionSuperAdmin(c.Request().Context(), h.store, sess)
 	for _, u := range mysqlUsers {
 		host := canonicalDBHost(u.Host)
 		key := canonicalDBUserKey(u.Username, host)
+		if isReservedMySQLUser(u.Username) || (!super && !h.ownsMySQLUser(c.Request().Context(), sess, u.Username)) {
+			continue // other tenants' and system accounts are not listed
+		}
 		if !assigned[key] && !seen[key] {
 			available = append(available, userEntry{Username: u.Username, Host: host})
 			seen[key] = true
@@ -1475,3 +1536,55 @@ func (h *dbHandler) execSQL(c echo.Context) error {
 		RequestID: rid,
 	})
 }
+
+// isReservedMySQLUser reports system and panel-internal MySQL accounts that
+// no site may create, grant or rotate.
+func isReservedMySQLUser(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch n {
+	case "root", "mysql", "mariadb.sys", "mysql.sys", "mysql.session", "mysql.infoschema",
+		"debian-sys-maint", "phpmyadmin", "pma", "admin", "sigardapanel":
+		return true
+	}
+	return strings.HasPrefix(n, "pma_") || strings.HasPrefix(n, "mysql.")
+}
+
+// ownsMySQLUser reports whether every database the account is assigned to
+// belongs to a site the caller can manage (and it is assigned at least once).
+func (h *dbHandler) ownsMySQLUser(ctx context.Context, sess *store.Session, username string) bool {
+	rows, err := h.store.DBUsers.ListByUsername(ctx, username)
+	if err != nil || len(rows) == 0 {
+		return false
+	}
+	for _, r := range rows {
+		db, _ := h.store.Databases.GetByID(ctx, r.DatabaseID)
+		if db == nil {
+			return false
+		}
+		site, _ := h.store.Sites.GetByID(ctx, db.SiteID)
+		if site == nil || !h.canManage(ctx, sess, site) {
+			return false
+		}
+	}
+	return true
+}
+
+// mysqlUserExists reports whether the MySQL server has an account with this name.
+func (h *dbHandler) mysqlUserExists(ctx context.Context, username string) bool {
+	found := false
+	_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
+		users, err := conn.ListUsers(ctx)
+		if err != nil {
+			return err
+		}
+		for _, u := range users {
+			if strings.EqualFold(u.Username, username) {
+				found = true
+			}
+		}
+		return nil
+	})
+	return found
+}
+
+var dbCharsetRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)

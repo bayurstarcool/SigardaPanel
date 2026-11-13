@@ -364,10 +364,6 @@
               <p class="hint">Pilih dari preset di atas, search, atau ketik manual.</p>
             </div>
             <div>
-              <label for="site-docker-name" class="label">Container name</label>
-              <input id="site-docker-name" bind:value={form.docker_name} class="input" placeholder="auto: site-name" />
-            </div>
-            <div>
               <label for="site-docker-ports" class="label">Port mapping</label>
               <input id="site-docker-ports" bind:value={form.docker_ports} class="input font-mono text-[13px]" placeholder="auto" />
             </div>
