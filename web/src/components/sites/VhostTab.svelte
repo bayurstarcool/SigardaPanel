@@ -5,6 +5,8 @@
   import { toasts } from '$lib/toast.svelte';
 
   let { siteId, site, onTriggerDeploy }: { siteId: number; site: any; onTriggerDeploy?: () => void } = $props();
+  // Raw vhost edits are root on the server: the API allows admins only.
+  const canEditVhost = $derived(hasRole(auth.user?.role, 'admin'));
 
   // CodeMirror is heavy; fetch it only when this tab renders.
   const editorModule = import('$components/CodeEditor.svelte');
@@ -143,6 +145,9 @@
           <span class="flex items-center gap-1 tabular-nums"><FileText size={12} /> {vhostConfig.split('\n').length} lines</span>
           {#if vhostDirty}<span class="flex items-center gap-1 text-warning"><span class="dot"></span>modified</span>{/if}
         </div>
+        {#if !canEditVhost}
+          <span class="text-xs text-subtle">Read-only: editing the raw vhost needs an administrator.</span>
+        {:else}
         <div class="flex shrink-0 items-center gap-2">
           <button onclick={validateVhost} disabled={vhostValidating} class="btn btn-secondary btn-sm">
             {#if vhostValidating}<LoaderCircle size={14} class="animate-spin" />{:else}<Wrench size={14} />{/if}
@@ -152,6 +157,7 @@
             {#if vhostSaving}<LoaderCircle size={14} class="animate-spin" />{:else}<Save size={14} />{/if} Save
           </button>
         </div>
+        {/if}
       </div>
     {/if}
   </div>

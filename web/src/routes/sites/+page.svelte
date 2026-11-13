@@ -309,7 +309,7 @@
         {#if form.runtime === 'docker'}
           <div class="mt-5 border-t border-line pt-5">
             <p class="mb-3 flex items-center gap-2 text-sm font-semibold text-fg">
-              <span class="badge badge-accent">1</span> Pilih bahasa / stack
+              <span class="badge badge-accent">1</span> Choose a language / stack
             </p>
             <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {#each dockerPresets as p (p.lang)}
@@ -361,7 +361,7 @@
                   </div>
                 {/if}
               </div>
-              <p class="hint">Pilih dari preset di atas, search, atau ketik manual.</p>
+              <p class="hint">Pick a preset above, search, or type an image name.</p>
             </div>
             <div>
               <label for="site-docker-ports" class="label">Port mapping</label>
@@ -395,7 +395,7 @@
 
         <div class="mt-5 flex flex-wrap items-center gap-2">
           <button onclick={createSite} disabled={createDisabled} class="btn btn-primary btn-sm">
-            {busy ? 'Creating…' : form.runtime === 'docker' && !showDockerConfig ? 'Pilih bahasa dulu' : 'Create site'}
+            {busy ? 'Creating…' : form.runtime === 'docker' && !showDockerConfig ? 'Choose a language first' : 'Create site'}
           </button>
           <button onclick={() => (showCreate = false)} class="btn btn-ghost btn-sm">Cancel</button>
         </div>
@@ -478,7 +478,7 @@
                     {#if s.status === 'pending'}
                       <span class="inline-flex items-center gap-1 text-xs leading-tight text-warning">
                         <TriangleAlert size={11} />
-                        {!s.conf_file ? 'nginx config belum terdaftar' : 'menunggu provisioning'}
+                        {!s.conf_file ? 'nginx vhost not created yet' : 'waiting for provisioning'}
                       </span>
                     {/if}
                   </div>

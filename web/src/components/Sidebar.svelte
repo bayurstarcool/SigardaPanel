@@ -10,7 +10,7 @@
   import {
     LayoutDashboard, Server, Globe, ShieldCheck, Database, Package, Zap,
     Folder, BarChart3, Users, ClipboardCheck, Cloud, Bell, DollarSign, ShoppingCart,
-    Layers, Box, Shield, HardDrive, Mail, Cpu, Bug, ShieldAlert, BookOpen, Activity,
+    Layers, Box, Shield, HardDrive, Mail, Cpu, Bug, ShieldAlert, BookOpen, Activity, SquareTerminal, ShieldBan,
   } from 'lucide-svelte';
 
   // `active` is kept for API compatibility with existing pages; the current
@@ -36,6 +36,7 @@
           { label: 'Sites', href: '/sites', icon: Globe },
           { label: 'SSL', href: '/ssl', icon: ShieldCheck },
           { label: 'Databases', href: '/databases', icon: Database },
+          { label: 'Files', href: '/files', icon: Folder },
           { label: 'Backups', href: '/backups', icon: Package },
           { label: 'Cloudflare', href: '/cloudflare', icon: Cloud },
         ],
@@ -45,10 +46,17 @@
         items: [
           { label: 'Servers', href: '/servers', icon: Server, pro: true },
           { label: 'Stack', href: '/stack', icon: Layers },
-          { label: 'Docker', href: '/docker', icon: Box },
-          { label: 'PM2', href: '/pm2', icon: Cpu },
-          { label: 'Redis', href: '/redis', icon: Zap },
-          { label: 'Email', href: '/email', icon: Mail },
+          // Server-level tools: their API routes are admin-only, so other
+          // roles would only get pages that cannot load.
+          ...(isAdmin
+            ? [
+                { label: 'Docker', href: '/docker', icon: Box },
+                { label: 'PM2', href: '/pm2', icon: Cpu },
+                { label: 'Redis', href: '/redis', icon: Zap },
+                { label: 'Email', href: '/email', icon: Mail },
+                { label: 'Terminal', href: '/terminal', icon: SquareTerminal },
+              ]
+            : []),
           { label: 'Monitoring', href: '/monitoring', icon: BarChart3 },
           { label: 'System', href: '/system', icon: HardDrive },
         ],
@@ -56,9 +64,14 @@
       {
         title: 'Security',
         items: [
-          { label: 'Firewall', href: '/firewall', icon: Shield },
-          { label: 'Bot Blocker', href: '/bot-blocker', icon: Bug },
-          ...(isAdmin ? [{ label: 'Threat Monitor', href: '/threats', icon: ShieldAlert }] : []),
+          ...(isAdmin
+            ? [
+                { label: 'Firewall', href: '/firewall', icon: Shield },
+                { label: 'Fail2ban', href: '/fail2ban', icon: ShieldBan },
+                { label: 'Bot Blocker', href: '/bot-blocker', icon: Bug },
+                { label: 'Threat Monitor', href: '/threats', icon: ShieldAlert },
+              ]
+            : []),
         ],
       },
       {
@@ -72,7 +85,6 @@
     if (isAdmin) {
       const admin: Item[] = [
         { label: 'Users', href: '/users', icon: Users, pro: true },
-        { label: 'Files', href: '/files', icon: Folder },
         { label: 'Audit', href: '/audit', icon: ClipboardCheck },
       ];
       if (isSuper) {

@@ -10,7 +10,7 @@
   import {
     Globe, Zap, Server, ArrowRight, Plus, RefreshCw, ShieldAlert, Shield, ShieldCheck, Box, Database,
     Terminal, Archive, Lock, AlertTriangle, CheckCircle2, WifiOff, Activity,
-    TriangleAlert,
+    TriangleAlert, Folder, Bell,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
@@ -131,16 +131,29 @@
   const failedJobs = $derived(jobs.filter((j) => j.status === 'failed').length);
   const recentJobs = $derived(jobs.slice(0, 6));
 
-  const quickActions = [
-    { label: 'New site', href: '/sites', icon: Globe },
-    { label: 'Docker', href: '/docker', icon: Box },
-    { label: 'Firewall', href: '/firewall', icon: Shield },
-    { label: 'Databases', href: '/databases', icon: Database },
-    { label: 'Backups', href: '/backups', icon: Archive },
-    { label: 'SSL', href: '/ssl', icon: Lock },
-    { label: 'Redis', href: '/redis', icon: Zap },
-    { label: 'Terminal', href: '/terminal', icon: Terminal },
-  ];
+  // Server-level shortcuts (Docker, Firewall, Redis, root Terminal) are
+  // admin-only in the API; other roles get site-level ones.
+  const quickActions = $derived(
+    hasRole(auth.user?.role, 'admin')
+      ? [
+          { label: 'New site', href: '/sites', icon: Globe },
+          { label: 'Docker', href: '/docker', icon: Box },
+          { label: 'Firewall', href: '/firewall', icon: Shield },
+          { label: 'Databases', href: '/databases', icon: Database },
+          { label: 'Backups', href: '/backups', icon: Archive },
+          { label: 'SSL', href: '/ssl', icon: Lock },
+          { label: 'Redis', href: '/redis', icon: Zap },
+          { label: 'Terminal', href: '/terminal', icon: Terminal },
+        ]
+      : [
+          { label: 'New site', href: '/sites', icon: Globe },
+          { label: 'Databases', href: '/databases', icon: Database },
+          { label: 'Backups', href: '/backups', icon: Archive },
+          { label: 'SSL', href: '/ssl', icon: Lock },
+          { label: 'Files', href: '/files', icon: Folder },
+          { label: 'Notifications', href: '/notifications', icon: Bell },
+        ],
+  );
 </script>
 
 <DashboardLayout active="Overview">
