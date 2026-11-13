@@ -50,10 +50,10 @@ apt-get install -y -qq --no-install-recommends \
 ok "System packages installed"
 
 # ── 2. Go toolchain ──
-log "[2/9] Ensuring Go 1.25+..."
-if ! command -v go &>/dev/null || ! go version | grep -qE 'go1\.(2[5-9]|[3-9][0-9])'; then
-  log "Installing Go 1.25..."
-  curl -sL https://go.dev/dl/go1.25.0.linux-amd64.tar.gz -o /tmp/go.tar.gz
+log "[2/9] Ensuring Go 1.26+..."
+if ! command -v go &>/dev/null || ! go version | grep -qE 'go1\.(2[6-9]|[3-9][0-9])'; then
+  log "Installing Go 1.26.11..."
+  curl -sL https://go.dev/dl/go1.26.11.linux-amd64.tar.gz -o /tmp/go.tar.gz
   rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tar.gz
   echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
   chmod +x /etc/profile.d/go.sh
