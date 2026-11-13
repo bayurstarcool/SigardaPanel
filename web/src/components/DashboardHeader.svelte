@@ -83,7 +83,7 @@
           <span class="hidden text-subtle sm:inline">via {auth.impersonator.username}</span>
         {/if}
       </div>
-      <button onclick={() => auth.stopImpersonation()} class="btn btn-xs btn-secondary">
+      <button onclick={async () => { await auth.stopImpersonation(); window.location.assign('/users'); }} class="btn btn-xs btn-secondary">
         <Undo2 size={13} /> Kembali
       </button>
     </div>

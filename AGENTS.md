@@ -607,6 +607,11 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
   result of `c.JSON` (nil, the caller continues).
 - **Web proxy** (`/api/proxy/[...path]`) passes bytes, content types and Set-Cookie;
   `apiFetch` retries GET only.
+- **Impersonation** lives in the HttpOnly `sp_imp` cookie, set and cleared by the web
+  route `/api/impersonate` (POST `{user_id}` with the admin's `sp_session`, DELETE to stop;
+  same-origin only). `authHeaders` prefers it over `sp_session`, so it survives reloads and
+  page JS never holds the token; the client reads the state from `/auth/me`
+  (`impersonated_by`) and drops a stale cookie when `/auth/me` answers 401.
 - **Backup configs**: `retention_days` 0 keeps backups; `exclude_patterns` are applied
   by the agent and recorded in the archive (`.sigarda-excludes`) so restores keep the
   excluded paths.

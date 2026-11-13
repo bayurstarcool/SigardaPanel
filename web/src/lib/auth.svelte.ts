@@ -81,30 +81,44 @@ function createAuthStore() {
     };
   }
 
+  // The session behind the cookies: impersonation is kept in the HttpOnly
+  // sp_imp cookie (see /api/impersonate), so it survives page reloads.
+  function applySession(result: NonNullable<Awaited<ReturnType<typeof validateToken>>>) {
+    token = null;
+    user = result.user;
+    isImpersonating = result.isImpersonating;
+    impersonatingUser = result.isImpersonating ? result.user : null;
+    impersonator = result.isImpersonating ? result.impersonator : null;
+    localStorage.setItem("sigarda_user", JSON.stringify(result.user));
+  }
+
+  // Clears the impersonation cookie (and its server session). Returns false
+  // when the request could not be made.
+  async function clearImpersonationCookie(): Promise<boolean> {
+    try {
+      const res = await fetch("/api/impersonate", { method: "DELETE" });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async function init() {
     log("init() called");
     loadSession();
     // Validate whatever the cookie says — even without a cached user the
     // browser may still hold a valid session.
     try {
-      const result = await validateToken(null);
+      let result = await validateToken(null);
+      if (!result) {
+        // An expired or revoked impersonation cookie hides the admin's own
+        // session: drop it and try again with sp_session.
+        if (await clearImpersonationCookie()) result = await validateToken(null);
+      }
       if (result) {
         consecutiveFailures = 0;
-        if (result.isImpersonating) {
-          // Cookie sessions are never impersonation sessions (impersonation
-          // is Bearer-only and does not survive a reload).
-          isImpersonating = false;
-          impersonatingUser = null;
-          impersonator = null;
-          token = null;
-        } else {
-          isImpersonating = false;
-          impersonatingUser = null;
-          impersonator = null;
-        }
-        user = result.user;
-        localStorage.setItem("sigarda_user", JSON.stringify(result.user));
-        log("init() session valid, user:", user?.username);
+        applySession(result);
+        log("init() session valid, user:", user?.username, "impersonating:", isImpersonating);
       } else {
         // Session invalid (401/403) — count failures
         consecutiveFailures++;
@@ -132,6 +146,7 @@ function createAuthStore() {
   }
 
   function clearSession() {
+    const isImpersonatingAtClear = isImpersonating;
     token = null;
     user = null;
     isImpersonating = false;
@@ -145,6 +160,10 @@ function createAuthStore() {
     localStorage.removeItem("sigarda_imp_token");
     localStorage.removeItem("sigarda_imp_user");
     document.cookie = "panel_token=; path=/; max-age=0";
+    // An impersonation cookie must not outlive the session it belongs to.
+    if (isImpersonatingAtClear) {
+      fetch("/api/impersonate", { method: "DELETE", keepalive: true }).catch(() => {});
+    }
     log("clearSession() called");
   }
 
@@ -218,74 +237,42 @@ function createAuthStore() {
 
   async function stopImpersonation() {
     log("stopImpersonation() called");
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      await fetch("/api/proxy/auth/stop-impersonation", {
-        method: "POST",
-        headers,
-      });
-    } catch {}
-
-    // Drop the impersonation Bearer token; the original HttpOnly cookie
-    // session takes over again.
-    token = null;
+    await clearImpersonationCookie();
+    // The admin's own HttpOnly sp_session takes over again.
     try {
       const result = await validateToken(null);
-      if (result?.user) {
-        user = result.user;
-        localStorage.setItem("sigarda_user", JSON.stringify(result.user));
-      } else {
+      if (!result?.user) {
         clearAuth();
         return;
       }
+      applySession(result);
     } catch {
       clearAuth();
       return;
     }
-
-    isImpersonating = false;
-    impersonatingUser = null;
-    impersonator = null;
     originalToken = null;
     localStorage.removeItem("sigarda_imp_token");
     localStorage.removeItem("sigarda_imp_user");
   }
 
   async function impersonateUser(targetUserId: number) {
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      // Impersonation needs the current session: prefer the explicit token
-      // (already impersonating is blocked server-side) else the cookie.
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`/api/proxy/users/${targetUserId}/impersonate`, {
-        method: "POST",
-        headers,
-      });
-      const json = await res.json();
-      if (json.error) throw new Error(json.error.message || json.error.code);
-      const {
-        token: impToken,
-        user: impUser,
-        impersonator: impInfo,
-      } = json.data;
-
-      // Impersonation tokens live in memory only — never persisted, and
-      // they do not survive a page reload by design.
-      originalToken = token;
-      token = impToken;
-      user = impUser as User;
-      isImpersonating = true;
-      impersonatingUser = impUser as User;
-      impersonator = impInfo || null;
-      localStorage.setItem("sigarda_user", JSON.stringify(impUser));
-    } catch (e: any) {
-      throw new Error(e.message || "impersonation failed");
+    // The web server keeps the impersonation token in an HttpOnly cookie;
+    // page JS never sees it.
+    const res = await fetch("/api/impersonate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: targetUserId }),
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || json?.error) {
+      throw new Error(json?.error?.message || json?.error?.code || "impersonation failed");
     }
+    const result = await validateToken(null);
+    if (!result?.isImpersonating) {
+      await clearImpersonationCookie();
+      throw new Error("impersonation failed");
+    }
+    applySession(result);
   }
 
   return {
