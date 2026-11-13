@@ -256,8 +256,10 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `POST /api/v1/sites/:id/files/rename` — Rename entry
 - `POST /api/v1/sites/:id/files/move` — Move entries
 - `POST /api/v1/sites/:id/files/compress` — Compress entries
-- `POST /api/v1/sites/:id/files/upload` — Upload file
+- `POST /api/v1/sites/:id/files/upload` — Upload file (32 MB)
 - `GET /api/v1/sites/:id/files/download` — Download file
+- `POST /api/v1/sites/:id/files/extract` — Extract a .zip `{path, dest}` (zip-slip safe, 50k entries / 4 GiB)
+- `POST /api/v1/sites/:id/files/chmod` — Permission bits `{path, mode}` (no setuid/sticky, not through symlinks)
 
 ### SSL (4 endpoints)
 - `GET /api/v1/sites/:id/ssl` — SSL status
@@ -280,6 +282,7 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `GET /api/v1/databases/:id/available-users` — Available users
 - `GET /api/v1/db-users` — List all DB users
 - `PATCH /api/v1/db-users/:id` — Update DB user
+- `GET /api/v1/databases/:id/viewer/tables|columns|rows`, `POST …/viewer/query` — Read-only database viewer
 
 ### Backups (16 endpoints)
 - `POST /api/v1/backups/bulk` — Bulk create
@@ -436,7 +439,7 @@ shows would take other packages with it.
 - `POST /api/v1/servers/:id/redis/flushdb` — Flush database
 
 ### WebSocket Terminal (1 endpoint)
-- `GET /api/ws/terminal` — WebSocket PTY terminal
+- `GET /api/v1/ws/terminal?ticket=` — WebSocket PTY terminal (see "WebSocket Terminal")
   - Full TUI support (htop, vim, nano)
   - Session persistence across reconnections
   - Sticky keyboard shortcuts (Ctrl+C/Z/D/L/U, Tab, Esc, arrows)
@@ -486,40 +489,22 @@ shows would take other packages with it.
 
 ## WebSocket Terminal
 
-### Architecture
 ```
-Browser (xterm.js) ←WebSocket→ Nginx ←WebSocket→ Agent (:7710/ws/terminal)
-                                         ↕
-                                    PTY (bash)
+Browser (xterm.js) --ws--> API /api/v1/ws/terminal?ticket=… --ws--> Agent :7710/ws/terminal --> PTY
 ```
 
-### Features
-- **Full TUI support**: htop, vim, nano, tmux
-- **Session persistence**: reconnect to same PTY session after disconnect
-- **Sticky keyboard shortcuts**: Ctrl+C/Z/D/L/U, Tab, Esc, arrows
-- **Mobile-optimized**: no resize interference during typing
-- **Pending buffer**: up to 64KB buffered when no client attached
-- **Per-site terminal**: `?user=<system_user>` runs shell as site owner (not root)
-
-### Session Persistence Flow
-1. Agent sends `{"type":"session","id":"pty_xxx"}` on connect
-2. Frontend stores session ID in memory
-3. On reconnect, frontend sends `?session=pty_xxx` query param
-4. Agent swaps WebSocket reference (single goroutine per session)
-5. Agent flushes pending buffer + sends prompt redraw
-
-### Nginx Proxy Config
-```nginx
-location /api/ws/ {
-    proxy_pass http://127.0.0.1:7710/ws/;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Authorization "Bearer <agent_token>";
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
-}
-```
+- The browser first gets a single-use ticket (`POST /api/v1/terminal/tickets`
+  `{site_id|server_id, session?}`, through `/api/proxy`, so cookie sessions and
+  impersonation work); the API checks permission (site terminal: write on the
+  site, runs as its `system_user`; server terminal: admin, super_admin on the
+  panel host) and relays the websocket to the agent (`dialAgent` checks).
+- Sessions survive reconnects (`session` id `u<id>-…`); reattaching resizes the
+  PTY to make it redraw and never types into it.
+- Keepalive pings on both legs (30 s). The API forwards close frames: `1000
+  "shell exited"` ends the session (the client does not start a new shell);
+  agent failures close with 4403/4404/4502 and the client does not retry;
+  other drops back off 3/6/12 s, three failed attempts and it stops.
+  `{"type":"close"}` from the client ends the shell.
 
 ## Security Rules (feature audit, Nov 2026)
 
@@ -549,6 +534,10 @@ These are enforced in code and covered by tests; keep them when changing handler
   Let's Encrypt certificates are installed in the vhost; `/backups/` is denied.
 - **Agent URLs**: `scheme://host[:port]` only; loopback and link-local refused, private
   addresses need `SIGARDAPANEL_ALLOW_PRIVATE_AGENTS`.
+- **MySQL server per site**: the API's direct MySQL connection (`execMySQL`,
+  the panel host's server) is used only for sites on the panel host
+  (`panelMySQL`); other sites' databases are managed through their agent
+  (jobs). Operations without an agent path answer 409 for remote databases.
 - **MySQL accounts are global**: site writers may only grant accounts the panel manages
   for sites they can manage; system accounts are never grantable; granting never changes
   a password; privileges/host are validated.
@@ -569,7 +558,9 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
 | File manager | `POST /tasks/files/op`, `/tasks/files/upload`, `GET /tasks/files/download` | `internal/sitefs`; owner = site user |
 | Raw vhost | `/tasks/vhost/get`, `/validate`, `/put` | put keeps the file only if `nginx -t` passes |
 | Disk usage, logs | `/tasks/site/usage`, `/tasks/logs/read` | |
-| SSH/FTP accounts | `/tasks/sshftp/create`, `/delete` | jails, fstab marker, sshd `-t` before reload |
+| SSH/SFTP accounts | `/tasks/sshftp/create`, `/delete` | chroot jail at `/home/<account>` (site at `/htdocs`, system dirs read-only, `/dev/{null,zero,urandom,random,tty}`, `/tmp`), fstab marker, sshd `-t` before reload; the account shares the site owner's uid/gid (`useradd -o`), mounts are made in the host mount namespace (`nsenter -t 1 -m` when the agent has a private one), key auth only, private key stored encrypted (`secrets.Encrypt`) |
+| Database viewer | `/tasks/db/view` | tables/columns/rows/query with the database's own account; read-only (SELECT-like statements only, READ ONLY transaction rolled back, one statement: MySQL without multiStatements, PostgreSQL prepared), 500 rows, 10 KB per value, timeouts; API `/databases/:id/viewer/*` needs site write, queries audited |
+| PostgreSQL admin | `database.create`/`delete`, `dbuser.create`/`delete` jobs | psql runs as the `postgres` OS account (peer auth, `postgresAdmin`), never as root; users get the public schema (PG15+) |
 | Transfer | job `site.transfer` → `/tasks/site/transfer` | record + vhost regen only after the move; refused with SSH accounts, cron jobs or when suspended |
 | Cron | `/tasks/cron/sync` | `/etc/cron.d/sigardapanel-site-<id>`, runs as the site user (never root/system users) from the root; recorded only after the server accepted it; paused while suspended (`.suspended`), removed on delete |
 | IP restrictions | vhost regen | worker merges deny rules into blocked IPs and allow rules into an allowlist ending in `deny all` |
@@ -787,7 +778,7 @@ Signing key: `RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM` since v1
 v1.7.0 trust only that one and must run the current `install.sh update` once by hand.
 
 Binary releases: https://github.com/bayurstarcool/SigardaPanel/releases
-Latest: v1.7.1 (always check the releases page; install/update with `install.sh`, see docs/INSTALL.md)
+Latest: see the releases page (always check the releases page; install/update with `install.sh`, see docs/INSTALL.md)
 
 Recent security/stability releases: v1.1.1 file-manager upload traversal fix;
 v1.1.2 worker panic recovery + rate-limiter/error hygiene; v1.1.3 site deletion
