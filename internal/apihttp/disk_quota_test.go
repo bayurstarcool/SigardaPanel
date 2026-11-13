@@ -212,3 +212,36 @@ func TestDiskQuotaNotifier(t *testing.T) {
 		t.Fatalf("after 100%%: %d notifications, want 2", c)
 	}
 }
+
+func TestUserUsageAdminWithoutLimitCoversAllSites(t *testing.T) {
+	e, s, ctx := newTestAppWithAllMigrations(t)
+	_, sites := quotaFixture(t, s, ctx, 1) // sites owned by another user
+	admin := &store.User{Username: "boss", Email: "boss@example.com", PasswordHash: "x", Role: "super_admin"}
+	if err := s.Users.Create(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Metrics.Insert(ctx, &store.ServerMetric{ServerID: sites[0].ServerID, CollectedAt: time.Now(),
+		DiskUsed: sql.NullInt64{Int64: 10 * gib, Valid: true}, DiskTotal: sql.NullInt64{Int64: 100 * gib, Valid: true}}); err != nil {
+		t.Fatal(err)
+	}
+	withFakeSiteDisk(t, map[int64]int64{sites[0].ID: 100, sites[1].ID: 200})
+
+	rec := doRequest(t, e, "GET", fmt.Sprintf("/api/v1/users/%d/usage", admin.ID), nil, sessionTokenFor(t, s, ctx, admin.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("usage: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Data struct {
+			DiskUsed  int64  `json:"disk_used_bytes"`
+			Capacity  int64  `json:"disk_capacity_bytes"`
+			Scope     string `json:"disk_scope"`
+			SiteCount int    `json:"site_count"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Data.Scope != "all" || out.Data.DiskUsed != 300 || out.Data.Capacity != 100*gib || out.Data.SiteCount != 2 {
+		t.Fatalf("admin usage = %+v", out.Data)
+	}
+}

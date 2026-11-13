@@ -55,7 +55,7 @@ Service tokens (machine-to-machine) use the same header with scoped permissions.
 | POST | `/users` | admin | Create user |
 | PATCH | `/users/:id` | admin | Update user (role, password, limits) |
 | DELETE | `/users/:id` | admin | Delete user |
-| GET | `/users/:id/usage` | user | Disk/sites usage: owned sites, measured on their servers (`disk_unmeasured_sites` = not in the total) |
+| GET | `/users/:id/usage` | user | Disk/sites usage, measured on the sites' servers. With a disk limit: owned sites vs the limit. Without: admins see all sites, others their own, vs the servers' disk capacity (`disk_scope`, `disk_capacity_bytes`; `disk_unmeasured_sites` = not in the total) |
 | GET | `/users/:id/sites` | admin | List sites assigned |
 | POST | `/users/:id/sites` | admin | Assign site to user |
 | DELETE | `/users/:id/sites/:siteId` | admin | Unassign |

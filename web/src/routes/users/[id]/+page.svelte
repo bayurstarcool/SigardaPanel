@@ -463,7 +463,12 @@
                     <div class="mt-1 text-xs text-danger">Limit reached: new sites, uploads, edits, deploys and restores are blocked</div>
                   {/if}
                 {:else}
-                  <div class="text-xs text-subtle">No limit</div>
+                  <div class="text-xs text-subtle">
+                    No limit{usage.disk_scope === 'all' ? ' · all sites on the panel' : ''}{usage.disk_capacity_bytes ? ` · ${formatBytes(usage.disk_capacity_bytes)} server capacity` : ''}
+                  </div>
+                  {#if usage.disk_capacity_bytes}
+                    <div class="progress mt-2"><div class="progress-bar" style="width: {pct(usage.disk_used_bytes || 0, usage.disk_capacity_bytes)}%"></div></div>
+                  {/if}
                 {/if}
                 {#if usage.disk_unmeasured_sites}
                   <div class="mt-1 text-xs text-warning">{usage.disk_unmeasured_sites} site(s) not measured: server offline or still measuring</div>

@@ -108,21 +108,50 @@
 
   let usageData = $state<any>(null);
 
+  // Usage is re-read every minute (the sidebar stays mounted across page
+  // changes), and sooner while sites are still being measured: the first
+  // measurement of a large site can take longer than one request waits.
   onMount(() => {
     if (!auth.user?.id) return;
     const currentId = auth.isImpersonating && auth.impersonatingUser ? auth.impersonatingUser.id : auth.user.id;
-    apiFetch(auth.token, 'GET', `users/${currentId}/usage`).then((d) => { usageData = d; }).catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const load = () => {
+      apiFetch(auth.token, 'GET', `users/${currentId}/usage`)
+        .then((d) => { usageData = d; })
+        .catch(() => {})
+        .finally(() => {
+          if (stopped) return;
+          timer = setTimeout(load, (usageData?.disk_unmeasured_sites ?? 0) > 0 ? 15000 : 60000);
+        });
+    };
+    load();
+    return () => { stopped = true; clearTimeout(timer); };
   });
 
-  const diskUnlimited = $derived(usageData?.disk_unlimited);
-  const hasDiskLimit = $derived(!diskUnlimited && (usageData?.disk_limit_bytes ?? 0) > 0);
-  const diskPct = $derived(hasDiskLimit ? Math.min(Math.round((usageData?.disk_used_bytes ?? 0) / (usageData?.disk_limit_bytes ?? 1) * 100), 100) : 0);
+  // Denominator: the user's disk limit, else the disk capacity of the
+  // servers in scope (all servers for an admin), else none.
+  const diskLimit = $derived((usageData?.disk_limit_bytes ?? 0) as number);
+  const diskCapacity = $derived((usageData?.disk_capacity_bytes ?? 0) as number);
+  const hasDiskLimit = $derived(diskLimit > 0);
+  const diskDenominator = $derived(hasDiskLimit ? diskLimit : diskCapacity);
+  const diskUsed = $derived((usageData?.disk_used_bytes ?? 0) as number);
+  const diskPct = $derived(diskDenominator > 0 ? Math.min(Math.round((diskUsed / diskDenominator) * 100), 100) : 0);
   // Sites whose server could not be measured are not in disk_used_bytes: then
   // the figure is a lower bound.
   const diskUnmeasured = $derived(usageData?.disk_unmeasured_sites ?? 0);
-  const diskUsedText = $derived(`${diskUnmeasured > 0 ? '≥ ' : ''}${fmtBytesFull(usageData?.disk_used_bytes ?? 0)}`);
-  const diskLabel = $derived(hasDiskLimit ? `${diskUsedText} / ${usageData?.disk_limit_gb} GB` : diskUsedText);
-  const diskTitle = $derived(diskUnmeasured > 0 ? `${diskUnmeasured} site(s) could not be measured (server offline or still measuring)` : undefined);
+  const diskUsedText = $derived(`${diskUnmeasured > 0 ? '≥ ' : ''}${fmtBytesFull(diskUsed)}`);
+  const diskLabel = $derived(diskDenominator > 0 ? `${diskUsedText} / ${fmtBytesFull(diskDenominator)}` : diskUsedText);
+  const diskTitle = $derived(
+    [
+      hasDiskLimit
+        ? 'Sites you own, against your disk limit'
+        : usageData?.disk_scope === 'all'
+          ? 'All sites on the panel, against the disk capacity of all servers'
+          : 'Sites you own, against the disk capacity of their servers (no limit set)',
+      diskUnmeasured > 0 ? `${diskUnmeasured} site(s) not measured yet (server offline or still measuring)` : '',
+    ].filter(Boolean).join('. '),
+  );
 
   const maxSites = $derived(usageData?.max_sites);
   const sitesUnlimited = $derived(maxSites === null || maxSites === undefined || maxSites === 0);
@@ -176,7 +205,7 @@
         <div class="mb-1.5 flex justify-between text-[11px] text-subtle">
           <span>Disk</span><span class="tabular-nums" title={diskTitle}>{diskLabel}</span>
         </div>
-        <div class="progress h-1"><div class="progress-bar {diskPct >= 100 ? 'bg-danger' : diskPct >= 80 ? 'bg-warning' : ''}" style="width: {hasDiskLimit ? diskPct : 0}%"></div></div>
+        <div class="progress h-1"><div class="progress-bar {hasDiskLimit && diskPct >= 100 ? 'bg-danger' : hasDiskLimit && diskPct >= 80 ? 'bg-warning' : ''}" style="width: {diskPct}%"></div></div>
         {#if hasDiskLimit && diskPct >= 100}
           <div class="mt-1 text-[11px] text-danger">Disk limit reached: uploads, edits and deploys are blocked</div>
         {/if}
