@@ -485,6 +485,7 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 	// The account (a chrooted Linux user) is created on the site's server.
 	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/create", map[string]any{
 		"username": body.Username, "site_root": site.RootPath, "ssh_keys": body.SSHKeys,
+		"system_user": site.SystemUser.String,
 		"accounts": h.sshAccountsOnServer(ctx, site.ServerID, "", body.Username),
 	}, 3*time.Minute)
 	if err != nil && code == 0 {

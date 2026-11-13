@@ -6,8 +6,8 @@
   import PageHeader from '$components/PageHeader.svelte';
   import LoadError from '$components/LoadError.svelte';
   import {
-    Table2, Eye, Search, RefreshCw, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, Play,
-    LoaderCircle, KeyRound, Columns3, Rows3, TerminalSquare, Lock, Copy, Check,
+    Table2, Eye, Search, RefreshCw, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, Filter,
+    KeyRound, Columns3, Rows3, Lock, Copy, Check, Plus, X,
   } from 'lucide-svelte';
   import { fmtSize } from '../pma';
 
@@ -23,7 +23,7 @@
   let tableFilter = $state('');
 
   let current = $state<TableInfo | null>(null);
-  let view = $state<'data' | 'structure' | 'sql'>('data');
+  let view = $state<'data' | 'structure'>('data');
 
   // Data tab
   let data = $state<Result | null>(null);
@@ -38,11 +38,27 @@
   let structure = $state<Result | null>(null);
   let structureLoading = $state(false);
 
-  // SQL tab
-  let sql = $state('');
-  let sqlResult = $state<Result | null>(null);
-  let sqlError = $state('');
-  let sqlRunning = $state(false);
+  // Filters (column OP value; the value is sent as a bound parameter)
+  type Cond = { column: string; op: string; value: string };
+  const ops: { key: string; label: string; needsValue: boolean }[] = [
+    { key: 'eq', label: '=', needsValue: true },
+    { key: 'ne', label: '≠', needsValue: true },
+    { key: 'contains', label: 'contains', needsValue: true },
+    { key: 'starts', label: 'starts with', needsValue: true },
+    { key: 'gt', label: '>', needsValue: true },
+    { key: 'ge', label: '≥', needsValue: true },
+    { key: 'lt', label: '<', needsValue: true },
+    { key: 'le', label: '≤', needsValue: true },
+    { key: 'null', label: 'is NULL', needsValue: false },
+    { key: 'notnull', label: 'is not NULL', needsValue: false },
+  ];
+  let filters = $state<Cond[]>([]);
+  let applied = $state<Cond[]>([]);
+  const columnNames = $derived(data?.columns ?? []);
+  const needsValue = (op: string) => ops.find((o) => o.key === op)?.needsValue ?? true;
+  function addFilter() { filters = [...filters, { column: columnNames[0] ?? '', op: 'contains', value: '' }]; }
+  function applyFilters() { applied = filters.filter((f) => f.column && (f.value !== '' || !needsValue(f.op))).map((f) => ({ ...f })); offset = 0; loadData(); }
+  function clearFilters() { filters = []; applied = []; offset = 0; loadData(); }
 
   let copied = $state('');
 
@@ -51,8 +67,6 @@
   );
   const label = (t: TableInfo) => (t.schema ? `${t.schema}.${t.name}` : t.name);
   const tableParams = (t: TableInfo) => `table=${encodeURIComponent(t.name)}${t.schema ? `&schema=${encodeURIComponent(t.schema)}` : ''}`;
-  const quote = (name: string) => (info?.type === 'postgres' ? `"${name.replace(/"/g, '""')}"` : '`' + name.replace(/`/g, '``') + '`');
-  const qualified = (t: TableInfo) => (t.schema ? `${quote(t.schema)}.${quote(t.name)}` : quote(t.name));
 
   function toTables(r: Result): TableInfo[] {
     const idx = (n: string) => r.columns.indexOf(n);
@@ -88,8 +102,8 @@
     desc = false;
     data = null;
     structure = null;
-    if (view === 'sql') view = 'data';
-    if (!sql) sql = `SELECT * FROM ${qualified(t)} LIMIT 100`;
+    filters = [];
+    applied = [];
     load();
   }
 
@@ -103,7 +117,9 @@
     dataLoading = true;
     dataError = '';
     try {
-      const q = `${tableParams(current)}&limit=${pageSize}&offset=${offset}` + (orderBy ? `&order_by=${encodeURIComponent(orderBy)}&desc=${desc ? 1 : 0}` : '');
+      const q = `${tableParams(current)}&limit=${pageSize}&offset=${offset}` +
+        (orderBy ? `&order_by=${encodeURIComponent(orderBy)}&desc=${desc ? 1 : 0}` : '') +
+        (applied.length ? `&filters=${encodeURIComponent(JSON.stringify(applied))}` : '');
       const d = await apiFetch(auth.token, 'GET', `databases/${dbId}/viewer/rows?${q}`);
       data = d.result;
     } catch (e: any) {
@@ -140,21 +156,6 @@
     view = v;
     if (v === 'data' && !data) loadData();
     if (v === 'structure' && !structure) loadStructure();
-  }
-
-  async function runSQL() {
-    if (!sql.trim() || sqlRunning) return;
-    sqlRunning = true;
-    sqlError = '';
-    sqlResult = null;
-    try {
-      const d = await apiFetch(auth.token, 'POST', `databases/${dbId}/viewer/query`, { sql, limit: 500 });
-      sqlResult = d.result;
-    } catch (e: any) {
-      sqlError = e.message || 'Query failed';
-    } finally {
-      sqlRunning = false;
-    }
   }
 
   function copyCell(v: string | null, key: string) {
@@ -278,9 +279,8 @@
           <div class="tabs !mb-0 border-0" role="tablist">
             <button role="tab" aria-selected={view === 'data'} onclick={() => switchView('data')} class="tab {view === 'data' ? 'tab-active' : ''}" disabled={!current}><Rows3 size={14} /> Data</button>
             <button role="tab" aria-selected={view === 'structure'} onclick={() => switchView('structure')} class="tab {view === 'structure' ? 'tab-active' : ''}" disabled={!current}><Columns3 size={14} /> Structure</button>
-            <button role="tab" aria-selected={view === 'sql'} onclick={() => switchView('sql')} class="tab {view === 'sql' ? 'tab-active' : ''}"><TerminalSquare size={14} /> SQL</button>
           </div>
-          {#if current && view !== 'sql'}
+          {#if current}
             <span class="truncate font-mono text-[13px] text-muted">{label(current)}</span>
           {/if}
         </div>
@@ -293,6 +293,32 @@
           {:else if dataLoading && !data}
             <div class="space-y-2 p-4">{#each [1, 2, 3, 4, 5, 6] as i (i)}<div class="skeleton h-6"></div>{/each}</div>
           {:else if data}
+            <div class="space-y-2 border-b border-line px-3 py-2">
+              {#each filters as f, i (i)}
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <select bind:value={f.column} aria-label="Column" class="input h-8 w-auto max-w-48 py-0 font-mono text-[12px]">
+                    {#each columnNames as c (c)}<option value={c}>{c}</option>{/each}
+                  </select>
+                  <select bind:value={f.op} aria-label="Operator" class="input h-8 w-auto py-0 text-[12px]">
+                    {#each ops as o (o.key)}<option value={o.key}>{o.label}</option>{/each}
+                  </select>
+                  {#if needsValue(f.op)}
+                    <input bind:value={f.value} placeholder="value" aria-label="Value" onkeydown={(e) => e.key === 'Enter' && applyFilters()} class="input h-8 min-w-0 flex-1 font-mono text-[12px] sm:max-w-64" />
+                  {/if}
+                  <button onclick={() => (filters = filters.filter((_, j) => j !== i))} class="btn btn-ghost btn-icon btn-xs" aria-label="Remove filter"><X size={13} /></button>
+                </div>
+              {/each}
+              <div class="flex flex-wrap items-center gap-1.5">
+                <button onclick={addFilter} disabled={!columnNames.length} class="btn btn-ghost btn-xs"><Plus size={13} /> Filter</button>
+                {#if filters.length}
+                  <button onclick={applyFilters} class="btn btn-primary btn-xs"><Filter size={12} /> Apply</button>
+                {/if}
+                {#if applied.length}
+                  <button onclick={clearFilters} class="btn btn-ghost btn-xs">Clear filters</button>
+                  <span class="text-[12px] text-subtle">{applied.length} filter{applied.length === 1 ? '' : 's'} active</span>
+                {/if}
+              </div>
+            </div>
             <div class:opacity-60={dataLoading}>{@render grid(data, true)}</div>
             <div class="flex flex-wrap items-center justify-between gap-2 border-t border-line px-3 py-2 text-[12px] text-subtle">
               <span class="tabular-nums">
@@ -313,33 +339,6 @@
             <div class="space-y-2 p-4">{#each [1, 2, 3, 4] as i (i)}<div class="skeleton h-6"></div>{/each}</div>
           {:else if structure}
             {@render grid(structure, false)}
-          {/if}
-        {:else}
-          <div class="border-b border-line p-3">
-            <label for="sql" class="sr-only">SQL query</label>
-            <textarea
-              id="sql"
-              bind:value={sql}
-              rows="5"
-              spellcheck="false"
-              placeholder="SELECT * FROM … LIMIT 100"
-              onkeydown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); runSQL(); } }}
-              class="input min-h-28 resize-y font-mono text-[13px]"></textarea>
-            <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <p class="text-[12px] text-subtle">Read-only: SELECT, SHOW, DESCRIBE and EXPLAIN. At most 500 rows. Ctrl+Enter runs.</p>
-              <button onclick={runSQL} disabled={sqlRunning || !sql.trim()} class="btn btn-primary btn-sm">
-                {#if sqlRunning}<LoaderCircle size={14} class="animate-spin" />{:else}<Play size={14} />{/if} Run
-              </button>
-            </div>
-          </div>
-          {#if sqlError}
-            <p class="p-4 font-mono text-[12px] whitespace-pre-wrap text-danger">{sqlError}</p>
-          {:else if sqlResult}
-            {@render grid(sqlResult, false)}
-            <div class="border-t border-line px-3 py-2 text-[12px] text-subtle tabular-nums">
-              {sqlResult.rows.length} row{sqlResult.rows.length === 1 ? '' : 's'}{sqlResult.has_more ? ' (more not shown)' : ''} · {sqlResult.elapsed_ms ?? 0} ms
-              {#if sqlResult.truncated}<span class="text-warning"> · long values are cut</span>{/if}
-            </div>
           {/if}
         {/if}
       </section>

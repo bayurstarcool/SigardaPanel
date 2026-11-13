@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/labstack/echo/v4"
 )
@@ -148,10 +147,12 @@ func (r *Router) sshCreateTask(c echo.Context) error {
 	defer sshTaskMu.Unlock()
 	ctx := c.Request().Context()
 	var p struct {
-		Username string          `json:"username"`
-		SiteRoot string          `json:"site_root"`
-		SSHKeys  string          `json:"ssh_keys"`
-		Accounts []sshAccountRef `json:"accounts"` // every account on this server after the change
+		Username string `json:"username"`
+		SiteRoot string `json:"site_root"`
+		SSHKeys  string `json:"ssh_keys"`
+		// The site's Linux user: the account shares its uid/gid.
+		SystemUser string          `json:"system_user"`
+		Accounts   []sshAccountRef `json:"accounts"` // every account on this server after the change
 	}
 	if err := c.Bind(&p); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid payload"})
@@ -181,11 +182,11 @@ func (r *Router) sshCreateTask(c echo.Context) error {
 	// the same Linux user), so it can edit the site's files and what it
 	// uploads belongs to the site user. As a separate user it could read the
 	// site but not write it. The chroot keeps it inside this site.
+	// The ids come from the site user's account (siteUserIDs refuses root and
+	// service accounts), never from a path in the request.
 	useradd := []string{"-m", "-d", home, "-s", "/bin/bash"}
-	if fi, err := os.Stat(p.SiteRoot); err == nil {
-		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid >= 1000 {
-			useradd = append(useradd, "-o", "-u", strconv.FormatUint(uint64(st.Uid), 10), "-g", strconv.FormatUint(uint64(st.Gid), 10))
-		}
+	if uid, gid, ok := siteUserIDs(p.SystemUser); ok && uid >= 1000 {
+		useradd = append(useradd, "-o", "-u", strconv.FormatUint(uint64(uid), 10), "-g", strconv.FormatUint(uint64(gid), 10))
 	}
 	useradd = append(useradd, p.Username)
 	if out, err := r.executor.RunShell(ctx, r.useraddCmd, useradd...); err != nil {

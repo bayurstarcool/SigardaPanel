@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"sync"
 	"testing"
@@ -84,8 +85,20 @@ func TestDatabaseViewerUsesTheDatabaseAccountOnTheSiteServer(t *testing.T) {
 		t.Fatalf("rows call = %v", last)
 	}
 
-	rec = doRequest(t, e, http.MethodPost, base+"/query", map[string]any{"sql": "SELECT 1"}, owner)
+	rec = doRequest(t, e, http.MethodGet, base+"/rows?table=products&filters="+url.QueryEscape(`[{"column":"name","op":"contains","value":"Ko"}]`), nil, owner)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("query = %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("filtered rows = %d %s", rec.Code, rec.Body.String())
+	}
+	mu.Lock()
+	last = calls[len(calls)-1]
+	mu.Unlock()
+	if fs, _ := last["filters"].([]any); len(fs) != 1 {
+		t.Fatalf("filters not passed: %v", last)
+	}
+	if rec := doRequest(t, e, http.MethodGet, base+"/rows?table=products&filters=not-json", nil, owner); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad filters = %d", rec.Code)
+	}
+	if rec := doRequest(t, e, http.MethodPost, base+"/query", map[string]any{"sql": "SELECT 1"}, owner); rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("free SQL endpoint still answers: %d", rec.Code)
 	}
 }
