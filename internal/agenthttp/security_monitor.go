@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // ─── Threat-monitor collectors ──────────────────────────────────────────────
@@ -70,7 +70,7 @@ type sshActivity struct {
 }
 
 // GET /tasks/security/ssh-activity
-func (r *Router) securitySSHActivity(c echo.Context) error {
+func (r *Router) securitySSHActivity(c *echo.Context) error {
 	activity := parseSSHLogs([]string{"/var/log/auth.log", "/var/log/auth.log.1", "/var/log/secure", "/var/log/secure.1"})
 	if len(activity.LogSources) == 0 {
 		// Minimal Ubuntu 24.04 images run no rsyslog; the journal is the
@@ -243,7 +243,7 @@ var integrityWatchList = []string{
 }
 
 // GET /tasks/security/integrity
-func (r *Router) securityIntegrity(c echo.Context) error {
+func (r *Router) securityIntegrity(c *echo.Context) error {
 	paths := append([]string{}, integrityWatchList...)
 
 	// Whole watched directories, expanded one level.
@@ -332,7 +332,7 @@ var suspiciousPorts = map[int]string{
 }
 
 // GET /tasks/security/connections
-func (r *Router) securityConnections(c echo.Context) error {
+func (r *Router) securityConnections(c *echo.Context) error {
 	report := connectionsReport{Established: []connEndpoint{}, Suspicious: []connEndpoint{}}
 	endpoints := map[string]*connEndpoint{}
 
@@ -448,7 +448,7 @@ type persistenceItem struct {
 }
 
 // GET /tasks/security/persistence
-func (r *Router) securityPersistence(c echo.Context) error {
+func (r *Router) securityPersistence(c *echo.Context) error {
 	report := persistenceReport{
 		CronFiles:      []persistenceItem{},
 		SystemdTimers:  []persistenceItem{},
@@ -577,7 +577,7 @@ var webAttackPatterns = []struct {
 }
 
 // GET /tasks/security/web-attacks
-func (r *Router) securityWebAttacks(c echo.Context) error {
+func (r *Router) securityWebAttacks(c *echo.Context) error {
 	report := webAttackReport{LogSources: []string{}, Patterns: map[string]int{}, TopOffenders: []sshAttacker{}}
 	offenders := map[string]*sshAttacker{}
 

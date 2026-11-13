@@ -3,7 +3,7 @@ package apihttp
 import (
 	"net/http"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/features"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
@@ -18,7 +18,7 @@ func newLicenseHandler(s *store.Store) *licenseHandler {
 }
 
 // GetLicense returns current license info + feature access map.
-func (h *licenseHandler) getLicense(c echo.Context) error {
+func (h *licenseHandler) getLicense(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	license, err := h.store.Licenses.GetActive(c.Request().Context())
@@ -83,7 +83,7 @@ func (h *licenseHandler) getLicense(c echo.Context) error {
 }
 
 // ActivateLicense activates a license key.
-func (h *licenseHandler) activateLicense(c echo.Context) error {
+func (h *licenseHandler) activateLicense(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	var req struct {
@@ -139,7 +139,7 @@ func (h *licenseHandler) activateLicense(c echo.Context) error {
 }
 
 // DeactivateLicense reverts to free tier.
-func (h *licenseHandler) deactivateLicense(c echo.Context) error {
+func (h *licenseHandler) deactivateLicense(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	if err := h.store.Licenses.Deactivate(c.Request().Context()); err != nil {
@@ -156,7 +156,7 @@ func (h *licenseHandler) deactivateLicense(c echo.Context) error {
 }
 
 // GetFeatures returns all features with access status for the current tier.
-func (h *licenseHandler) getFeatures(c echo.Context) error {
+func (h *licenseHandler) getFeatures(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	license, err := h.store.Licenses.GetActive(c.Request().Context())

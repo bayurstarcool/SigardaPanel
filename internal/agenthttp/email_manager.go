@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // EmailManager handles email account management (Postfix + Dovecot).
@@ -24,7 +24,7 @@ type EmailManager struct {
 }
 
 // manageEmail handles email operations (create, delete, list, update-password).
-func (r *Router) manageEmail(c echo.Context) error {
+func (r *Router) manageEmail(c *echo.Context) error {
 	var payload struct {
 		Action    string `json:"action"`
 		Domain    string `json:"domain"`
@@ -63,7 +63,7 @@ func (r *Router) manageEmail(c echo.Context) error {
 }
 
 // installEmailServer installs Postfix + Dovecot + Roundcube.
-func (r *Router) installEmailServer(c echo.Context) error {
+func (r *Router) installEmailServer(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	slog.Info("email: installing email server")
@@ -253,7 +253,7 @@ func (r *Router) mailHash(ctx context.Context, password string) (string, error) 
 }
 
 // createEmailAccount creates a new email account.
-func (r *Router) createEmailAccount(c echo.Context, domain, email, password string, quota int, firstName, lastName string) error {
+func (r *Router) createEmailAccount(c *echo.Context, domain, email, password string, quota int, firstName, lastName string) error {
 	ctx := c.Request().Context()
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	if domain == "" {
@@ -308,7 +308,7 @@ func (r *Router) createEmailAccount(c echo.Context, domain, email, password stri
 
 // deleteEmailAccount deletes an email account (exact address only; the
 // mailbox directory is kept).
-func (r *Router) deleteEmailAccount(c echo.Context, email string) error {
+func (r *Router) deleteEmailAccount(c *echo.Context, email string) error {
 	ctx := c.Request().Context()
 	local, domain, err := parseEmail(email, "")
 	if err != nil {
@@ -342,7 +342,7 @@ func (r *Router) deleteEmailAccount(c echo.Context, email string) error {
 }
 
 // listEmailAccounts lists email accounts, optionally for one domain.
-func (r *Router) listEmailAccounts(c echo.Context, domain string) error {
+func (r *Router) listEmailAccounts(c *echo.Context, domain string) error {
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	if domain != "" && !isValidDomain(domain) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid domain")
@@ -373,7 +373,7 @@ func (r *Router) listEmailAccounts(c echo.Context, domain string) error {
 }
 
 // updateEmailPassword updates an email account password.
-func (r *Router) updateEmailPassword(c echo.Context, email, password string) error {
+func (r *Router) updateEmailPassword(c *echo.Context, email, password string) error {
 	ctx := c.Request().Context()
 	local, domain, err := parseEmail(email, "")
 	if err != nil {
@@ -406,7 +406,7 @@ func (r *Router) updateEmailPassword(c echo.Context, email, password string) err
 }
 
 // emailStatus returns email server status in the shape the web page reads.
-func (r *Router) emailStatus(c echo.Context) error {
+func (r *Router) emailStatus(c *echo.Context) error {
 	ctx := c.Request().Context()
 	postfixStatus, _ := r.executor.RunShell(ctx, "systemctl", "is-active", "postfix")
 	dovecotStatus, _ := r.executor.RunShell(ctx, "systemctl", "is-active", "dovecot")

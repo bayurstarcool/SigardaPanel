@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/httpjson"
 )
 
@@ -342,7 +342,7 @@ func firstMajor(v string) string {
 
 // --- Agent task handlers ---
 
-func stackJSONError(c echo.Context, err error) error {
+func stackJSONError(c *echo.Context, err error) error {
 	var se *stackError
 	if errors.As(err, &se) {
 		return c.JSON(se.Code, map[string]any{"ok": false, "message": se.Msg})
@@ -351,7 +351,7 @@ func stackJSONError(c echo.Context, err error) error {
 }
 
 // stackInfoTask detects all installed software and their versions.
-func (r *Router) stackInfoTask(c echo.Context) error {
+func (r *Router) stackInfoTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	m := r.stack
 	packages := make([]StackInfo, 0, len(stackPackages))
@@ -375,7 +375,7 @@ func (r *Router) stackInfoTask(c echo.Context) error {
 }
 
 // stackOpTask reports a background operation.
-func (r *Router) stackOpTask(c echo.Context) error {
+func (r *Router) stackOpTask(c *echo.Context) error {
 	op := r.stack.get(c.Param("id"))
 	if op == nil {
 		return c.JSON(http.StatusNotFound, map[string]any{"ok": false, "message": "operation not found (the agent may have restarted)"})
@@ -384,7 +384,7 @@ func (r *Router) stackOpTask(c echo.Context) error {
 }
 
 // stackInstallTask handles every stack action.
-func (r *Router) stackInstallTask(c echo.Context) error {
+func (r *Router) stackInstallTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	m := r.stack
 

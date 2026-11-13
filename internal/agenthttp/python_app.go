@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // managePythonApp handles Python application management (Gunicorn/WSGI).
-func (r *Router) managePythonApp(c echo.Context) error {
+func (r *Router) managePythonApp(c *echo.Context) error {
 
 	var payload struct {
 		Action       string `json:"action"`
@@ -52,7 +52,7 @@ func (r *Router) managePythonApp(c echo.Context) error {
 }
 
 // installPythonApp sets up a Python application with Gunicorn.
-func (r *Router) installPythonApp(c echo.Context, rootPath, appName, script string, workers int, bind, venvPath, requirements string) error {
+func (r *Router) installPythonApp(c *echo.Context, rootPath, appName, script string, workers int, bind, venvPath, requirements string) error {
 	ctx := c.Request().Context()
 
 	// Validate inputs
@@ -144,7 +144,7 @@ WantedBy=multi-user.target
 }
 
 // startPythonApp starts a Python application.
-func (r *Router) startPythonApp(c echo.Context, rootPath, appName, script string, workers int, bind, venvPath string) error {
+func (r *Router) startPythonApp(c *echo.Context, rootPath, appName, script string, workers int, bind, venvPath string) error {
 	ctx := c.Request().Context()
 
 	serviceName := fmt.Sprintf("gunicorn-%s", appName)
@@ -159,7 +159,7 @@ func (r *Router) startPythonApp(c echo.Context, rootPath, appName, script string
 }
 
 // stopPythonApp stops a Python application.
-func (r *Router) stopPythonApp(c echo.Context, appName string) error {
+func (r *Router) stopPythonApp(c *echo.Context, appName string) error {
 	ctx := c.Request().Context()
 
 	serviceName := fmt.Sprintf("gunicorn-%s", appName)
@@ -174,7 +174,7 @@ func (r *Router) stopPythonApp(c echo.Context, appName string) error {
 }
 
 // restartPythonApp restarts a Python application.
-func (r *Router) restartPythonApp(c echo.Context, appName string) error {
+func (r *Router) restartPythonApp(c *echo.Context, appName string) error {
 	ctx := c.Request().Context()
 
 	serviceName := fmt.Sprintf("gunicorn-%s", appName)
@@ -189,7 +189,7 @@ func (r *Router) restartPythonApp(c echo.Context, appName string) error {
 }
 
 // pythonAppStatus returns the status of a Python application.
-func (r *Router) pythonAppStatus(c echo.Context, appName string) error {
+func (r *Router) pythonAppStatus(c *echo.Context, appName string) error {
 	ctx := c.Request().Context()
 
 	serviceName := fmt.Sprintf("gunicorn-%s", appName)
@@ -202,7 +202,7 @@ func (r *Router) pythonAppStatus(c echo.Context, appName string) error {
 }
 
 // pythonAppLogs returns logs for a Python application.
-func (r *Router) pythonAppLogs(c echo.Context, appName string) error {
+func (r *Router) pythonAppLogs(c *echo.Context, appName string) error {
 	ctx := c.Request().Context()
 
 	serviceName := fmt.Sprintf("gunicorn-%s", appName)

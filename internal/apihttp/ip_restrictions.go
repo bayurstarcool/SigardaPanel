@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/store"
 )
@@ -35,7 +35,7 @@ func jobID(j *jobmodel.Job) any {
 // or deleting rules needs write. Returns a JSON error response (in this
 // handler's response format). ok is false when the request was refused and
 // the response has already been written.
-func (h *ipRestrictionHandler) checkSite(c echo.Context, site *store.Site, required string) (ok bool, err error) {
+func (h *ipRestrictionHandler) checkSite(c *echo.Context, site *store.Site, required string) (ok bool, err error) {
 	if err := requireSitePermission(c.Request().Context(), h.store, sessionFromEcho(c), site, required); err != nil {
 		code, msg := http.StatusNotFound, "site not found"
 		if he, isHTTP := err.(*echo.HTTPError); isHTTP {
@@ -47,7 +47,7 @@ func (h *ipRestrictionHandler) checkSite(c echo.Context, site *store.Site, requi
 }
 
 // list returns all IP restrictions for a site.
-func (h *ipRestrictionHandler) list(c echo.Context) error {
+func (h *ipRestrictionHandler) list(c *echo.Context) error {
 	siteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || siteID <= 0 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid site id"})
@@ -73,7 +73,7 @@ func (h *ipRestrictionHandler) list(c echo.Context) error {
 }
 
 // create adds a new IP restriction rule.
-func (h *ipRestrictionHandler) create(c echo.Context) error {
+func (h *ipRestrictionHandler) create(c *echo.Context) error {
 	siteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || siteID <= 0 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid site id"})
@@ -134,7 +134,7 @@ func (h *ipRestrictionHandler) create(c echo.Context) error {
 }
 
 // delete removes an IP restriction rule.
-func (h *ipRestrictionHandler) delete(c echo.Context) error {
+func (h *ipRestrictionHandler) delete(c *echo.Context) error {
 	id, err := strconv.ParseInt(c.Param("restriction_id"), 10, 64)
 	if err != nil || id <= 0 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid restriction id"})

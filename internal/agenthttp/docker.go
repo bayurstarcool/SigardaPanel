@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // DockerContainer represents a Docker container.
@@ -22,7 +22,7 @@ type DockerContainer struct {
 }
 
 // dockerContainersTask lists all Docker containers.
-func (r *Router) dockerContainersTask(c echo.Context) error {
+func (r *Router) dockerContainersTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	// Check if Docker is available
@@ -72,22 +72,22 @@ func (r *Router) dockerContainersTask(c echo.Context) error {
 }
 
 // dockerContainerStartTask starts a Docker container.
-func (r *Router) dockerContainerStartTask(c echo.Context) error {
+func (r *Router) dockerContainerStartTask(c *echo.Context) error {
 	return r.dockerContainerAction(c, "start", "started")
 }
 
 // dockerContainerStopTask stops a Docker container.
-func (r *Router) dockerContainerStopTask(c echo.Context) error {
+func (r *Router) dockerContainerStopTask(c *echo.Context) error {
 	return r.dockerContainerAction(c, "stop", "stopped")
 }
 
 // dockerContainerRestartTask restarts a Docker container.
-func (r *Router) dockerContainerRestartTask(c echo.Context) error {
+func (r *Router) dockerContainerRestartTask(c *echo.Context) error {
 	return r.dockerContainerAction(c, "restart", "restarted")
 }
 
 // dockerContainerRemoveTask removes a Docker container.
-func (r *Router) dockerContainerRemoveTask(c echo.Context) error {
+func (r *Router) dockerContainerRemoveTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		ContainerID string `json:"container_id"`
@@ -119,7 +119,7 @@ func (r *Router) dockerContainerRemoveTask(c echo.Context) error {
 }
 
 // dockerContainerCreateTask creates and optionally starts a Docker container.
-func (r *Router) dockerContainerCreateTask(c echo.Context) error {
+func (r *Router) dockerContainerCreateTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Image     string            `json:"image"`
@@ -195,7 +195,7 @@ func (r *Router) dockerContainerCreateTask(c echo.Context) error {
 }
 
 // dockerContainerLogsTask gets logs from a Docker container.
-func (r *Router) dockerContainerLogsTask(c echo.Context) error {
+func (r *Router) dockerContainerLogsTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	containerID := c.QueryParam("container_id")
 	lines := c.QueryParam("lines")
@@ -226,7 +226,7 @@ func (r *Router) dockerContainerLogsTask(c echo.Context) error {
 }
 
 // dockerContainerExecTask executes a command inside a Docker container.
-func (r *Router) dockerContainerExecTask(c echo.Context) error {
+func (r *Router) dockerContainerExecTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		ContainerID string `json:"container_id"`
@@ -257,7 +257,7 @@ func (r *Router) dockerContainerExecTask(c echo.Context) error {
 }
 
 // dockerImagesTask lists Docker images.
-func (r *Router) dockerImagesTask(c echo.Context) error {
+func (r *Router) dockerImagesTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	if _, err := exec.LookPath("docker"); err != nil {
@@ -301,7 +301,7 @@ func (r *Router) dockerImagesTask(c echo.Context) error {
 }
 
 // dockerComposeUpTask runs docker-compose up.
-func (r *Router) dockerComposeUpTask(c echo.Context) error {
+func (r *Router) dockerComposeUpTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Path     string `json:"path"`
@@ -338,7 +338,7 @@ func (r *Router) dockerComposeUpTask(c echo.Context) error {
 }
 
 // dockerComposeDownTask runs docker-compose down.
-func (r *Router) dockerComposeDownTask(c echo.Context) error {
+func (r *Router) dockerComposeDownTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Path    string `json:"path"`
@@ -374,7 +374,7 @@ func (r *Router) dockerComposeDownTask(c echo.Context) error {
 }
 
 // dockerContainerAction performs start/stop/restart on a container.
-func (r *Router) dockerContainerAction(c echo.Context, action, pastTense string) error {
+func (r *Router) dockerContainerAction(c *echo.Context, action, pastTense string) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		ContainerID string `json:"container_id"`
@@ -401,7 +401,7 @@ func (r *Router) dockerContainerAction(c echo.Context, action, pastTense string)
 // ─── Image Management ──────────────────────────────────────────────
 
 // dockerImagePullTask pulls a Docker image.
-func (r *Router) dockerImagePullTask(c echo.Context) error {
+func (r *Router) dockerImagePullTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Image string `json:"image"`
@@ -430,7 +430,7 @@ func (r *Router) dockerImagePullTask(c echo.Context) error {
 }
 
 // dockerImageRemoveTask removes a Docker image.
-func (r *Router) dockerImageRemoveTask(c echo.Context) error {
+func (r *Router) dockerImageRemoveTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Image string `json:"image"`
@@ -467,7 +467,7 @@ func (r *Router) dockerImageRemoveTask(c echo.Context) error {
 // ─── Volume Management ──────────────────────────────────────────────
 
 // dockerVolumesTask lists Docker volumes.
-func (r *Router) dockerVolumesTask(c echo.Context) error {
+func (r *Router) dockerVolumesTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	output, err := r.executor.RunShell(ctx, "docker", "volume", "ls", "--format", "{{.Name}}	{{.Driver}}")
@@ -504,7 +504,7 @@ func (r *Router) dockerVolumesTask(c echo.Context) error {
 }
 
 // dockerVolumeCreateTask creates a Docker volume.
-func (r *Router) dockerVolumeCreateTask(c echo.Context) error {
+func (r *Router) dockerVolumeCreateTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Name   string `json:"name"`
@@ -539,7 +539,7 @@ func (r *Router) dockerVolumeCreateTask(c echo.Context) error {
 }
 
 // dockerVolumeRemoveTask removes a Docker volume.
-func (r *Router) dockerVolumeRemoveTask(c echo.Context) error {
+func (r *Router) dockerVolumeRemoveTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Name string `json:"name"`
@@ -569,7 +569,7 @@ func (r *Router) dockerVolumeRemoveTask(c echo.Context) error {
 // ─── Network Management ──────────────────────────────────────────────
 
 // dockerNetworksTask lists Docker networks.
-func (r *Router) dockerNetworksTask(c echo.Context) error {
+func (r *Router) dockerNetworksTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	output, err := r.executor.RunShell(ctx, "docker", "network", "ls", "--format", "{{.Name}}	{{.Driver}}	{{.Scope}}	{{.CreatedAt}}")
@@ -606,7 +606,7 @@ func (r *Router) dockerNetworksTask(c echo.Context) error {
 }
 
 // dockerNetworkCreateTask creates a Docker network.
-func (r *Router) dockerNetworkCreateTask(c echo.Context) error {
+func (r *Router) dockerNetworkCreateTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Name   string `json:"name"`
@@ -641,7 +641,7 @@ func (r *Router) dockerNetworkCreateTask(c echo.Context) error {
 }
 
 // dockerNetworkRemoveTask removes a Docker network.
-func (r *Router) dockerNetworkRemoveTask(c echo.Context) error {
+func (r *Router) dockerNetworkRemoveTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Name string `json:"name"`
@@ -671,7 +671,7 @@ func (r *Router) dockerNetworkRemoveTask(c echo.Context) error {
 // ─── System Info ──────────────────────────────────────────────
 
 // dockerInfoTask returns Docker system information.
-func (r *Router) dockerInfoTask(c echo.Context) error {
+func (r *Router) dockerInfoTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	output, err := r.executor.RunShell(ctx, "docker", "info", "--format", "{{.ServerVersion}}	{{.Driver}}	{{.OperatingSystem}}	{{.NCPU}}	{{.MemTotal}}	{{.DockerRootDir}}	{{.ContainersRunning}}	{{.ContainersStopped}}	{{.Images}}	")
@@ -707,7 +707,7 @@ func (r *Router) dockerInfoTask(c echo.Context) error {
 }
 
 // dockerDiskUsageTask returns Docker disk usage.
-func (r *Router) dockerDiskUsageTask(c echo.Context) error {
+func (r *Router) dockerDiskUsageTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	output, err := r.executor.RunShell(ctx, "docker", "system", "df", "--format", "table {{.Type}}	{{.TotalCount}}	{{.Size}}	{{.Reclaimable}}")

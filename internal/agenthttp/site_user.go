@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/siteinput"
 )
 
@@ -118,7 +118,7 @@ func (r *Router) chownNewSiteRoot(ctx context.Context, owner *siteOwner, rootPat
 // its new owner's home and hand the files to that owner. Nothing changes
 // when a step fails before the move; the panel updates its records only
 // after this succeeded.
-func (r *Router) siteTransferTask(c echo.Context) error {
+func (r *Router) siteTransferTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var p struct {
 		SiteID     int64  `json:"site_id"`

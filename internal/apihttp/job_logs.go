@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -18,7 +18,7 @@ func newJobLogHandler(s *store.Store) *jobLogHandler {
 	return &jobLogHandler{store: s}
 }
 
-func (h *jobLogHandler) append(c echo.Context) error {
+func (h *jobLogHandler) append(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	jobID, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -64,7 +64,7 @@ func (h *jobLogHandler) append(c echo.Context) error {
 
 // requireJob verifies the job exists and the caller may access it at the
 // given site permission level; inaccessible jobs are reported as not found.
-func (h *jobLogHandler) requireJob(c echo.Context, jobID int64, required string) error {
+func (h *jobLogHandler) requireJob(c *echo.Context, jobID int64, required string) error {
 	job, err := h.store.Jobs.GetByID(c.Request().Context(), jobID)
 	if err != nil {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
@@ -82,7 +82,7 @@ func (h *jobLogHandler) requireJob(c echo.Context, jobID int64, required string)
 	return nil
 }
 
-func (h *jobLogHandler) getSince(c echo.Context) error {
+func (h *jobLogHandler) getSince(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	jobID, err := strconv.ParseInt(c.Param("id"), 10, 64)

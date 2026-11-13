@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -19,7 +19,7 @@ func newOrderHandler(s *store.Store) *orderHandler {
 }
 
 // listOrders returns orders. Admin sees all, regular user sees own only.
-func (h *orderHandler) listOrders(c echo.Context) error {
+func (h *orderHandler) listOrders(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -74,7 +74,7 @@ func (h *orderHandler) listOrders(c echo.Context) error {
 }
 
 // createOrder creates a new license order (authenticated users).
-func (h *orderHandler) createOrder(c echo.Context) error {
+func (h *orderHandler) createOrder(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -127,7 +127,7 @@ func (h *orderHandler) createOrder(c echo.Context) error {
 }
 
 // getOrder returns a single order by ID.
-func (h *orderHandler) getOrder(c echo.Context) error {
+func (h *orderHandler) getOrder(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -160,7 +160,7 @@ func (h *orderHandler) getOrder(c echo.Context) error {
 }
 
 // updateOrderStatus updates an order's status (admin only).
-func (h *orderHandler) updateOrderStatus(c echo.Context) error {
+func (h *orderHandler) updateOrderStatus(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -254,7 +254,7 @@ func orderToJSON(o store.LicenseOrder, username, planName string) orderJSON {
 }
 
 // orderVisible: the caller's own order or one of a user the caller manages.
-func (h *orderHandler) orderVisible(c echo.Context, ownerID int64) bool {
+func (h *orderHandler) orderVisible(c *echo.Context, ownerID int64) bool {
 	sess := sessionFromEcho(c)
 	if sess != nil && ownerID == sess.UserID {
 		return true

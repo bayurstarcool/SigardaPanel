@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
@@ -30,7 +30,7 @@ func newStackHandler(s *store.Store, a *audit.Recorder) *stackHandler {
 // ─── Docker Container Management Proxy Handlers ──────────────────────
 
 // dockerContainers proxies to agent GET /tasks/docker/containers.
-func (h *stackHandler) dockerContainers(c echo.Context) error {
+func (h *stackHandler) dockerContainers(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -54,7 +54,7 @@ func (h *stackHandler) dockerContainers(c echo.Context) error {
 // tenantContainerNames returns the docker container names a non-admin user may
 // see (the containers of sites they own or are assigned to). restricted is
 // false for admins, who see everything.
-func (h *stackHandler) tenantContainerNames(c echo.Context) (allowed map[string]bool, restricted bool) {
+func (h *stackHandler) tenantContainerNames(c *echo.Context) (allowed map[string]bool, restricted bool) {
 	sess := sessionFromEcho(c)
 	ctx := c.Request().Context()
 	if sess == nil {
@@ -137,32 +137,32 @@ func (h *stackHandler) containerBelongsTo(server *store.Server, containerID stri
 }
 
 // dockerContainerStart proxies to agent POST /tasks/docker/container/start.
-func (h *stackHandler) dockerContainerStart(c echo.Context) error {
+func (h *stackHandler) dockerContainerStart(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "start")
 }
 
 // dockerContainerStop proxies to agent POST /tasks/docker/container/stop.
-func (h *stackHandler) dockerContainerStop(c echo.Context) error {
+func (h *stackHandler) dockerContainerStop(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "stop")
 }
 
 // dockerContainerRestart proxies to agent POST /tasks/docker/container/restart.
-func (h *stackHandler) dockerContainerRestart(c echo.Context) error {
+func (h *stackHandler) dockerContainerRestart(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "restart")
 }
 
 // dockerContainerRemove proxies to agent POST /tasks/docker/container/remove.
-func (h *stackHandler) dockerContainerRemove(c echo.Context) error {
+func (h *stackHandler) dockerContainerRemove(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "remove")
 }
 
 // dockerContainerCreate proxies to agent POST /tasks/docker/container/create.
-func (h *stackHandler) dockerContainerCreate(c echo.Context) error {
+func (h *stackHandler) dockerContainerCreate(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "create")
 }
 
 // dockerContainerLogs proxies to agent GET /tasks/docker/container/logs.
-func (h *stackHandler) dockerContainerLogs(c echo.Context) error {
+func (h *stackHandler) dockerContainerLogs(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -194,12 +194,12 @@ func (h *stackHandler) dockerContainerLogs(c echo.Context) error {
 }
 
 // dockerContainerExec proxies to agent POST /tasks/docker/container/exec.
-func (h *stackHandler) dockerContainerExec(c echo.Context) error {
+func (h *stackHandler) dockerContainerExec(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "exec")
 }
 
 // dockerImages proxies to agent GET /tasks/docker/images.
-func (h *stackHandler) dockerImages(c echo.Context) error {
+func (h *stackHandler) dockerImages(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -218,7 +218,7 @@ func (h *stackHandler) dockerImages(c echo.Context) error {
 }
 
 // dockerSearchImages queries Docker Hub for image suggestions.
-func (h *stackHandler) dockerSearchImages(c echo.Context) error {
+func (h *stackHandler) dockerSearchImages(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	query := c.QueryParam("q")
 	if query == "" {
@@ -285,27 +285,27 @@ func (h *stackHandler) dockerSearchImages(c echo.Context) error {
 }
 
 // dockerComposeUp proxies to agent POST /tasks/docker/compose/up.
-func (h *stackHandler) dockerComposeUp(c echo.Context) error {
+func (h *stackHandler) dockerComposeUp(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "compose-up")
 }
 
 // dockerComposeDown proxies to agent POST /tasks/docker/compose/down.
-func (h *stackHandler) dockerComposeDown(c echo.Context) error {
+func (h *stackHandler) dockerComposeDown(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "compose-down")
 }
 
 // dockerImagePull proxies to agent POST /tasks/docker/image/pull.
-func (h *stackHandler) dockerImagePull(c echo.Context) error {
+func (h *stackHandler) dockerImagePull(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "image/pull")
 }
 
 // dockerImageRemove proxies to agent POST /tasks/docker/image/remove.
-func (h *stackHandler) dockerImageRemove(c echo.Context) error {
+func (h *stackHandler) dockerImageRemove(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "image/remove")
 }
 
 // dockerVolumes proxies to agent GET /tasks/docker/volumes.
-func (h *stackHandler) dockerVolumes(c echo.Context) error {
+func (h *stackHandler) dockerVolumes(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -324,17 +324,17 @@ func (h *stackHandler) dockerVolumes(c echo.Context) error {
 }
 
 // dockerVolumeCreate proxies to agent POST /tasks/docker/volume/create.
-func (h *stackHandler) dockerVolumeCreate(c echo.Context) error {
+func (h *stackHandler) dockerVolumeCreate(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "volume/create")
 }
 
 // dockerVolumeRemove proxies to agent POST /tasks/docker/volume/remove.
-func (h *stackHandler) dockerVolumeRemove(c echo.Context) error {
+func (h *stackHandler) dockerVolumeRemove(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "volume/remove")
 }
 
 // dockerNetworks proxies to agent GET /tasks/docker/networks.
-func (h *stackHandler) dockerNetworks(c echo.Context) error {
+func (h *stackHandler) dockerNetworks(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -353,17 +353,17 @@ func (h *stackHandler) dockerNetworks(c echo.Context) error {
 }
 
 // dockerNetworkCreate proxies to agent POST /tasks/docker/network/create.
-func (h *stackHandler) dockerNetworkCreate(c echo.Context) error {
+func (h *stackHandler) dockerNetworkCreate(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "network/create")
 }
 
 // dockerNetworkRemove proxies to agent POST /tasks/docker/network/remove.
-func (h *stackHandler) dockerNetworkRemove(c echo.Context) error {
+func (h *stackHandler) dockerNetworkRemove(c *echo.Context) error {
 	return h.dockerContainerProxy(c, "network/remove")
 }
 
 // dockerInfo proxies to agent GET /tasks/docker/info.
-func (h *stackHandler) dockerInfo(c echo.Context) error {
+func (h *stackHandler) dockerInfo(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -382,7 +382,7 @@ func (h *stackHandler) dockerInfo(c echo.Context) error {
 }
 
 // dockerDiskUsage proxies to agent GET /tasks/docker/disk-usage.
-func (h *stackHandler) dockerDiskUsage(c echo.Context) error {
+func (h *stackHandler) dockerDiskUsage(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -401,7 +401,7 @@ func (h *stackHandler) dockerDiskUsage(c echo.Context) error {
 }
 
 // pm2Manage proxies to agent POST /tasks/pm2/manage.
-func (h *stackHandler) pm2Manage(c echo.Context) error {
+func (h *stackHandler) pm2Manage(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -427,7 +427,7 @@ func (h *stackHandler) pm2Manage(c echo.Context) error {
 
 // emailManage proxies mail-server actions (status, list, install, …) to the
 // agent's /tasks/email/manage. Admin only, like pm2 and bot-blocker.
-func (h *stackHandler) emailManage(c echo.Context) error {
+func (h *stackHandler) emailManage(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -452,7 +452,7 @@ func (h *stackHandler) emailManage(c echo.Context) error {
 }
 
 // dockerContainerProxy is a generic proxy for Docker container actions.
-func (h *stackHandler) dockerContainerProxy(c echo.Context, action string) error {
+func (h *stackHandler) dockerContainerProxy(c *echo.Context, action string) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -488,7 +488,7 @@ func (h *stackHandler) dockerContainerProxy(c echo.Context, action string) error
 }
 
 // resolveServer extracts server ID from URL params and resolves agent info.
-func (h *stackHandler) resolveServer(c echo.Context) (*store.Server, error) {
+func (h *stackHandler) resolveServer(c *echo.Context) (*store.Server, error) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return nil, echo.NewHTTPError(http.StatusBadRequest, "invalid server id")
@@ -509,7 +509,7 @@ func (h *stackHandler) resolveServer(c echo.Context) (*store.Server, error) {
 // ─── Firewall (UFW) Proxy Handlers ──────────────────────────────────────
 
 // firewallStatus proxies to agent GET /tasks/firewall/status.
-func (h *stackHandler) firewallStatus(c echo.Context) error {
+func (h *stackHandler) firewallStatus(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -528,32 +528,32 @@ func (h *stackHandler) firewallStatus(c echo.Context) error {
 }
 
 // firewallEnable proxies to agent POST /tasks/firewall/enable.
-func (h *stackHandler) firewallEnable(c echo.Context) error {
+func (h *stackHandler) firewallEnable(c *echo.Context) error {
 	return h.firewallProxy(c, "enable")
 }
 
 // firewallDisable proxies to agent POST /tasks/firewall/disable.
-func (h *stackHandler) firewallDisable(c echo.Context) error {
+func (h *stackHandler) firewallDisable(c *echo.Context) error {
 	return h.firewallProxy(c, "disable")
 }
 
 // firewallAllow proxies to agent POST /tasks/firewall/allow.
-func (h *stackHandler) firewallAllow(c echo.Context) error {
+func (h *stackHandler) firewallAllow(c *echo.Context) error {
 	return h.firewallProxy(c, "allow")
 }
 
 // firewallDeny proxies to agent POST /tasks/firewall/deny.
-func (h *stackHandler) firewallDeny(c echo.Context) error {
+func (h *stackHandler) firewallDeny(c *echo.Context) error {
 	return h.firewallProxy(c, "deny")
 }
 
 // firewallDelete proxies to agent POST /tasks/firewall/delete.
-func (h *stackHandler) firewallDelete(c echo.Context) error {
+func (h *stackHandler) firewallDelete(c *echo.Context) error {
 	return h.firewallProxy(c, "delete")
 }
 
 // firewallRules proxies to agent GET /tasks/firewall/rules.
-func (h *stackHandler) firewallRules(c echo.Context) error {
+func (h *stackHandler) firewallRules(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -572,12 +572,12 @@ func (h *stackHandler) firewallRules(c echo.Context) error {
 }
 
 // firewallReset proxies to agent POST /tasks/firewall/reset.
-func (h *stackHandler) firewallReset(c echo.Context) error {
+func (h *stackHandler) firewallReset(c *echo.Context) error {
 	return h.firewallProxy(c, "reset")
 }
 
 // firewallProxy is a generic proxy for firewall actions.
-func (h *stackHandler) firewallProxy(c echo.Context, action string) error {
+func (h *stackHandler) firewallProxy(c *echo.Context, action string) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -603,7 +603,7 @@ func (h *stackHandler) firewallProxy(c echo.Context, action string) error {
 // ─── Redis Management Proxy Handlers ──────────────────────────────────────
 
 // redisStats proxies to agent GET /tasks/redis/stats.
-func (h *stackHandler) redisStats(c echo.Context) error {
+func (h *stackHandler) redisStats(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -622,12 +622,12 @@ func (h *stackHandler) redisStats(c echo.Context) error {
 }
 
 // redisFlush proxies to agent POST /tasks/redis/flush.
-func (h *stackHandler) redisFlush(c echo.Context) error {
+func (h *stackHandler) redisFlush(c *echo.Context) error {
 	return h.redisProxy(c, "flush")
 }
 
 // redisInfo proxies to agent GET /tasks/redis/info.
-func (h *stackHandler) redisInfo(c echo.Context) error {
+func (h *stackHandler) redisInfo(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -646,12 +646,12 @@ func (h *stackHandler) redisInfo(c echo.Context) error {
 }
 
 // redisFlushDB proxies to agent POST /tasks/redis/flushdb.
-func (h *stackHandler) redisFlushDB(c echo.Context) error {
+func (h *stackHandler) redisFlushDB(c *echo.Context) error {
 	return h.redisProxy(c, "flushdb")
 }
 
 // redisProxy is a generic proxy for Redis actions.
-func (h *stackHandler) redisProxy(c echo.Context, action string) error {
+func (h *stackHandler) redisProxy(c *echo.Context, action string) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -702,7 +702,7 @@ func agentRequest(method, url, token string, body any) (*http.Response, error) {
 // ─── Fail2ban Management Proxy Handlers ──────────────────────────────────────
 
 // securityOverview proxies to agent GET /tasks/security/overview.
-func (h *stackHandler) securityOverview(c echo.Context) error {
+func (h *stackHandler) securityOverview(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -738,7 +738,7 @@ func (h *stackHandler) securityOverview(c echo.Context) error {
 }
 
 // fail2banStatus proxies to agent GET /tasks/fail2ban/status.
-func (h *stackHandler) fail2banStatus(c echo.Context) error {
+func (h *stackHandler) fail2banStatus(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -757,7 +757,7 @@ func (h *stackHandler) fail2banStatus(c echo.Context) error {
 }
 
 // fail2banJail proxies to agent GET /tasks/fail2ban/jail?name=...
-func (h *stackHandler) fail2banJail(c echo.Context) error {
+func (h *stackHandler) fail2banJail(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -777,27 +777,27 @@ func (h *stackHandler) fail2banJail(c echo.Context) error {
 }
 
 // fail2banUnban proxies to agent POST /tasks/fail2ban/unban.
-func (h *stackHandler) fail2banUnban(c echo.Context) error {
+func (h *stackHandler) fail2banUnban(c *echo.Context) error {
 	return h.fail2banProxy(c, "unban")
 }
 
 // fail2banBan proxies to agent POST /tasks/fail2ban/ban.
-func (h *stackHandler) fail2banBan(c echo.Context) error {
+func (h *stackHandler) fail2banBan(c *echo.Context) error {
 	return h.fail2banProxy(c, "ban")
 }
 
 // fail2banEnable proxies to agent POST /tasks/fail2ban/enable.
-func (h *stackHandler) fail2banEnable(c echo.Context) error {
+func (h *stackHandler) fail2banEnable(c *echo.Context) error {
 	return h.fail2banProxy(c, "enable")
 }
 
 // fail2banDisable proxies to agent POST /tasks/fail2ban/disable.
-func (h *stackHandler) fail2banDisable(c echo.Context) error {
+func (h *stackHandler) fail2banDisable(c *echo.Context) error {
 	return h.fail2banProxy(c, "disable")
 }
 
 // botBlockerManage proxies to agent POST /tasks/bot-blocker/manage.
-func (h *stackHandler) botBlockerManage(c echo.Context) error {
+func (h *stackHandler) botBlockerManage(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -820,7 +820,7 @@ func (h *stackHandler) botBlockerManage(c echo.Context) error {
 	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
-func (h *stackHandler) fail2banProxy(c echo.Context, action string) error {
+func (h *stackHandler) fail2banProxy(c *echo.Context, action string) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -846,7 +846,7 @@ func (h *stackHandler) fail2banProxy(c echo.Context, action string) error {
 // ─── Server Specs & Benchmarks ─────────────────────────────────────────────
 
 // serverSpecs proxies to agent GET /tasks/system/spec.
-func (h *stackHandler) serverSpecs(c echo.Context) error {
+func (h *stackHandler) serverSpecs(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -874,7 +874,7 @@ func (h *stackHandler) serverSpecs(c echo.Context) error {
 }
 
 // serverBenchmark proxies to agent GET /tasks/system/benchmark.
-func (h *stackHandler) serverBenchmark(c echo.Context) error {
+func (h *stackHandler) serverBenchmark(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {

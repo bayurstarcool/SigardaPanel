@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/notify"
@@ -26,7 +26,7 @@ func newAlertHandler(s *store.Store, a *audit.Recorder) *alertHandler {
 	return &alertHandler{store: s, audit: a, sender: notify.NewSender(s)}
 }
 
-func (h *alertHandler) createChannel(c echo.Context) error {
+func (h *alertHandler) createChannel(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -76,7 +76,7 @@ func (h *alertHandler) createChannel(c echo.Context) error {
 	})
 }
 
-func (h *alertHandler) listChannels(c echo.Context) error {
+func (h *alertHandler) listChannels(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	channels, err := h.store.AlertChannels.List(c.Request().Context())
@@ -96,7 +96,7 @@ func (h *alertHandler) listChannels(c echo.Context) error {
 	})
 }
 
-func (h *alertHandler) deleteChannel(c echo.Context) error {
+func (h *alertHandler) deleteChannel(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -133,7 +133,7 @@ func (h *alertHandler) deleteChannel(c echo.Context) error {
 	})
 }
 
-func (h *alertHandler) listAlerts(c echo.Context) error {
+func (h *alertHandler) listAlerts(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	limit := 100

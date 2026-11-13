@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -25,13 +25,13 @@ var passwordChangeAllowedRoutes = map[string]bool{
 	http.MethodGet + " /api/v1/auth/2fa/status": true,
 }
 
-func allowedDuringPasswordChange(c echo.Context) bool {
+func allowedDuringPasswordChange(c *echo.Context) bool {
 	return passwordChangeAllowedRoutes[c.Request().Method+" "+c.Path()]
 }
 
 // passwordChangePending reports whether userID must still change its
 // password. A missing user is left to the handlers (they answer 401/404).
-func passwordChangePending(c echo.Context, s *store.Store, userID int64) (bool, error) {
+func passwordChangePending(c *echo.Context, s *store.Store, userID int64) (bool, error) {
 	if userID <= 0 {
 		return false, nil
 	}
@@ -46,7 +46,7 @@ func passwordChangePending(c echo.Context, s *store.Store, userID int64) (bool, 
 	return user != nil && user.PasswordChangeRequired(), nil
 }
 
-func passwordChangeRequiredError(c echo.Context, message string) error {
+func passwordChangeRequiredError(c *echo.Context, message string) error {
 	return c.JSON(http.StatusForbidden, httpjson.ErrorBody{
 		Error:     httpjson.APIError{Code: codePasswordChangeRequired, Message: message},
 		RequestID: c.Response().Header().Get(echo.HeaderXRequestID),

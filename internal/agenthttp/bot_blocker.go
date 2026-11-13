@@ -10,11 +10,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // manageBotBlocker handles bot blocking via nginx.
-func (r *Router) manageBotBlocker(c echo.Context) error {
+func (r *Router) manageBotBlocker(c *echo.Context) error {
 
 	var payload struct {
 		Action string   `json:"action"`
@@ -48,7 +48,7 @@ func (r *Router) manageBotBlocker(c echo.Context) error {
 }
 
 // enableBotBlocker enables bot blocking by injecting checks into server blocks.
-func (r *Router) enableBotBlocker(c echo.Context) error {
+func (r *Router) enableBotBlocker(c *echo.Context) error {
 	defer readNginxLock()()
 	ctx := c.Request().Context()
 
@@ -100,7 +100,7 @@ func (r *Router) enableBotBlocker(c echo.Context) error {
 }
 
 // disableBotBlocker disables the bot blocker.
-func (r *Router) disableBotBlocker(c echo.Context) error {
+func (r *Router) disableBotBlocker(c *echo.Context) error {
 	defer readNginxLock()()
 	ctx := c.Request().Context()
 
@@ -129,7 +129,7 @@ func (r *Router) disableBotBlocker(c echo.Context) error {
 }
 
 // listBotBlockerRules lists current bot blocker rules.
-func (r *Router) listBotBlockerRules(c echo.Context) error {
+func (r *Router) listBotBlockerRules(c *echo.Context) error {
 	content, _ := readFileContent("/etc/nginx/conf.d/bot-blocker.conf")
 	return c.JSON(http.StatusOK, map[string]any{
 		"enabled": content != "",
@@ -312,7 +312,7 @@ func without(list []string, drop []string) []string {
 }
 
 // addBotAgent adds User-Agent patterns to block.
-func (r *Router) addBotAgent(c echo.Context, agents []string) error {
+func (r *Router) addBotAgent(c *echo.Context, agents []string) error {
 	for _, agent := range agents {
 		if !botAgentRe.MatchString(agent) {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid agent pattern (letters, digits, space . _ / - only): "+agent)
@@ -329,7 +329,7 @@ func (r *Router) addBotAgent(c echo.Context, agents []string) error {
 }
 
 // removeBotAgent removes User-Agent patterns.
-func (r *Router) removeBotAgent(c echo.Context, agents []string) error {
+func (r *Router) removeBotAgent(c *echo.Context, agents []string) error {
 	if content, _ := readFileContent(botAgentsConf); content == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "bot blocker not enabled")
 	}
@@ -341,7 +341,7 @@ func (r *Router) removeBotAgent(c echo.Context, agents []string) error {
 }
 
 // addBotIP adds IPs to block.
-func (r *Router) addBotIP(c echo.Context, ips []string) error {
+func (r *Router) addBotIP(c *echo.Context, ips []string) error {
 	for _, ip := range ips {
 		if !isValidIP(ip) {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid IP: "+ip)
@@ -355,7 +355,7 @@ func (r *Router) addBotIP(c echo.Context, ips []string) error {
 }
 
 // removeBotIP removes IPs from the blocklist (exact matches only).
-func (r *Router) removeBotIP(c echo.Context, ips []string) error {
+func (r *Router) removeBotIP(c *echo.Context, ips []string) error {
 	var valid []string
 	for _, ip := range ips {
 		if ip = strings.TrimSpace(ip); ip != "" {
@@ -373,7 +373,7 @@ func (r *Router) removeBotIP(c echo.Context, ips []string) error {
 }
 
 // updateBotBlocker replaces the whole bot blocker configuration.
-func (r *Router) updateBotBlocker(c echo.Context, agents, ips []string) error {
+func (r *Router) updateBotBlocker(c *echo.Context, agents, ips []string) error {
 	var goodAgents []botRule
 	var goodIPs []string
 	for _, agent := range agents {

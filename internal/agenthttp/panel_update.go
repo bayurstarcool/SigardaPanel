@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/installer"
 	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/selfupdate"
@@ -682,26 +682,26 @@ func newUpdater(kind string, opts *RouterOptions) *panelUpdater {
 }
 
 // panelUpdateStatusTask answers GET /tasks/panel/update.
-func (r *Router) panelUpdateStatusTask(c echo.Context) error {
+func (r *Router) panelUpdateStatusTask(c *echo.Context) error {
 	return c.JSON(http.StatusOK, r.panelUpdate.status(c.Request().Context()))
 }
 
 // panelUpdateStartTask answers POST /tasks/panel/update {"tag":"v1.2.3","auto":false}.
-func (r *Router) panelUpdateStartTask(c echo.Context) error {
+func (r *Router) panelUpdateStartTask(c *echo.Context) error {
 	return startUpdateTask(c, r.panelUpdate)
 }
 
 // agentUpdateStatusTask answers GET /tasks/agent/update (remote servers).
-func (r *Router) agentUpdateStatusTask(c echo.Context) error {
+func (r *Router) agentUpdateStatusTask(c *echo.Context) error {
 	return c.JSON(http.StatusOK, r.agentUpdate.status(c.Request().Context()))
 }
 
 // agentUpdateStartTask answers POST /tasks/agent/update {"tag":"v1.2.3"}.
-func (r *Router) agentUpdateStartTask(c echo.Context) error {
+func (r *Router) agentUpdateStartTask(c *echo.Context) error {
 	return startUpdateTask(c, r.agentUpdate)
 }
 
-func startUpdateTask(c echo.Context, u *panelUpdater) error {
+func startUpdateTask(c *echo.Context, u *panelUpdater) error {
 	var req struct {
 		Tag  string `json:"tag"`
 		Auto bool   `json:"auto"`
@@ -717,12 +717,12 @@ func startUpdateTask(c echo.Context, u *panelUpdater) error {
 }
 
 // panelBackupsTask answers GET /tasks/panel/backups.
-func (r *Router) panelBackupsTask(c echo.Context) error {
+func (r *Router) panelBackupsTask(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"backups": r.panelUpdate.backups()})
 }
 
 // panelRollbackTask answers POST /tasks/panel/rollback {"backup":"20261101T020000Z"}.
-func (r *Router) panelRollbackTask(c echo.Context) error {
+func (r *Router) panelRollbackTask(c *echo.Context) error {
 	var req struct {
 		Backup string `json:"backup"`
 	}

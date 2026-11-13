@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // SSH/FTP accounts of a site: a chrooted Linux user whose jail
@@ -142,7 +142,7 @@ func (r *Router) syncSSHDConfig(ctx context.Context, accounts []sshAccountRef) e
 // jail config.
 var sshTaskMu sync.Mutex
 
-func (r *Router) sshCreateTask(c echo.Context) error {
+func (r *Router) sshCreateTask(c *echo.Context) error {
 	sshTaskMu.Lock()
 	defer sshTaskMu.Unlock()
 	ctx := c.Request().Context()
@@ -329,7 +329,7 @@ func (r *Router) removeSSHAccount(ctx context.Context, username, home string) er
 }
 
 // sshDeleteTask answers POST /tasks/sshftp/delete.
-func (r *Router) sshDeleteTask(c echo.Context) error {
+func (r *Router) sshDeleteTask(c *echo.Context) error {
 	sshTaskMu.Lock()
 	defer sshTaskMu.Unlock()
 	var p struct {

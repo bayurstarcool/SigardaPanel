@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/siteinput"
 )
 
@@ -105,7 +105,7 @@ func validateAppUnitInput(domain, systemUser, rootPath, command string) error {
 }
 
 // appStartTask writes the systemd unit and starts the app service.
-func (r *Router) appStartTask(c echo.Context) error {
+func (r *Router) appStartTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		SiteID       int64  `json:"site_id"`
@@ -169,7 +169,7 @@ func (r *Router) appStartTask(c echo.Context) error {
 }
 
 // appStopTask stops the app service.
-func (r *Router) appStopTask(c echo.Context) error {
+func (r *Router) appStopTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		SiteID int64  `json:"site_id"`
@@ -191,7 +191,7 @@ func (r *Router) appStopTask(c echo.Context) error {
 }
 
 // appRestartTask restarts the app service.
-func (r *Router) appRestartTask(c echo.Context) error {
+func (r *Router) appRestartTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		SiteID       int64  `json:"site_id"`

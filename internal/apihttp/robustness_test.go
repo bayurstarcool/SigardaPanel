@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/pquerna/otp/totp"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/store"
@@ -43,7 +43,7 @@ func TestTransfer_RegularUser_NoPanic(t *testing.T) {
 // Any handler panic must become a 500 for that request only.
 func TestRouter_RecoversFromHandlerPanic(t *testing.T) {
 	e, _, _ := newTestApp(t)
-	e.GET("/api/v1/__panic", func(c echo.Context) error { panic("boom") })
+	e.GET("/api/v1/__panic", func(c *echo.Context) error { panic("boom") })
 	rec := doRequest(t, e, "GET", "/api/v1/__panic", nil, "")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 from recovered panic, got %d", rec.Code)

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/pquerna/otp/totp"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
@@ -172,7 +172,7 @@ const sessionCookieName = "sp_session"
 // cookie. Path is "/" because non-/api panel routes (e.g. /pma/ticket) also
 // authenticate with it. Secure is always on except in explicit dev mode so
 // plain-HTTP local development still works.
-func setSessionCookie(c echo.Context, token string, expires time.Time) {
+func setSessionCookie(c *echo.Context, token string, expires time.Time) {
 	sameSite := http.SameSiteStrictMode
 	secure := os.Getenv("SIGARDAPANEL_DEV") != "true"
 	c.SetCookie(&http.Cookie{
@@ -186,7 +186,7 @@ func setSessionCookie(c echo.Context, token string, expires time.Time) {
 	})
 }
 
-func clearSessionCookie(c echo.Context) {
+func clearSessionCookie(c *echo.Context) {
 	secure := os.Getenv("SIGARDAPANEL_DEV") != "true"
 	c.SetCookie(&http.Cookie{
 		Name:     sessionCookieName,
@@ -218,7 +218,7 @@ func newAuthHandler(s *store.Store, a *audit.Recorder) *authHandler {
 	}
 }
 
-func (ah *authHandler) login(c echo.Context) error {
+func (ah *authHandler) login(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	ip := c.RealIP()
 	if !ah.rateLimiter.allow(ip) {
@@ -364,7 +364,7 @@ func (ah *authHandler) login(c echo.Context) error {
 }
 
 // register creates a new user account (public endpoint).
-func (ah *authHandler) register(c echo.Context) error {
+func (ah *authHandler) register(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	// Public sign-up is closed by default; hosting resellers open it with
@@ -425,7 +425,7 @@ func (ah *authHandler) register(c echo.Context) error {
 	})
 }
 
-func (ah *authHandler) logout(c echo.Context) error {
+func (ah *authHandler) logout(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	if sess == nil {
@@ -444,7 +444,7 @@ func (ah *authHandler) logout(c echo.Context) error {
 	})
 }
 
-func (ah *authHandler) me(c echo.Context) error {
+func (ah *authHandler) me(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	if sess == nil {
@@ -493,7 +493,7 @@ func (ah *authHandler) me(c echo.Context) error {
 
 // updateProfile allows the authenticated user to update their own profile (email, password).
 // PUT /api/v1/auth/profile
-func (ah *authHandler) updateProfile(c echo.Context) error {
+func (ah *authHandler) updateProfile(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	if sess == nil {

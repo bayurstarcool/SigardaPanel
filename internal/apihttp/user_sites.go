@@ -6,14 +6,14 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
 
 // listUserSites returns all sites a given user has access to (owned + assigned).
-func (h *userHandler) listUserSites(c echo.Context) error {
+func (h *userHandler) listUserSites(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	_ = rid
 
@@ -97,7 +97,7 @@ func (h *userHandler) listUserSites(c echo.Context) error {
 }
 
 // listSiteUsers returns all users who have access to a given site.
-func (h *userHandler) listSiteUsers(c echo.Context) error {
+func (h *userHandler) listSiteUsers(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -131,7 +131,7 @@ func (h *userHandler) listSiteUsers(c echo.Context) error {
 // manage its user assignments: only the site's owner or a super_admin may
 // (AGENTS.md permission matrix, "Manage users"). Callers who cannot see the
 // site at all get 404; callers who can see it but are not owner get 403.
-func (h *userHandler) requireSiteAssignmentManager(c echo.Context, siteID int64) error {
+func (h *userHandler) requireSiteAssignmentManager(c *echo.Context, siteID int64) error {
 	ctx := c.Request().Context()
 	sess := sessionFromEcho(c)
 	site, err := h.store.Sites.GetByID(ctx, siteID)
@@ -148,7 +148,7 @@ func (h *userHandler) requireSiteAssignmentManager(c echo.Context, siteID int64)
 }
 
 // assignUserSite grants a user access to a site.
-func (h *userHandler) assignUserSite(c echo.Context) error {
+func (h *userHandler) assignUserSite(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -202,7 +202,7 @@ func (h *userHandler) assignUserSite(c echo.Context) error {
 }
 
 // unassignUserSite revokes a user's access to a site.
-func (h *userHandler) unassignUserSite(c echo.Context) error {
+func (h *userHandler) unassignUserSite(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 
@@ -242,7 +242,7 @@ func (h *userHandler) unassignUserSite(c echo.Context) error {
 }
 
 // updateSitePermission changes the permission level for an existing assignment.
-func (h *userHandler) updateSitePermission(c echo.Context) error {
+func (h *userHandler) updateSitePermission(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
@@ -118,7 +118,7 @@ func unwrapData(m map[string]any) any {
 func agentBase(s *store.Server) string { return strings.TrimRight(s.AgentURL.String, "/") }
 
 // stackInfo returns installed software and versions from the agent.
-func (h *stackHandler) stackInfo(c echo.Context) error {
+func (h *stackHandler) stackInfo(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -140,7 +140,7 @@ func (h *stackHandler) stackInfo(c echo.Context) error {
 }
 
 // stackAction validates, guards and forwards a stack action.
-func (h *stackHandler) stackAction(c echo.Context) error {
+func (h *stackHandler) stackAction(c *echo.Context) error {
 	var body stackActionBody
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -149,7 +149,7 @@ func (h *stackHandler) stackAction(c echo.Context) error {
 }
 
 // stackRestart restarts a component's service (kept for API compatibility).
-func (h *stackHandler) stackRestart(c echo.Context) error {
+func (h *stackHandler) stackRestart(c *echo.Context) error {
 	var body stackActionBody
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -158,7 +158,7 @@ func (h *stackHandler) stackRestart(c echo.Context) error {
 	return h.runStackAction(c, body)
 }
 
-func (h *stackHandler) runStackAction(c echo.Context, body stackActionBody) error {
+func (h *stackHandler) runStackAction(c *echo.Context, body stackActionBody) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	ctx := c.Request().Context()
 	server, err := h.resolveServer(c)
@@ -329,7 +329,7 @@ func listSome(items []string) string {
 var finishedOps sync.Map
 
 // stackOp reports a background stack operation.
-func (h *stackHandler) stackOp(c echo.Context) error {
+func (h *stackHandler) stackOp(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -395,7 +395,7 @@ func serverPHPVersions(ctx context.Context, server *store.Server) ([]map[string]
 
 // phpVersions lists the PHP-FPM versions installed on a server, for the site
 // forms (any signed-in user; detection only, nothing is installed).
-func (h *stackHandler) phpVersions(c echo.Context) error {
+func (h *stackHandler) phpVersions(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	server, err := h.resolveServer(c)
 	if err != nil {
@@ -416,7 +416,7 @@ func (h *stackHandler) phpVersions(c echo.Context) error {
 
 // commandExec executes a shell command on the server via the agent.
 // POST /api/v1/servers/:id/command
-func (h *stackHandler) commandExec(c echo.Context) error {
+func (h *stackHandler) commandExec(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	ctx := c.Request().Context()
 	server, err := h.resolveServer(c)
@@ -471,7 +471,7 @@ func (h *stackHandler) commandExec(c echo.Context) error {
 // key as failures, so these used to show up as successes ("Container
 // started", "IP banned") although nothing happened. GET answers with
 // ok:false are passed through: pages show them as "not installed" states.
-func agentProxyResponse(c echo.Context, rid string, status int, result map[string]any) error {
+func agentProxyResponse(c *echo.Context, rid string, status int, result map[string]any) error {
 	if status >= 400 {
 		if result == nil {
 			result = map[string]any{}

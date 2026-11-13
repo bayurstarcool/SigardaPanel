@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // managePM2 handles PM2 operations (start, stop, restart, delete, list, logs).
-func (r *Router) managePM2(c echo.Context) error {
+func (r *Router) managePM2(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	var payload struct {

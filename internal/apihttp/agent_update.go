@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/selfupdate"
@@ -120,7 +120,7 @@ func forEachServer(servers []store.Server, fn func(i int, srv store.Server)) {
 }
 
 // list answers GET /api/v1/system/agent-updates.
-func (h *agentUpdateHandler) list(c echo.Context) error {
+func (h *agentUpdateHandler) list(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	servers, err := h.store.Servers.List(ctx)
@@ -167,7 +167,7 @@ func startAgentUpdate(ctx context.Context, srv *store.Server, auto bool) (int, s
 }
 
 // startOne answers POST /api/v1/servers/:id/agent-update.
-func (h *agentUpdateHandler) startOne(c echo.Context) error {
+func (h *agentUpdateHandler) startOne(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -187,7 +187,7 @@ func (h *agentUpdateHandler) startOne(c echo.Context) error {
 	return c.JSON(http.StatusAccepted, httpjson.Success{Data: map[string]any{"message": msg, "tag": agentTargetTag()}, RequestID: rid})
 }
 
-func (h *agentUpdateHandler) recordStart(c echo.Context, srv *store.Server, code int, msg string) {
+func (h *agentUpdateHandler) recordStart(c *echo.Context, srv *store.Server, code int, msg string) {
 	var uid int64
 	if sess := sessionFromEcho(c); sess != nil {
 		uid = sess.UserID
@@ -204,7 +204,7 @@ func (h *agentUpdateHandler) recordStart(c echo.Context, srv *store.Server, code
 // startMany answers POST /api/v1/system/agent-updates
 // {"server_ids": [1, 2]} or {"all": true} (every remote server whose agent
 // is older than the panel).
-func (h *agentUpdateHandler) startMany(c echo.Context) error {
+func (h *agentUpdateHandler) startMany(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	var body struct {
@@ -267,7 +267,7 @@ func (h *agentUpdateHandler) startMany(c echo.Context) error {
 }
 
 // settings answers PUT /api/v1/system/agent-updates/settings {"auto_update": bool}.
-func (h *agentUpdateHandler) settings(c echo.Context) error {
+func (h *agentUpdateHandler) settings(c *echo.Context) error {
 	ctx := c.Request().Context()
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	var body struct {

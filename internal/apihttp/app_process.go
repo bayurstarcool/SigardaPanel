@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"net/http"
 	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/store"
@@ -13,7 +13,7 @@ import (
 )
 
 // appStart enqueues an app.start job for the site.
-func (h *siteHandler) appStart(c echo.Context) error {
+func (h *siteHandler) appStart(c *echo.Context) error {
 	site, err := h.getSiteForUserPerm(c, sitePermWrite)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (h *siteHandler) appStart(c echo.Context) error {
 }
 
 // appStop enqueues an app.stop job for the site.
-func (h *siteHandler) appStop(c echo.Context) error {
+func (h *siteHandler) appStop(c *echo.Context) error {
 	site, err := h.getSiteForUserPerm(c, sitePermWrite)
 	if err != nil {
 		return err
@@ -113,7 +113,7 @@ func (h *siteHandler) appStop(c echo.Context) error {
 }
 
 // appRestart enqueues an app.restart job for the site.
-func (h *siteHandler) appRestart(c echo.Context) error {
+func (h *siteHandler) appRestart(c *echo.Context) error {
 	site, err := h.getSiteForUserPerm(c, sitePermWrite)
 	if err != nil {
 		return err
@@ -163,7 +163,7 @@ func (h *siteHandler) appRestart(c echo.Context) error {
 }
 
 // appStatus returns the current app process status.
-func (h *siteHandler) appStatus(c echo.Context) error {
+func (h *siteHandler) appStatus(c *echo.Context) error {
 	site, err := h.getSiteForUser(c)
 	if err != nil {
 		return err
@@ -182,7 +182,7 @@ func (h *siteHandler) appStatus(c echo.Context) error {
 }
 
 // appUpdateConfig allows updating app_command and app_port.
-func (h *siteHandler) appUpdateConfig(c echo.Context) error {
+func (h *siteHandler) appUpdateConfig(c *echo.Context) error {
 	site, err := h.getSiteForUserPerm(c, sitePermWrite)
 	if err != nil {
 		return err
@@ -310,14 +310,14 @@ func appMemoryOrDefault(v, fallback int64) int64 {
 // getSiteForUser fetches site and verifies the caller can at least read it.
 // Use it only for read-only endpoints; mutations must use getSiteForUserPerm
 // with sitePermWrite (or higher).
-func (h *siteHandler) getSiteForUser(c echo.Context) (*store.Site, error) {
+func (h *siteHandler) getSiteForUser(c *echo.Context) (*store.Site, error) {
 	return h.getSiteForUserPerm(c, sitePermRead)
 }
 
 // getSiteForUserPerm fetches site and verifies the caller holds the required
 // site permission (404 when the site is not visible, 403 when visible but the
 // level is insufficient).
-func (h *siteHandler) getSiteForUserPerm(c echo.Context, required string) (*store.Site, error) {
+func (h *siteHandler) getSiteForUserPerm(c *echo.Context, required string) (*store.Site, error) {
 	siteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusBadRequest, "invalid site id")

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // RegisterRoutes registers all member API routes.
@@ -30,7 +30,7 @@ func RegisterRoutes(e *echo.Echo, db *sql.DB) {
 func requireMemberAuth(db *sql.DB) echo.MiddlewareFunc {
 	store := NewStore(db)
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			authHeader := c.Request().Header.Get("Authorization")
 			if authHeader == "" {
 				return echo.NewHTTPError(http.StatusUnauthorized, "missing authorization header")

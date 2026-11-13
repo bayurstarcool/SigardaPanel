@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // WordPressTemplate handles WordPress installation via WP-CLI.
@@ -26,7 +26,7 @@ type WordPressTemplate struct {
 }
 
 // installWordPress installs WordPress using WP-CLI.
-func (r *Router) installWordPress(c echo.Context) error {
+func (r *Router) installWordPress(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	var payload WordPressTemplate
@@ -132,7 +132,7 @@ func (r *Router) installWordPress(c echo.Context) error {
 }
 
 // installLaravel installs a Laravel project using Composer.
-func (r *Router) installLaravel(c echo.Context) error {
+func (r *Router) installLaravel(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	var payload struct {

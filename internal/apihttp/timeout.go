@@ -5,20 +5,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // TimeoutConfig defines the timeout middleware configuration.
 type TimeoutConfig struct {
 	Timeout time.Duration
-	Skipper func(c echo.Context) bool
+	Skipper func(c *echo.Context) bool
 }
 
 // DefaultTimeoutConfig returns a default timeout configuration.
 func DefaultTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
 		Timeout: 30 * time.Second,
-		Skipper: func(c echo.Context) bool {
+		Skipper: func(c *echo.Context) bool {
 			if c.Request().Header.Get("Upgrade") == "websocket" {
 				return true
 			}
@@ -56,7 +56,7 @@ func TimeoutMiddleware(config ...TimeoutConfig) echo.MiddlewareFunc {
 	}
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			if cfg.Skipper != nil && cfg.Skipper(c) {
 				return next(c)
 			}

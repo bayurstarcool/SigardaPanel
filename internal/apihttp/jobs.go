@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
@@ -26,7 +26,7 @@ func newJobHandler(s *store.Store, a *audit.Recorder) *jobHandler {
 	return &jobHandler{store: s, audit: a}
 }
 
-func (h *jobHandler) list(c echo.Context) error {
+func (h *jobHandler) list(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	filter := store.JobListFilter{Limit: 100}
@@ -81,7 +81,7 @@ func (h *jobHandler) list(c echo.Context) error {
 	})
 }
 
-func (h *jobHandler) get(c echo.Context) error {
+func (h *jobHandler) get(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -103,7 +103,7 @@ func (h *jobHandler) get(c echo.Context) error {
 	})
 }
 
-func (h *jobHandler) cancel(c echo.Context) error {
+func (h *jobHandler) cancel(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64

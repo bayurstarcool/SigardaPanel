@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/store"
 )
@@ -29,7 +29,7 @@ const (
 // It sets the session and user_id in the Echo context.
 func RequireAuth(s *store.Store) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			// Prefer the Authorization header; fall back to the HttpOnly
 			// session cookie so browser clients never need the token in JS.
 			var token string
@@ -135,7 +135,7 @@ func RequireAuth(s *store.Store) echo.MiddlewareFunc {
 // Service tokens can never be super_admin.
 func RequireRole(s *store.Store, required string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			sess, ok := c.Get(sessionKey).(*store.Session)
 			if !ok {
 				return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
@@ -204,7 +204,7 @@ func RequireAdmin(s *store.Store) echo.MiddlewareFunc {
 
 // isAPIKeyRequest reports whether the request authenticated with a personal
 // API key rather than an interactive login session.
-func isAPIKeyRequest(c echo.Context) bool {
+func isAPIKeyRequest(c *echo.Context) bool {
 	_, ok := c.Get(apiKeyIDKey).(int64)
 	return ok
 }
@@ -214,7 +214,7 @@ func isAPIKeyRequest(c echo.Context) bool {
 // Use this on endpoints that must only be accessed by real user sessions
 // (e.g., impersonation, service token management).
 func RequireUserSession(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		sess, ok := c.Get(sessionKey).(*store.Session)
 		if !ok {
 			return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
@@ -229,14 +229,14 @@ func RequireUserSession(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-func sessionFromEcho(c echo.Context) *store.Session {
+func sessionFromEcho(c *echo.Context) *store.Session {
 	sess, _ := c.Get(sessionKey).(*store.Session)
 	return sess
 }
 
 // RequireInternalIP restricts endpoint to localhost only.
 func RequireInternalIP(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		addr := c.Request().RemoteAddr
 		// Allow only 127.0.0.1 and ::1
 		if !strings.HasPrefix(addr, "127.0.0.1:") && !strings.HasPrefix(addr, "[::1]:") {
@@ -252,7 +252,7 @@ func RequireInternalIP(next echo.HandlerFunc) echo.HandlerFunc {
 // has access to the specified feature. Returns 403 with upgrade info if denied.
 func RequireFeature(s *store.Store, feature string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 			license, err := s.Licenses.GetActive(c.Request().Context())
@@ -281,7 +281,7 @@ func RequireFeature(s *store.Store, feature string) echo.MiddlewareFunc {
 // RequireTier returns Echo middleware that requires minimum tier level.
 func RequireTier(s *store.Store, minTier string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 			license, err := s.Licenses.GetActive(c.Request().Context())
@@ -348,7 +348,7 @@ func featureMinTier(feature string) string {
 func scopeAuditLogs(s *store.Store) echo.MiddlewareFunc {
 	admin := RequireAdmin(s)
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return admin(func(c echo.Context) error {
+		return admin(func(c *echo.Context) error {
 			if role, _ := c.Get(roleKey).(string); role != auth.RoleSuperAdmin {
 				sess := sessionFromEcho(c)
 				// Service tokens have no user (UserID 0, which the store
@@ -370,7 +370,7 @@ func scopeAuditLogs(s *store.Store) echo.MiddlewareFunc {
 // keep the route's own role check.
 func requireSuperAdminOnPanelHost(s *store.Store) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 			if err != nil || id <= 0 {
 				return next(c)
@@ -395,9 +395,9 @@ func requireSuperAdminOnPanelHost(s *store.Store) echo.MiddlewareFunc {
 // server for everyone and used to leave no trace.
 func auditServerAction(rec *audit.Recorder) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			err := next(c)
-			if err != nil || c.Response().Status >= 400 {
+			if err != nil || responseStatus(c) >= 400 {
 				return err
 			}
 			id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -416,7 +416,7 @@ func auditServerAction(rec *audit.Recorder) echo.MiddlewareFunc {
 // rejectImpersonation refuses requests made while impersonating another
 // user (e.g. an admin changing that user's 2FA).
 func rejectImpersonation(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		if sess := sessionFromEcho(c); sess != nil && sess.ImpersonatedBy.Valid {
 			return echo.NewHTTPError(http.StatusForbidden, "not available while impersonating a user")
 		}
@@ -432,7 +432,7 @@ func rejectImpersonation(next echo.HandlerFunc) echo.HandlerFunc {
 // would otherwise work. Requests with an Authorization header (the web
 // app's proxy, the CLI, API keys) are not cookie-based and pass.
 func cookieCSRFGuard(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		r := c.Request()
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:

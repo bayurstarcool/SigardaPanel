@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/buildinfo"
@@ -39,7 +39,7 @@ func newAgentHandler(s *store.Store, a *audit.Recorder) *agentHandler {
 
 // createRegistrationToken generates a one-time registration token.
 // POST /api/v1/agents/tokens  (admin only)
-func (h *agentHandler) createRegistrationToken(c echo.Context) error {
+func (h *agentHandler) createRegistrationToken(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -104,7 +104,7 @@ type registerRequest struct {
 
 // registerAgent creates a server record from a registration token.
 // POST /api/v1/agents/register  (no auth — uses registration token)
-func (h *agentHandler) registerAgent(c echo.Context) error {
+func (h *agentHandler) registerAgent(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	var req registerRequest
@@ -209,7 +209,7 @@ func isAllowedAgentCallbackIP(ip net.IP, allowPrivate bool) bool {
 
 // installScript serves the one-line install script. The registration token is
 // carried in a header so it does not leak into URLs, proxy logs, or history.
-func (h *agentHandler) installScript(c echo.Context) error {
+func (h *agentHandler) installScript(c *echo.Context) error {
 	token := strings.TrimSpace(c.Request().Header.Get("X-Sigarda-Registration-Token"))
 	if token == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "X-Sigarda-Registration-Token header required")
@@ -243,7 +243,7 @@ func installerPanelURL() (string, error) {
 }
 
 // statusDashboard serves the version-matched SSH dashboard used by agent installers.
-func (h *agentHandler) statusDashboard(c echo.Context) error {
+func (h *agentHandler) statusDashboard(c *echo.Context) error {
 	c.Response().Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	c.Response().Header().Set("Content-Disposition", "attachment; filename=\"sigardapanel-info.sh\"")
 	return c.String(http.StatusOK, statusDashboardScript)

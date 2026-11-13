@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // RateLimiter implements a token bucket rate limiter
@@ -109,7 +109,7 @@ func (rl *RateLimiter) Allow(ip string) bool {
 // Middleware returns an echo middleware that rate limits requests
 func (rl *RateLimiter) Middleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			ip := c.RealIP()
 			if ip == "" {
 				ip = c.Request().RemoteAddr

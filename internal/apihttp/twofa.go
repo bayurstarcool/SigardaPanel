@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/pquerna/otp/totp"
 	"sigardapanel/internal/store"
 )
@@ -31,7 +31,7 @@ var (
 // protection. It returns a non-nil *echo.HTTPError to send (never the result
 // of writing a response, which is nil and would let the caller continue),
 // or nil when the code is good.
-func checkTOTP(c echo.Context, userID int64, code, secret string) error {
+func checkTOTP(c *echo.Context, userID int64, code, secret string) error {
 	key := "2fa:" + strconv.FormatInt(userID, 10)
 	if twoFAFailures.blocked(key) {
 		return echo.NewHTTPError(http.StatusTooManyRequests, "too many wrong codes; try again in 15 minutes")
@@ -68,7 +68,7 @@ func newTwoFactorHandler(s *store.Store) *TwoFactorHandler {
 }
 
 // setup2FA generates a TOTP secret and returns the provisioning URI + QR code URL.
-func (h *TwoFactorHandler) setup2FA(c echo.Context) error {
+func (h *TwoFactorHandler) setup2FA(c *echo.Context) error {
 	userID, ok := c.Get("user_id").(int64)
 	if !ok || userID == 0 {
 		// Service tokens have no user behind them; 2FA is a per-user setting.
@@ -132,7 +132,7 @@ func (h *TwoFactorHandler) setup2FA(c echo.Context) error {
 }
 
 // enable2FA verifies a TOTP code and enables 2FA for the user.
-func (h *TwoFactorHandler) enable2FA(c echo.Context) error {
+func (h *TwoFactorHandler) enable2FA(c *echo.Context) error {
 	userID, ok := c.Get("user_id").(int64)
 	if !ok || userID == 0 {
 		// Service tokens have no user behind them; 2FA is a per-user setting.
@@ -184,7 +184,7 @@ func (h *TwoFactorHandler) enable2FA(c echo.Context) error {
 }
 
 // disable2FA verifies a TOTP code and disables 2FA for the user.
-func (h *TwoFactorHandler) disable2FA(c echo.Context) error {
+func (h *TwoFactorHandler) disable2FA(c *echo.Context) error {
 	userID, ok := c.Get("user_id").(int64)
 	if !ok || userID == 0 {
 		// Service tokens have no user behind them; 2FA is a per-user setting.
@@ -233,7 +233,7 @@ func (h *TwoFactorHandler) disable2FA(c echo.Context) error {
 }
 
 // verify2FA verifies a TOTP code (used during login).
-func (h *TwoFactorHandler) verify2FA(c echo.Context) error {
+func (h *TwoFactorHandler) verify2FA(c *echo.Context) error {
 	userID, ok := c.Get("user_id").(int64)
 	if !ok || userID == 0 {
 		// Service tokens have no user behind them; 2FA is a per-user setting.
@@ -273,7 +273,7 @@ func (h *TwoFactorHandler) verify2FA(c echo.Context) error {
 }
 
 // status2FA returns the 2FA status for the current user.
-func (h *TwoFactorHandler) status2FA(c echo.Context) error {
+func (h *TwoFactorHandler) status2FA(c *echo.Context) error {
 	userID, ok := c.Get("user_id").(int64)
 	if !ok || userID == 0 {
 		// Service tokens have no user behind them; 2FA is a per-user setting.
@@ -296,7 +296,7 @@ func (h *TwoFactorHandler) status2FA(c echo.Context) error {
 }
 
 // generateRecoveryCodes generates backup recovery codes for 2FA.
-func (h *TwoFactorHandler) generateRecoveryCodes(c echo.Context) error {
+func (h *TwoFactorHandler) generateRecoveryCodes(c *echo.Context) error {
 	userID, ok := c.Get("user_id").(int64)
 	if !ok || userID == 0 {
 		// Service tokens have no user behind them; 2FA is a per-user setting.

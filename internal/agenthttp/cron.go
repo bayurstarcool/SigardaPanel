@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/siteinput"
 )
 
@@ -75,7 +75,7 @@ func cronUserAllowed(name string) bool {
 
 // cronSyncTask answers POST /tasks/cron/sync {site_id, system_user,
 // root_path, jobs}: replace the site's cron file (none when jobs is empty).
-func (r *Router) cronSyncTask(c echo.Context) error {
+func (r *Router) cronSyncTask(c *echo.Context) error {
 	var p struct {
 		SiteID     int64         `json:"site_id"`
 		SystemUser string        `json:"system_user"`

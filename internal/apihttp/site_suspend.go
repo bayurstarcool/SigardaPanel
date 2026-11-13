@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
@@ -18,16 +18,16 @@ import (
 // suspend takes a site offline (vhost + certbot renewal disabled) without
 // deleting files, databases or certificates. Admin only: a suspended owner
 // must not be able to resume their own site.
-func (h *siteHandler) suspend(c echo.Context) error {
+func (h *siteHandler) suspend(c *echo.Context) error {
 	return h.toggleSuspend(c, true)
 }
 
 // resume reverses suspend.
-func (h *siteHandler) resume(c echo.Context) error {
+func (h *siteHandler) resume(c *echo.Context) error {
 	return h.toggleSuspend(c, false)
 }
 
-func (h *siteHandler) toggleSuspend(c echo.Context, suspend bool) error {
+func (h *siteHandler) toggleSuspend(c *echo.Context, suspend bool) error {
 	ctx := c.Request().Context()
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)

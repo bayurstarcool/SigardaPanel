@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
 )
@@ -21,7 +21,7 @@ func newMetricHandler(s *store.Store) *metricHandler {
 	return &metricHandler{store: s}
 }
 
-func (h *metricHandler) ingest(c echo.Context) error {
+func (h *metricHandler) ingest(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	serverID, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -85,7 +85,7 @@ func (h *metricHandler) ingest(c echo.Context) error {
 	})
 }
 
-func (h *metricHandler) latest(c echo.Context) error {
+func (h *metricHandler) latest(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	serverID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || serverID <= 0 {
@@ -111,7 +111,7 @@ func (h *metricHandler) latest(c echo.Context) error {
 // per 2 minutes for 24h, per 14 minutes for 7d.
 const metricRangeMaxPoints = 720
 
-func (h *metricHandler) range_(c echo.Context) error {
+func (h *metricHandler) range_(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	serverID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || serverID <= 0 {
@@ -149,7 +149,7 @@ func (h *metricHandler) range_(c echo.Context) error {
 	})
 }
 
-func (h *metricHandler) gpu(c echo.Context) error {
+func (h *metricHandler) gpu(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	serverID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || serverID <= 0 {

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
@@ -40,7 +40,7 @@ func newSecurityMonitorHandler(s *store.Store, a *audit.Recorder) *securityMonit
 }
 
 // agentServer resolves the server and returns its agent base URL + token.
-func (h *securityMonitorHandler) agentServer(c echo.Context) (string, string, error) {
+func (h *securityMonitorHandler) agentServer(c *echo.Context) (string, string, error) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return "", "", echo.NewHTTPError(http.StatusBadRequest, "invalid id")
@@ -55,7 +55,7 @@ func (h *securityMonitorHandler) agentServer(c echo.Context) (string, string, er
 	return server.AgentURL.String, server.AgentToken, nil
 }
 
-func fetchAgentJSON(c echo.Context, agentURL, token, path string) (map[string]any, error) {
+func fetchAgentJSON(c *echo.Context, agentURL, token, path string) (map[string]any, error) {
 	resp, err := agentRequest(http.MethodGet, agentURL+path, token, nil)
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
@@ -73,7 +73,7 @@ func fetchAgentJSON(c echo.Context, agentURL, token, path string) (map[string]an
 }
 
 // GET /api/v1/servers/:id/security/monitor?section=all|ssh|integrity|connections|persistence|web
-func (h *securityMonitorHandler) monitor(c echo.Context) error {
+func (h *securityMonitorHandler) monitor(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	agentURL, token, err := h.agentServer(c)
 	if err != nil {
@@ -134,7 +134,7 @@ type baselineCompare struct {
 
 // GET /api/v1/servers/:id/security/baseline — compare live integrity against
 // the stored baseline. Without a baseline the response says so.
-func (h *securityMonitorHandler) getBaseline(c echo.Context) error {
+func (h *securityMonitorHandler) getBaseline(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	serverID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || serverID <= 0 {
@@ -194,7 +194,7 @@ func (h *securityMonitorHandler) getBaseline(c echo.Context) error {
 
 // POST /api/v1/servers/:id/security/baseline — snapshot current integrity as
 // the known-good baseline.
-func (h *securityMonitorHandler) saveBaseline(c echo.Context) error {
+func (h *securityMonitorHandler) saveBaseline(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	serverID, err := strconv.ParseInt(c.Param("id"), 10, 64)

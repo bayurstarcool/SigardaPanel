@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
@@ -30,7 +30,7 @@ func newBackupScheduleHandler(s *store.Store, a *audit.Recorder) *backupSchedule
 
 // Deprecated: POST /api/v1/sites/:id/schedules
 // Use POST /api/v1/backup-configs instead.
-func (h *backupScheduleHandler) create(c echo.Context) error {
+func (h *backupScheduleHandler) create(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -112,7 +112,7 @@ func (h *backupScheduleHandler) create(c echo.Context) error {
 
 // Deprecated: GET /api/v1/sites/:id/schedules
 // Use GET /api/v1/backup-configs instead.
-func (h *backupScheduleHandler) listBySite(c echo.Context) error {
+func (h *backupScheduleHandler) listBySite(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	siteID, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -146,7 +146,7 @@ func (h *backupScheduleHandler) listBySite(c echo.Context) error {
 
 // Deprecated: PATCH /api/v1/schedules/:id
 // Use PATCH /api/v1/backup-configs/:id instead.
-func (h *backupScheduleHandler) update(c echo.Context) error {
+func (h *backupScheduleHandler) update(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -221,7 +221,7 @@ func (h *backupScheduleHandler) update(c echo.Context) error {
 
 // Deprecated: DELETE /api/v1/schedules/:id
 // Use DELETE /api/v1/backup-configs/:id instead.
-func (h *backupScheduleHandler) delete(c echo.Context) error {
+func (h *backupScheduleHandler) delete(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	var userID int64
@@ -261,7 +261,7 @@ func (h *backupScheduleHandler) delete(c echo.Context) error {
 // requireScheduleWrite checks the caller holds write permission on the site a
 // schedule belongs to. Schedules of sites the caller cannot see are reported
 // as not found.
-func (h *backupScheduleHandler) requireScheduleWrite(c echo.Context, sched *store.BackupSchedule) error {
+func (h *backupScheduleHandler) requireScheduleWrite(c *echo.Context, sched *store.BackupSchedule) error {
 	site, err := h.store.Sites.GetByID(c.Request().Context(), sched.SiteID)
 	if err != nil || site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "schedule not found")

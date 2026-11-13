@@ -758,6 +758,18 @@ switching requires re-encrypting those values.
 ### Agent Network Metrics (`internal/agenthttp/router.go`)
 - `readNet()` now sums all non-loopback interfaces (was using only last line)
 
+## HTTP framework
+
+API and agent use **echo v5** (`github.com/labstack/echo/v5`; v4 had advisories
+GO-2026-6875/6872 with no fix). Handlers take `c *echo.Context`;
+`echo.NewHTTPError(code, message string)`; `c.Response()` is an
+`http.ResponseWriter` (status/committed via `responseStatus`/`responseCommitted`,
+i.e. `echo.UnwrapResponse`); the error handler is `func(c *echo.Context, err error)`
+and reads statuses with `echo.StatusCode(err)` (router 404/405 errors are not
+`*echo.HTTPError`); `middleware.Recover()` returns panics as
+`*middleware.PanicStackError`, logged by `customErrorHandler`. The `member/`
+directory is a separate, unused legacy module (not built or released).
+
 ## Repositories
 
 - **Public (open source — full source + signed releases)**: github.com/bayurstarcool/SigardaPanel — `main` is the source of truth

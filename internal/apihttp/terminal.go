@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
@@ -86,7 +86,7 @@ func (h *terminalHandler) take(id string) (terminalTicket, bool) {
 // POST /api/v1/terminal/tickets {server_id | site_id, session?}
 //   - site_id: shell as that site's unix user (needs write access to the site)
 //   - server_id only: root shell (admins only)
-func (h *terminalHandler) createTicket(c echo.Context) error {
+func (h *terminalHandler) createTicket(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	ctx := c.Request().Context()
@@ -173,7 +173,7 @@ var terminalClientUpgrader = websocket.Upgrader{
 }
 
 // GET /api/v1/ws/terminal?ticket=...  — authenticated by the single-use ticket.
-func (h *terminalHandler) serve(c echo.Context) error {
+func (h *terminalHandler) serve(c *echo.Context) error {
 	t, ok := h.take(c.QueryParam("ticket"))
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired ticket")

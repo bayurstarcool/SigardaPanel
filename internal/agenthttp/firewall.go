@@ -13,7 +13,7 @@ import (
 
 	"sigardapanel/internal/config"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // UFWRule represents a UFW firewall rule.
@@ -29,7 +29,7 @@ type UFWRule struct {
 }
 
 // firewallStatusTask returns UFW status.
-func (r *Router) firewallStatusTask(c echo.Context) error {
+func (r *Router) firewallStatusTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	// Check if UFW is installed by trying to get version
@@ -65,7 +65,7 @@ func (r *Router) firewallStatusTask(c echo.Context) error {
 }
 
 // firewallEnableTask enables UFW.
-func (r *Router) firewallEnableTask(c echo.Context) error {
+func (r *Router) firewallEnableTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	// Keep SSH, HTTP(S) and the agent reachable, then enable (--force skips
@@ -88,7 +88,7 @@ func (r *Router) firewallEnableTask(c echo.Context) error {
 }
 
 // firewallDisableTask disables UFW.
-func (r *Router) firewallDisableTask(c echo.Context) error {
+func (r *Router) firewallDisableTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	output, err := r.executor.RunShell(ctx, "ufw", "--force", "disable")
@@ -108,12 +108,12 @@ func (r *Router) firewallDisableTask(c echo.Context) error {
 }
 
 // firewallAllowTask adds a UFW allow rule.
-func (r *Router) firewallAllowTask(c echo.Context) error {
+func (r *Router) firewallAllowTask(c *echo.Context) error {
 	return r.firewallRuleTask(c, "allow")
 }
 
 // firewallDenyTask adds a UFW deny rule.
-func (r *Router) firewallDenyTask(c echo.Context) error {
+func (r *Router) firewallDenyTask(c *echo.Context) error {
 	return r.firewallRuleTask(c, "deny")
 }
 
@@ -212,7 +212,7 @@ func (r *Router) protectedPorts() map[string]string {
 	return ports
 }
 
-func (r *Router) firewallRuleTask(c echo.Context, action string) error {
+func (r *Router) firewallRuleTask(c *echo.Context, action string) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Port     string `json:"port"`
@@ -269,7 +269,7 @@ func (r *Router) ensureProtectedAllows(ctx context.Context) {
 }
 
 // firewallDeleteTask deletes a UFW rule by number.
-func (r *Router) firewallDeleteTask(c echo.Context) error {
+func (r *Router) firewallDeleteTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
 		Number int `json:"number"`
@@ -319,7 +319,7 @@ func (r *Router) firewallDeleteTask(c echo.Context) error {
 }
 
 // firewallRulesTask lists all UFW rules.
-func (r *Router) firewallRulesTask(c echo.Context) error {
+func (r *Router) firewallRulesTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	output, err := r.executor.RunShell(ctx, "ufw", "status", "numbered")
@@ -340,7 +340,7 @@ func (r *Router) firewallRulesTask(c echo.Context) error {
 }
 
 // firewallResetTask resets UFW to defaults.
-func (r *Router) firewallResetTask(c echo.Context) error {
+func (r *Router) firewallResetTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	output, err := r.executor.RunShell(ctx, "ufw", "--force", "reset")

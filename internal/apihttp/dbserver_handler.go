@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/dbserver"
 	"sigardapanel/internal/httpjson"
@@ -24,7 +24,7 @@ func newDBServerHandler(s *store.Store, a *audit.Recorder) *dbServerHandler {
 }
 
 // getDBServer returns the default database server info (GET /api/v1/database-server).
-func (h *dbServerHandler) getDBServer(c echo.Context) error {
+func (h *dbServerHandler) getDBServer(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
 	svr, err := h.store.DBStore.GetDefault(c.Request().Context())
@@ -68,7 +68,7 @@ func (h *dbServerHandler) getDBServer(c echo.Context) error {
 }
 
 // importDatabases imports existing MySQL databases into SigardaPanel metadata.
-func (h *dbServerHandler) importDatabases(c echo.Context) error {
+func (h *dbServerHandler) importDatabases(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 

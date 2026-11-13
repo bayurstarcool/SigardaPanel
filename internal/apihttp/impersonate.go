@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/store"
@@ -17,7 +17,7 @@ const impersonationSessionTTL = 24 * time.Hour
 
 // impersonate creates a new session acting as another user.
 // POST /api/v1/users/:id/impersonate
-func (ah *authHandler) impersonate(c echo.Context) error {
+func (ah *authHandler) impersonate(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	if sess == nil {
@@ -105,7 +105,7 @@ func (ah *authHandler) impersonate(c echo.Context) error {
 
 // stopImpersonation revokes the current impersonation session.
 // POST /api/v1/auth/stop-impersonation
-func (ah *authHandler) stopImpersonation(c echo.Context) error {
+func (ah *authHandler) stopImpersonation(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
 	if sess == nil {
