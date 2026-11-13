@@ -117,7 +117,12 @@
   const diskUnlimited = $derived(usageData?.disk_unlimited);
   const hasDiskLimit = $derived(!diskUnlimited && (usageData?.disk_limit_bytes ?? 0) > 0);
   const diskPct = $derived(hasDiskLimit ? Math.min(Math.round((usageData?.disk_used_bytes ?? 0) / (usageData?.disk_limit_bytes ?? 1) * 100), 100) : 0);
-  const diskLabel = $derived(hasDiskLimit ? `${fmtBytesFull(usageData?.disk_used_bytes ?? 0)} / ${usageData?.disk_limit_gb} GB` : `${fmtBytesFull(usageData?.disk_used_bytes ?? 0)}`);
+  // Sites whose server could not be measured are not in disk_used_bytes: then
+  // the figure is a lower bound.
+  const diskUnmeasured = $derived(usageData?.disk_unmeasured_sites ?? 0);
+  const diskUsedText = $derived(`${diskUnmeasured > 0 ? '≥ ' : ''}${fmtBytesFull(usageData?.disk_used_bytes ?? 0)}`);
+  const diskLabel = $derived(hasDiskLimit ? `${diskUsedText} / ${usageData?.disk_limit_gb} GB` : diskUsedText);
+  const diskTitle = $derived(diskUnmeasured > 0 ? `${diskUnmeasured} site(s) could not be measured (server offline or still measuring)` : undefined);
 
   const maxSites = $derived(usageData?.max_sites);
   const sitesUnlimited = $derived(maxSites === null || maxSites === undefined || maxSites === 0);
@@ -169,7 +174,7 @@
     <div class="shrink-0 space-y-3 border-t border-line px-5 py-4">
       <div>
         <div class="mb-1.5 flex justify-between text-[11px] text-subtle">
-          <span>Disk</span><span class="tabular-nums">{diskLabel}</span>
+          <span>Disk</span><span class="tabular-nums" title={diskTitle}>{diskLabel}</span>
         </div>
         <div class="progress h-1"><div class="progress-bar" style="width: {hasDiskLimit ? diskPct : 0}%"></div></div>
       </div>

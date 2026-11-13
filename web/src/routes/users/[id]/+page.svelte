@@ -435,19 +435,24 @@
             <div class="grid grid-cols-2 gap-3">
               <div class="rounded-lg border border-line p-4">
                 <div class="stat-label">Disk usage</div>
-                <div class="mt-1 text-lg font-semibold text-fg tabular-nums">{formatBytes(usage.disk_usage || 0)}</div>
-                {#if usage.disk_limit}
-                  <div class="text-xs text-subtle">of {formatBytes(usage.disk_limit)} limit</div>
-                  <div class="progress mt-2"><div class="progress-bar" style="width: {pct(usage.disk_usage, usage.disk_limit)}%"></div></div>
+                <div class="mt-1 text-lg font-semibold text-fg tabular-nums">{usage.disk_unmeasured_sites ? '≥ ' : ''}{formatBytes(usage.disk_used_bytes || 0)}</div>
+                {#if usage.disk_limit_bytes}
+                  <div class="text-xs text-subtle">of {formatBytes(usage.disk_limit_bytes)} limit</div>
+                  <div class="progress mt-2"><div class="progress-bar" style="width: {pct(usage.disk_used_bytes || 0, usage.disk_limit_bytes)}%"></div></div>
+                {:else}
+                  <div class="text-xs text-subtle">No limit</div>
+                {/if}
+                {#if usage.disk_unmeasured_sites}
+                  <div class="mt-1 text-xs text-warning">{usage.disk_unmeasured_sites} site(s) not measured: server offline or still measuring</div>
                 {/if}
               </div>
 
               <div class="rounded-lg border border-line p-4">
                 <div class="stat-label">Sites</div>
-                <div class="mt-1 text-lg font-semibold text-fg tabular-nums">{assignedSites.length}</div>
+                <div class="mt-1 text-lg font-semibold text-fg tabular-nums">{usage.site_count ?? 0}</div>
                 {#if usage.max_sites}
                   <div class="text-xs text-subtle">of {usage.max_sites} max</div>
-                  <div class="progress mt-2"><div class="progress-bar" style="width: {pct(assignedSites.length, usage.max_sites)}%"></div></div>
+                  <div class="progress mt-2"><div class="progress-bar" style="width: {pct(usage.site_count ?? 0, usage.max_sites)}%"></div></div>
                 {/if}
               </div>
 

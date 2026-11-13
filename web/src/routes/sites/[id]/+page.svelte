@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { fmtDate, fmtDaysLeft } from '$lib/format';
+  import { fmtDate, fmtDaysLeft, fmtBytesFull } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
@@ -52,6 +52,17 @@
 
   // Databases count (for stats)
   let dbsCount = $state(0);
+  // Disk usage, measured by du on the site's server: null = loading,
+  // '' = could not be measured.
+  let diskUsed = $state<number | null | ''>(null);
+  async function loadDiskUsage() {
+    const id = siteId;
+    diskUsed = null;
+    try {
+      const d = await apiFetch(auth.token, 'GET', `sites/${id}/usage`);
+      if (id === siteId) diskUsed = typeof d?.disk_used_bytes === 'number' ? d.disk_used_bytes : '';
+    } catch { if (id === siteId) diskUsed = ''; }
+  }
   let dockerContainer = $state<any>(null);
 
   const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
@@ -91,6 +102,7 @@
     if (!auth.user) { window.location.href = '/login'; return; }
     site = null; loading = true; activeTab = 'info'; dockerContainer = null; dbsCount = 0;
     await loadSite();
+    if (site) void loadDiskUsage();
     // Load db count for stats
     try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbsCount = (d?.databases || []).length; } catch {}
     // Load Docker container info for docker runtime sites
@@ -310,6 +322,15 @@
             {@render row('Domain', site.domain, { mono: true, copy: 'domain' })}
             {@render row('Runtime', site.runtime)}
             {@render row('Root path', site.root_path, { mono: true, copy: 'root' })}
+            <div class="flex items-center justify-between gap-4 py-2.5">
+              <dt class="text-[13px] text-muted">Disk usage</dt>
+              <dd class="flex items-center gap-2 text-[13px] text-fg tabular-nums">
+                {#if diskUsed === null}<LoaderCircle size={13} class="animate-spin text-subtle" />
+                {:else if diskUsed === ''}<span class="text-subtle" title="The site's server did not answer">Unavailable</span>
+                {:else}{fmtBytesFull(diskUsed)}{/if}
+                <button onclick={loadDiskUsage} disabled={diskUsed === null} class="btn btn-ghost btn-xs btn-icon" aria-label="Refresh disk usage" title="Refresh"><RefreshCw size={12} /></button>
+              </dd>
+            </div>
             {#if site.system_user}{@render row('System user', site.system_user, { mono: true })}{/if}
             {#if site.conf_file}{@render row('Nginx config', site.conf_file, { mono: true })}{/if}
             {#if site.proxy_pass_url}{@render row('Proxy pass', site.proxy_pass_url, { mono: true })}{/if}

@@ -1166,6 +1166,7 @@ func (h *siteHandler) usage(c echo.Context) error {
 		}
 		if v, ok := out["disk_used_bytes"].(float64); ok {
 			diskUsedBytes = int64(v)
+			siteDisk.store(site.ID, diskUsedBytes)
 		}
 	}
 
