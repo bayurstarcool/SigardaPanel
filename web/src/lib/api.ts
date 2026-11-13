@@ -192,16 +192,14 @@ export async function apiFetch(
         throw new Error(msg || "unauthorized");
       }
 
-      // Proxy error (502/503) — retry
-      if (res.status === 502 || res.status === 503) {
-        log(
-          `proxy error ${res.status} on ${method} ${path} (attempt ${attempt + 1})`,
-        );
-        if (attempt < MAX_RETRIES) {
-          await sleep(RETRY_DELAY_MS);
-          continue;
-        }
-        throw new Error("server unavailable");
+      // Proxy/agent error (502/503): only reads are retried. A POST that
+      // timed out may still have run (a root command, a firewall change);
+      // sending it again would run it twice. Otherwise the error body
+      // (e.g. "the site's agent is unreachable") is reported below.
+      if ((res.status === 502 || res.status === 503) && method === "GET" && attempt < MAX_RETRIES) {
+        log(`proxy error ${res.status} on ${method} ${path} (attempt ${attempt + 1})`);
+        await sleep(RETRY_DELAY_MS);
+        continue;
       }
 
       const json = await res.json().catch(() => null);
@@ -239,8 +237,8 @@ export async function apiFetch(
       return json.data;
     } catch (e: any) {
       lastError = e;
-      // Network error — retry
-      if (e.name === "TypeError" && attempt < MAX_RETRIES) {
+      // Network error — retry reads only (a write may have reached the server)
+      if (e.name === "TypeError" && method === "GET" && attempt < MAX_RETRIES) {
         log(`network error on ${method} ${path}, retrying...`);
         await sleep(RETRY_DELAY_MS);
         continue;

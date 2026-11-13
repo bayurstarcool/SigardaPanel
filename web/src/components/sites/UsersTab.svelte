@@ -52,8 +52,9 @@
     if (!assignTarget) return;
     assignBusy = true;
     try {
-      await apiFetch(auth.token, 'PATCH', `users/${assignTarget.user_id}`, {
-        plan_id: assignPlanId,
+      // PATCH users/:id ignores plan_id; plans have their own endpoint.
+      await apiFetch(auth.token, 'POST', `users/${assignTarget.user_id}/assign-plan`, {
+        plan_id: assignPlanId || 0,
       });
       assignTarget.plan_id = assignPlanId;
       const plan = plans.find(p => p.id === assignPlanId);

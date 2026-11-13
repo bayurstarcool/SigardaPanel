@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import EmptyState from '$components/EmptyState.svelte';
   import { Clock, Plus, Trash2 } from 'lucide-svelte';
   import { toasts } from '$lib/toast.svelte';
 
   let { siteId }: { siteId: number } = $props();
+  // Creating and deleting cron jobs is for admins (the API enforces it).
+  const canEdit = $derived(hasRole(auth.user?.role, 'admin'));
 
   let cronJobs = $state<any[]>([]);
   let cronLoading = $state(false);
@@ -40,7 +42,7 @@
       <h3 class="card-title">Cron jobs</h3>
       <span class="badge tabular-nums">{cronJobs.length}</span>
     </div>
-    <button onclick={() => (showCreateCron = !showCreateCron)} class="btn btn-secondary btn-sm"><Plus size={14} /> Add cron</button>
+    {#if canEdit}<button onclick={() => (showCreateCron = !showCreateCron)} class="btn btn-secondary btn-sm"><Plus size={14} /> Add cron</button>{/if}
   </div>
   {#if showCreateCron}
     <div class="flex flex-col gap-3 border-b border-line bg-surface-2/50 px-5 py-4 sm:flex-row sm:items-end">
@@ -71,7 +73,7 @@
             <span class="code shrink-0">{job.schedule}</span>
             <span class="font-mono text-[13px] break-all text-fg">{job.command}</span>
           </div>
-          <button onclick={() => deleteCron(job)} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Delete cron job"><Trash2 size={14} /></button>
+          {#if canEdit}<button onclick={() => deleteCron(job)} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Delete cron job"><Trash2 size={14} /></button>{/if}
         </li>
       {/each}
     </ul>

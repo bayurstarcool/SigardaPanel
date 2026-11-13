@@ -170,6 +170,9 @@ func (h *siteHandler) create(c echo.Context) error {
 		DockerEnv      string `json:"docker_env,omitempty"`
 		DockerVolume   string `json:"docker_volume,omitempty"`
 		DockerRestart  string `json:"docker_restart,omitempty"`
+		// CloudflareProvision: false skips the DNS record even when the user
+		// has Cloudflare configured (absent = provision, as before).
+		CloudflareProvision *bool `json:"cloudflare_provision,omitempty"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -415,6 +418,9 @@ func (h *siteHandler) create(c echo.Context) error {
 	cloudflareDNS := map[string]any{"provisioned": false, "zone": "", "record_id": "", "error": ""}
 	cfEnabled := false
 	cfCfg, err := h.store.Cloudflare.GetConfig(userID)
+	if body.CloudflareProvision != nil && !*body.CloudflareProvision {
+		err = fmt.Errorf("skipped")
+	}
 	if err == nil && cfCfg.APIToken != "" {
 		cfEnabled = true
 		cfClient := cloudflare.NewClient(cloudflare.Config{APIToken: cfCfg.APIToken, Email: cfCfg.Email})

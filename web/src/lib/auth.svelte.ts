@@ -197,17 +197,22 @@ function createAuthStore() {
     localStorage.setItem("sigarda_user", JSON.stringify(user));
   }
 
-  function logout() {
+  async function logout() {
     log("logout() called");
     if (isImpersonating) {
       stopImpersonation();
       return;
     }
-    // The HttpOnly cookie authenticates the call — no token in JS.
-    fetch("/api/proxy/auth/logout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    }).catch(() => {});
+    // The HttpOnly cookie authenticates the call — no token in JS. Wait for
+    // the server to revoke the session (keepalive lets it finish even if
+    // the page navigates away); otherwise the cookie stays valid.
+    try {
+      await fetch("/api/proxy/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+      });
+    } catch {}
     clearAuth();
   }
 

@@ -146,9 +146,14 @@
     try {
       const endpoint = manualType === 'database' ? `sites/${manualSiteId}/backups/database` : `sites/${manualSiteId}/backups`;
       const body: any = { backup_type: manualType };
-      if (manualProviderId > 0) body.provider_id = manualProviderId;
+      if (manualProviderId > 0) body.storage_provider_id = manualProviderId;
       const res = await apiFetch(auth.token, 'POST', endpoint, body);
-      toasts.success(`Backup job #${res?.job_id || ''} queued`);
+      if (res?.status === 'already_running') {
+        toasts.warning(res.message || 'A backup is already in progress');
+      } else {
+        const ids = res?.job_ids?.length ? res.job_ids.join(', #') : res?.job_id;
+        toasts.success(ids ? `Backup job #${ids} queued` : 'Backup queued');
+      }
       showManualBackup = false;
       await load();
     } catch (e: any) {
