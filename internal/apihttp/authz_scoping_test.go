@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sigardapanel/internal/agenthttp"
 	"strings"
 	"testing"
 	"time"
@@ -667,7 +668,16 @@ func TestFileManagerCreate_ReportsErrors(t *testing.T) {
 	f := newAuthzFixture(t)
 	owner, tok := f.user("owner", auth.RoleUser)
 	st := f.site(owner, "files", "static")
-	root := t.TempDir()
+	// The file manager runs on the site's agent: give the fixture server a
+	// real (test) agent that may operate under sitesDir.
+	sitesDir := t.TempDir()
+	root := filepath.Join(sitesDir, "files.example.com")
+	os.MkdirAll(root, 0o755)
+	agent := httptest.NewServer(agenthttp.NewRouterWithOptions(agenthttp.RouterOptions{SiteRootDir: sitesDir}))
+	defer agent.Close()
+	if _, err := f.s.DB().ExecContext(f.ctx, `UPDATE servers SET agent_url = ? WHERE id = ?`, agent.URL, f.serverID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.s.DB().ExecContext(f.ctx, `UPDATE sites SET root_path = ? WHERE id = ?`, root, st.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -675,7 +685,7 @@ func TestFileManagerCreate_ReportsErrors(t *testing.T) {
 
 	create := sitePath(st, "/files/create")
 	f.run([]authzCase{
-		{"dir over an existing file", "POST", create, map[string]any{"path": "afile", "is_dir": true}, tok, http.StatusInternalServerError},
+		{"dir over an existing file", "POST", create, map[string]any{"path": "afile", "is_dir": true}, tok, http.StatusInternalServerError}, // agent 500 → API 500
 		{"existing file", "POST", create, map[string]any{"path": "afile"}, tok, http.StatusConflict},
 		{"new file", "POST", create, map[string]any{"path": "new/ok.txt"}, tok, http.StatusCreated},
 		{"new dir", "POST", create, map[string]any{"path": "newdir", "is_dir": true}, tok, http.StatusCreated},

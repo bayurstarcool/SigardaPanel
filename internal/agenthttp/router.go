@@ -231,6 +231,11 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/stack/install", r.stackInstallTask)
 	tasks.GET("/stack/ops/:id", r.stackOpTask)
 
+	// File manager (operations on a site root on this server)
+	tasks.POST("/files/op", r.filesTask)
+	tasks.POST("/files/upload", r.filesUploadTask)
+	tasks.GET("/files/download", r.filesDownloadTask)
+
 	// Panel self-update (panel host only; runs the embedded, signature-verifying installer)
 	tasks.GET("/panel/update", r.panelUpdateStatusTask)
 	tasks.POST("/panel/update", r.panelUpdateStartTask)

@@ -2,17 +2,18 @@ package apihttp
 
 import (
 	"archive/zip"
-	"errors"
+	"context"
+	"encoding/json"
+	"fmt"
 	"io"
-	"io/fs"
-	"log/slog"
 	"net/http"
-	"os"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"sigardapanel/internal/sitefs"
 
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
@@ -74,57 +75,47 @@ func (h *fileManagerHandler) resolveSiteWrite(c echo.Context) (*store.Site, erro
 	return site, nil
 }
 
-func safePath(root, rel string) (string, error) {
-	if root == "" {
-		return "", echo.NewHTTPError(http.StatusBadRequest, "site root path not configured")
+// siteAgent returns the agent of the server that hosts site.
+func (h *fileManagerHandler) siteAgent(ctx context.Context, site *store.Site) (string, string, error) {
+	server, err := h.store.Servers.GetByID(ctx, site.ServerID)
+	if err != nil || server == nil || !server.AgentURL.Valid || server.AgentURL.String == "" || server.AgentToken == "" {
+		return "", "", echo.NewHTTPError(http.StatusBadGateway, "the site's server has no reachable agent")
 	}
-	rel = strings.TrimSpace(rel)
-	if rel == "" {
-		rel = "."
-	}
-	rel = filepath.Clean(rel)
-	if rel == ".." || strings.HasPrefix(rel, "..") || strings.HasPrefix(rel, "/") {
-		return "", echo.NewHTTPError(http.StatusBadRequest, "invalid path")
-	}
-	full := filepath.Join(root, rel)
-	// Ensure full path is within root (use trailing separator to avoid prefix collisions
-	// e.g., /home/user/htdocs/example.com should NOT match /home/user/htdocs/example.com-backup)
-	cleanRoot := filepath.Clean(root)
-	if full != cleanRoot && !strings.HasPrefix(full, cleanRoot+string(filepath.Separator)) {
-		return "", echo.NewHTTPError(http.StatusBadRequest, "path traversal not allowed")
-	}
-	// Resolve symlinks so a link inside the site root cannot point outside it.
-	if err := ensureNoSymlinkEscape(cleanRoot, full); err != nil {
-		return "", err
-	}
-	return full, nil
+	return agentBase(server), server.AgentToken, nil
 }
 
-// ensureNoSymlinkEscape resolves symlinks on the deepest existing ancestor of
-// full and verifies the result stays inside the (resolved) root.
-func ensureNoSymlinkEscape(root, full string) error {
-	realRoot, err := filepath.EvalSymlinks(root)
+// fileOp runs one file manager operation on the site's server. Files live on
+// the server that hosts the site, not on the panel host (the API process is
+// sandboxed and cannot see /home there either).
+func (h *fileManagerHandler) fileOp(c echo.Context, site *store.Site, op string, args map[string]any) (map[string]any, error) {
+	base, token, err := h.siteAgent(c.Request().Context(), site)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "site root not accessible")
+		return nil, err
 	}
-	probe := full
-	for {
-		resolved, err := filepath.EvalSymlinks(probe)
-		if err == nil {
-			if resolved != realRoot && !strings.HasPrefix(resolved, realRoot+string(filepath.Separator)) {
-				return echo.NewHTTPError(http.StatusBadRequest, "path traversal not allowed")
-			}
-			return nil
-		}
-		if !os.IsNotExist(err) {
-			return echo.NewHTTPError(http.StatusBadRequest, "invalid path")
-		}
-		parent := filepath.Dir(probe)
-		if parent == probe {
-			return echo.NewHTTPError(http.StatusBadRequest, "invalid path")
-		}
-		probe = parent
+	payload := map[string]any{"op": op, "root_path": site.RootPath, "system_user": site.SystemUser.String}
+	for k, v := range args {
+		payload[k] = v
 	}
+	code, out, err := stackAgentRequest(c.Request().Context(), http.MethodPost, base+"/tasks/files/op", token, payload, 2*time.Minute)
+	if code == http.StatusNotFound && (out == nil || agentMessage(out, "Not Found") == "Not Found") {
+		return nil, echo.NewHTTPError(http.StatusBadGateway, "the agent on this server is too old for the file manager; update the agent")
+	}
+	if err != nil {
+		return nil, echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
+	}
+	if code >= 400 {
+		return nil, agentHTTPError(code, out)
+	}
+	return out, nil
+}
+
+func (h *fileManagerHandler) auditFile(c echo.Context, site *store.Site, details map[string]any) {
+	var uid int64
+	if sess := sessionFromEcho(c); sess != nil {
+		uid = sess.UserID
+	}
+	details["domain"] = site.Domain
+	h.audit.RecordAction(c.Request().Context(), uid, audit.ActionSiteUpdate, audit.ResourceSite, site.ID, details)
 }
 
 // GET /sites/:id/files?path=.
@@ -134,50 +125,22 @@ func (h *fileManagerHandler) listFiles(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-
 	relPath := c.QueryParam("path")
 	if relPath == "" {
 		relPath = "."
 	}
-	fullPath, err := safePath(site.RootPath, relPath)
+	out, err := h.fileOp(c, site, "list", map[string]any{"path": relPath})
 	if err != nil {
 		return err
 	}
-
-	info, err := os.Stat(fullPath)
-	if err != nil || !info.IsDir() {
-		return echo.NewHTTPError(http.StatusNotFound, "directory not found")
+	entries, _ := out["entries"].([]any)
+	if entries == nil {
+		entries = []any{}
 	}
-
-	entries, err := os.ReadDir(fullPath)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read directory")
-	}
-
-	files := make([]fileEntry, 0, len(entries))
-	for _, e := range entries {
-		eInfo, err := e.Info()
-		if err != nil {
-			continue
-		}
-		files = append(files, fileEntry{
-			Name:    e.Name(),
-			Path:    filepath.Join(relPath, e.Name()),
-			Size:    eInfo.Size(),
-			IsDir:   e.IsDir(),
-			Mode:    eInfo.Mode().String(),
-			ModTime: eInfo.ModTime().Format(time.RFC3339),
-		})
-	}
-
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
-			"site_id":   site.ID,
-			"domain":    site.Domain,
-			"root_path": site.RootPath,
-			"current":   relPath,
-			"entries":   files,
-			"total":     len(files),
+			"site_id": site.ID, "domain": site.Domain, "root_path": site.RootPath,
+			"current": relPath, "entries": entries, "total": len(entries),
 		},
 		RequestID: rid,
 	})
@@ -190,39 +153,18 @@ func (h *fileManagerHandler) readFile(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-
 	relPath := c.QueryParam("path")
 	if relPath == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "path required")
 	}
-	fullPath, err := safePath(site.RootPath, relPath)
+	out, err := h.fileOp(c, site, "read", map[string]any{"path": relPath})
 	if err != nil {
 		return err
 	}
-
-	info, err := os.Stat(fullPath)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "file not found")
-	}
-	if info.Size() > 1024*1024 {
-		return echo.NewHTTPError(http.StatusBadRequest, "file too large (>1MB)")
-	}
-	if info.IsDir() {
-		return echo.NewHTTPError(http.StatusBadRequest, "is a directory")
-	}
-
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read file")
-	}
-
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
-			"path":     relPath,
-			"content":  string(data),
-			"size":     info.Size(),
-			"mod_time": info.ModTime().Format(time.RFC3339),
-			"mode":     info.Mode().String(),
+			"path": relPath, "content": out["content"], "size": out["size"],
+			"mod_time": out["mod_time"], "mode": out["mode"],
 		},
 		RequestID: rid,
 	})
@@ -235,7 +177,6 @@ func (h *fileManagerHandler) writeFile(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-
 	var body struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -243,32 +184,11 @@ func (h *fileManagerHandler) writeFile(c echo.Context) error {
 	if err := c.Bind(&body); err != nil || body.Path == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "path required")
 	}
-
-	fullPath, err := safePath(site.RootPath, body.Path)
-	if err != nil {
+	if _, err := h.fileOp(c, site, "write", map[string]any{"path": body.Path, "content": body.Content}); err != nil {
 		return err
 	}
-
-	dir := filepath.Dir(fullPath)
-	os.MkdirAll(dir, 0755)
-
-	if err := os.WriteFile(fullPath, []byte(body.Content), 0644); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to write")
-	}
-
-	sess := sessionFromEcho(c)
-	var userID int64
-	if sess != nil {
-		userID = sess.UserID
-	}
-	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, site.ID, map[string]any{
-		"domain": site.Domain, "action": "file_write", "path": body.Path, "item_type": "file", "is_dir": false,
-	})
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      map[string]any{"status": "success", "message": "File saved"},
-		RequestID: rid,
-	})
+	h.auditFile(c, site, map[string]any{"action": "file_write", "path": body.Path, "item_type": "file", "is_dir": false})
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "File saved"}, RequestID: rid})
 }
 
 // POST /sites/:id/files/create
@@ -278,7 +198,6 @@ func (h *fileManagerHandler) createEntry(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-
 	var body struct {
 		Path  string `json:"path"`
 		IsDir bool   `json:"is_dir"`
@@ -286,49 +205,11 @@ func (h *fileManagerHandler) createEntry(c echo.Context) error {
 	if err := c.Bind(&body); err != nil || body.Path == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "path required")
 	}
-
-	fullPath, err := safePath(site.RootPath, body.Path)
-	if err != nil {
+	if _, err := h.fileOp(c, site, "create", map[string]any{"path": body.Path, "is_dir": body.IsDir}); err != nil {
 		return err
 	}
-
-	if body.IsDir {
-		if err := os.MkdirAll(fullPath, 0755); err != nil {
-			slog.Error("api: request failed", "route", c.Path(), "error", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to create directory")
-		}
-	} else {
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-			slog.Error("api: request failed", "route", c.Path(), "error", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to create directory")
-		}
-		// O_EXCL: "create" must never truncate an existing file.
-		f, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-		if err != nil {
-			if errors.Is(err, fs.ErrExist) {
-				return echo.NewHTTPError(http.StatusConflict, "already exists")
-			}
-			slog.Error("api: request failed", "route", c.Path(), "error", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to create file")
-		}
-		if err := f.Close(); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to create file")
-		}
-	}
-
-	sess := sessionFromEcho(c)
-	var userID int64
-	if sess != nil {
-		userID = sess.UserID
-	}
-	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, site.ID, map[string]any{
-		"domain": site.Domain, "action": "file_create", "path": body.Path, "item_type": fileAuditItemType(body.IsDir), "is_dir": body.IsDir,
-	})
-
-	return c.JSON(http.StatusCreated, httpjson.Success{
-		Data:      map[string]any{"status": "success", "message": "Created"},
-		RequestID: rid,
-	})
+	h.auditFile(c, site, map[string]any{"action": "file_create", "path": body.Path, "item_type": fileAuditItemType(body.IsDir), "is_dir": body.IsDir})
+	return c.JSON(http.StatusCreated, httpjson.Success{Data: map[string]any{"status": "success", "message": "Created"}, RequestID: rid})
 }
 
 // DELETE /sites/:id/files?path=...
@@ -338,39 +219,17 @@ func (h *fileManagerHandler) deleteEntry(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-
 	relPath := c.QueryParam("path")
 	if relPath == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "path required")
 	}
-	fullPath, err := safePath(site.RootPath, relPath)
+	out, err := h.fileOp(c, site, "delete", map[string]any{"path": relPath})
 	if err != nil {
 		return err
 	}
-
-	if fullPath == filepath.Clean(site.RootPath) {
-		return echo.NewHTTPError(http.StatusBadRequest, "cannot delete site root")
-	}
-	isDir := false
-	if info, err := os.Stat(fullPath); err == nil {
-		isDir = info.IsDir()
-	}
-
-	os.RemoveAll(fullPath)
-
-	sess := sessionFromEcho(c)
-	var userID int64
-	if sess != nil {
-		userID = sess.UserID
-	}
-	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, site.ID, map[string]any{
-		"domain": site.Domain, "action": "file_delete", "path": relPath, "item_type": fileAuditItemType(isDir), "is_dir": isDir,
-	})
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      map[string]any{"status": "success", "message": "Deleted"},
-		RequestID: rid,
-	})
+	isDir, _ := out["is_dir"].(bool)
+	h.auditFile(c, site, map[string]any{"action": "file_delete", "path": relPath, "item_type": fileAuditItemType(isDir), "is_dir": isDir})
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Deleted"}, RequestID: rid})
 }
 
 // POST /sites/:id/files/rename
@@ -380,7 +239,6 @@ func (h *fileManagerHandler) renameEntry(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-
 	var body struct {
 		OldPath string `json:"old_path"`
 		NewName string `json:"new_name"`
@@ -388,115 +246,66 @@ func (h *fileManagerHandler) renameEntry(c echo.Context) error {
 	if err := c.Bind(&body); err != nil || body.OldPath == "" || body.NewName == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "old_path and new_name required")
 	}
-
-	oldFull, err := safePath(site.RootPath, body.OldPath)
+	out, err := h.fileOp(c, site, "rename", map[string]any{"old_path": body.OldPath, "new_name": body.NewName})
 	if err != nil {
 		return err
 	}
-
-	// Build new path: parent of old path + new name
-	parentDir := filepath.Dir(oldFull)
-	newFull := filepath.Join(parentDir, body.NewName)
-	newRel := strings.TrimPrefix(newFull, filepath.Clean(site.RootPath)+string(filepath.Separator))
-
-	// Validate new path is still within root
-	if _, err := safePath(site.RootPath, newRel); err != nil {
-		return err
-	}
-	isDir := false
-	if info, err := os.Stat(oldFull); err == nil {
-		isDir = info.IsDir()
-	}
-
-	if err := os.Rename(oldFull, newFull); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to rename")
-	}
-
-	sess := sessionFromEcho(c)
-	var userID int64
-	if sess != nil {
-		userID = sess.UserID
-	}
-	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, site.ID, map[string]any{
-		"domain": site.Domain, "action": "file_rename", "old_path": body.OldPath, "new_name": body.NewName, "item_type": fileAuditItemType(isDir), "is_dir": isDir,
-	})
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      map[string]any{"status": "success", "message": "Renamed"},
-		RequestID: rid,
-	})
+	isDir, _ := out["is_dir"].(bool)
+	h.auditFile(c, site, map[string]any{"action": "file_rename", "old_path": body.OldPath, "new_name": body.NewName, "item_type": fileAuditItemType(isDir), "is_dir": isDir})
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Renamed"}, RequestID: rid})
 }
 
-// POST /sites/:id/files/upload
+// POST /sites/:id/files/upload (multipart: path, file)
 func (h *fileManagerHandler) uploadFile(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	site, err := h.resolveSiteWrite(c)
 	if err != nil {
 		return err
 	}
-
 	relDir := c.FormValue("path")
 	if relDir == "" {
 		relDir = "."
 	}
-	if _, err := safePath(site.RootPath, relDir); err != nil {
-		return err
-	}
-
 	src, err := c.FormFile("file")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "file field required")
 	}
-
-	// The multipart filename is client-controlled; strip any directory
-	// components (ToSlash first — backslashes are not separators on Linux)
-	// and re-validate the final path so it can never escape the site root.
-	filename := filepath.Base(filepath.ToSlash(src.Filename))
-	if filename == "" || filename == "." || filename == ".." || filename == "/" {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid filename")
-	}
-	dstPath, err := safePath(site.RootPath, filepath.Join(relDir, filename))
-	if err != nil {
-		return err
-	}
-	os.MkdirAll(filepath.Dir(dstPath), 0755)
-
-	// Open uploaded file
-	srcFile, err := src.Open()
+	fh, err := src.Open()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to open upload")
 	}
-	defer srcFile.Close()
-
-	dstFile, err := os.Create(dstPath)
+	defer fh.Close()
+	base, token, err := h.siteAgent(c.Request().Context(), site)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create file")
+		return err
 	}
-	defer dstFile.Close()
-
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to save file")
+	q := url.Values{"root_path": {site.RootPath}, "system_user": {site.SystemUser.String}, "path": {relDir}, "filename": {src.Filename}}
+	req, err := http.NewRequestWithContext(c.Request().Context(), http.MethodPost, base+"/tasks/files/upload?"+q.Encode(), fh)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to prepare upload")
 	}
-
-	info, _ := os.Stat(dstPath)
-
-	sess := sessionFromEcho(c)
-	var userID int64
-	if sess != nil {
-		userID = sess.UserID
+	req.ContentLength = src.Size
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
-	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, site.ID, map[string]any{
-		"domain": site.Domain, "action": "file_upload", "path": filepath.Join(relDir, filename), "size": info.Size(), "item_type": "file", "is_dir": false,
-	})
-
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out)
+	if resp.StatusCode == http.StatusNotFound && agentMessage(out, "Not Found") == "Not Found" {
+		return echo.NewHTTPError(http.StatusBadGateway, "the agent on this server is too old for the file manager; update the agent")
+	}
+	if resp.StatusCode >= 400 {
+		if out == nil {
+			out = map[string]any{}
+		}
+		return agentHTTPError(resp.StatusCode, out)
+	}
+	h.auditFile(c, site, map[string]any{"action": "file_upload", "path": out["path"], "size": out["size"], "item_type": "file", "is_dir": false})
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]any{
-			"status":  "success",
-			"message": "Uploaded",
-			"name":    filename,
-			"size":    info.Size(),
-			"path":    filepath.Join(relDir, filename),
-		},
+		Data:      map[string]any{"status": "success", "message": "Uploaded", "name": out["name"], "size": out["size"], "path": out["path"]},
 		RequestID: rid,
 	})
 }
@@ -507,26 +316,39 @@ func (h *fileManagerHandler) downloadFile(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-
 	relPath := c.QueryParam("path")
 	if relPath == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "path required")
 	}
-	fullPath, err := safePath(site.RootPath, relPath)
+	base, token, err := h.siteAgent(c.Request().Context(), site)
 	if err != nil {
 		return err
 	}
-
-	info, err := os.Stat(fullPath)
+	q := url.Values{"root_path": {site.RootPath}, "path": {relPath}}
+	req, err := http.NewRequestWithContext(c.Request().Context(), http.MethodGet, base+"/tasks/files/download?"+q.Encode(), nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "file not found")
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to prepare download")
 	}
-	if info.IsDir() {
-		return echo.NewHTTPError(http.StatusBadRequest, "cannot download a directory")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := (&http.Client{Timeout: 30 * time.Minute}).Do(req)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
-
-	c.Response().Header().Set(echo.HeaderContentDisposition, "attachment; filename=\""+filepath.Base(fullPath)+"\"")
-	return c.File(fullPath)
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		var out map[string]any
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out)
+		if out == nil {
+			out = map[string]any{}
+		}
+		return agentHTTPError(resp.StatusCode, out)
+	}
+	name := filepath.Base(relPath)
+	c.Response().Header().Set(echo.HeaderContentDisposition, "attachment; filename=\""+strings.ReplaceAll(name, "\"", "")+"\"")
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		c.Response().Header().Set("Content-Length", cl)
+	}
+	return c.Stream(http.StatusOK, "application/octet-stream", resp.Body)
 }
 
 // POST /sites/:id/files/move  body: { "paths": ["a/b.txt", "c"], "dest": "folder" }
@@ -536,7 +358,6 @@ func (h *fileManagerHandler) moveEntries(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-
 	var body struct {
 		Paths []string `json:"paths"`
 		Dest  string   `json:"dest"`
@@ -547,56 +368,16 @@ func (h *fileManagerHandler) moveEntries(c echo.Context) error {
 	if len(body.Paths) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "paths required")
 	}
-
-	// Resolve destination directory (empty/"." = site root)
-	destFull, err := safePath(site.RootPath, body.Dest)
+	out, err := h.fileOp(c, site, "move", map[string]any{"paths": body.Paths, "dest": body.Dest})
 	if err != nil {
 		return err
 	}
-	if info, err := os.Stat(destFull); err != nil || !info.IsDir() {
-		return echo.NewHTTPError(http.StatusBadRequest, "destination is not a directory")
+	moved, _ := out["moved"].([]any)
+	if moved == nil {
+		moved = []any{}
 	}
-
-	moved := make([]string, 0, len(body.Paths))
-	for _, rel := range body.Paths {
-		srcFull, err := safePath(site.RootPath, rel)
-		if err != nil {
-			return err
-		}
-		if srcFull == filepath.Clean(site.RootPath) {
-			return echo.NewHTTPError(http.StatusBadRequest, "cannot move site root")
-		}
-		base := filepath.Base(srcFull)
-		dstFull := filepath.Join(destFull, base)
-		// Prevent moving a folder into itself or its own subtree
-		if srcFull == destFull || strings.HasPrefix(destFull+string(filepath.Separator), srcFull+string(filepath.Separator)) {
-			return echo.NewHTTPError(http.StatusBadRequest, "cannot move a folder into itself")
-		}
-		if dstFull == srcFull {
-			continue // already there
-		}
-		if _, err := os.Stat(dstFull); err == nil {
-			return echo.NewHTTPError(http.StatusConflict, "already exists at destination: "+base)
-		}
-		if err := os.Rename(srcFull, dstFull); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to move: "+base)
-		}
-		moved = append(moved, base)
-	}
-
-	sess := sessionFromEcho(c)
-	var userID int64
-	if sess != nil {
-		userID = sess.UserID
-	}
-	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, site.ID, map[string]any{
-		"domain": site.Domain, "action": "file_move", "count": len(moved), "dest": body.Dest,
-	})
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      map[string]any{"status": "success", "message": "Moved", "moved": moved},
-		RequestID: rid,
-	})
+	h.auditFile(c, site, map[string]any{"action": "file_move", "count": len(moved), "dest": body.Dest})
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Moved", "moved": moved}, RequestID: rid})
 }
 
 // POST /sites/:id/files/compress  body: { "paths": ["a", "b.txt"], "name": "archive.zip", "dest": "folder" }
@@ -606,7 +387,6 @@ func (h *fileManagerHandler) compressEntries(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-
 	var body struct {
 		Paths []string `json:"paths"`
 		Name  string   `json:"name"`
@@ -618,142 +398,13 @@ func (h *fileManagerHandler) compressEntries(c echo.Context) error {
 	if len(body.Paths) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "paths required")
 	}
-
-	// Sanitize archive name
-	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		name = "archive.zip"
-	}
-	name = filepath.Base(name) // strip any directory components
-	if !strings.HasSuffix(strings.ToLower(name), ".zip") {
-		name += ".zip"
-	}
-
-	destFull, err := safePath(site.RootPath, body.Dest)
+	out, err := h.fileOp(c, site, "compress", map[string]any{"paths": body.Paths, "name": body.Name, "dest": body.Dest})
 	if err != nil {
 		return err
 	}
-	if info, err := os.Stat(destFull); err != nil || !info.IsDir() {
-		return echo.NewHTTPError(http.StatusBadRequest, "destination is not a directory")
-	}
-	archivePath := filepath.Join(destFull, name)
-	if _, err := os.Stat(archivePath); err == nil {
-		return echo.NewHTTPError(http.StatusConflict, "archive already exists: "+name)
-	}
-
-	// Pre-resolve and validate all source paths before creating the archive file
-	type srcItem struct {
-		full string
-		base string
-	}
-	items := make([]srcItem, 0, len(body.Paths))
-	for _, rel := range body.Paths {
-		full, err := safePath(site.RootPath, rel)
-		if err != nil {
-			return err
-		}
-		if _, err := os.Stat(full); err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, "not found: "+rel)
-		}
-		items = append(items, srcItem{full: full, base: filepath.Base(full)})
-	}
-
-	out, err := os.Create(archivePath)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create archive")
-	}
-	defer out.Close()
-
-	zw := zip.NewWriter(out)
-	for _, it := range items {
-		if err := addToZip(zw, it.full, it.base); err != nil {
-			zw.Close()
-			os.Remove(archivePath)
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to compress: "+it.base)
-		}
-	}
-	if err := zw.Close(); err != nil {
-		os.Remove(archivePath)
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to finalize archive")
-	}
-
-	info, _ := os.Stat(archivePath)
-	var size int64
-	if info != nil {
-		size = info.Size()
-	}
-
-	sess := sessionFromEcho(c)
-	var userID int64
-	if sess != nil {
-		userID = sess.UserID
-	}
-	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, site.ID, map[string]any{
-		"domain": site.Domain, "action": "file_compress", "count": len(items), "archive": filepath.Join(body.Dest, name), "size": size,
-	})
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      map[string]any{"status": "success", "message": "Compressed", "archive": name, "size": size},
-		RequestID: rid,
-	})
+	h.auditFile(c, site, map[string]any{"action": "file_compress", "count": len(body.Paths), "archive": filepath.Join(body.Dest, fmt.Sprint(out["archive"])), "size": out["size"]})
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Compressed", "archive": out["archive"], "size": out["size"]}, RequestID: rid})
 }
 
-// addToZip walks src (file or dir) and writes entries under baseName inside the zip.
-func addToZip(zw *zip.Writer, src, baseName string) error {
-	info, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
-		return nil // never follow links (they may point outside the site)
-	}
-	if !info.IsDir() {
-		return writeFileToZip(zw, src, baseName, info)
-	}
-	return filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		zipName := baseName
-		if rel != "." {
-			zipName = filepath.ToSlash(filepath.Join(baseName, rel))
-		}
-		if fi.IsDir() {
-			if rel == "." {
-				return nil
-			}
-			_, err := zw.Create(zipName + "/")
-			return err
-		}
-		// Symlinks (e.g. one to /etc/shadow committed in a repo) and special
-		// files are skipped: os.Open would follow the link out of the site.
-		if !fi.Mode().IsRegular() {
-			return nil
-		}
-		return writeFileToZip(zw, path, zipName, fi)
-	})
-}
-
-func writeFileToZip(zw *zip.Writer, path, zipName string, fi os.FileInfo) error {
-	hdr, err := zip.FileInfoHeader(fi)
-	if err != nil {
-		return err
-	}
-	hdr.Name = filepath.ToSlash(zipName)
-	hdr.Method = zip.Deflate
-	w, err := zw.CreateHeader(hdr)
-	if err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) // the entry may have been swapped for a link
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(w, f)
-	return err
-}
+// addToZip is kept for callers in this package (see sitefs.AddToZip).
+func addToZip(zw *zip.Writer, src, baseName string) error { return sitefs.AddToZip(zw, src, baseName) }

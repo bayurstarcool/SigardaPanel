@@ -30,8 +30,8 @@ func BackendServer() Server {
 		Addr:         env("SIGARDAPANEL_API_ADDR", ":7700"),
 		TLSCert:      env("SIGARDAPANEL_API_TLS_CERT", ""),
 		TLSKey:       env("SIGARDAPANEL_API_TLS_KEY", ""),
-		ReadTimeout:  durationEnv("SIGARDAPANEL_API_READ_TIMEOUT", 10*time.Second),
-		WriteTimeout: durationEnv("SIGARDAPANEL_API_WRITE_TIMEOUT", 30*time.Second),
+		ReadTimeout:  durationEnv("SIGARDAPANEL_API_READ_TIMEOUT", 5*time.Minute),
+		WriteTimeout: durationEnv("SIGARDAPANEL_API_WRITE_TIMEOUT", 15*time.Minute),
 	}
 }
 
@@ -40,7 +40,7 @@ func AgentServer() Server {
 		Addr:         env("SIGARDAPANEL_AGENT_ADDR", ":7710"),
 		TLSCert:      env("SIGARDAPANEL_AGENT_TLS_CERT", ""),
 		TLSKey:       env("SIGARDAPANEL_AGENT_TLS_KEY", ""),
-		ReadTimeout:  durationEnv("SIGARDAPANEL_AGENT_READ_TIMEOUT", 10*time.Second),
+		ReadTimeout:  durationEnv("SIGARDAPANEL_AGENT_READ_TIMEOUT", 5*time.Minute),
 		WriteTimeout: durationEnv("SIGARDAPANEL_AGENT_WRITE_TIMEOUT", 15*time.Minute),
 	}
 }

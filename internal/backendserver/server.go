@@ -139,10 +139,12 @@ func Run(ctx context.Context) error {
 	}
 
 	server := &http.Server{
-		Addr:         cfg.Addr,
-		Handler:      apihttp.NewRouter(s, database, memberDB),
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
+		Addr:    cfg.Addr,
+		Handler: apihttp.NewRouter(s, database, memberDB),
+		// Bodies (file uploads, backups) may take minutes; the headers may not.
+		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
 	}
 
 	errCh := make(chan error, 1)
