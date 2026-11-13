@@ -24,6 +24,12 @@ cat > "$T/bin/sqlite3" <<'S'
 #!/bin/sh
 dst=$(echo "$2" | sed -e "s/^.backup '//" -e "s/'$//"); cp "$1" "$dst"
 S
+# Runs unprivileged in CI: "id -u" reports root, anything else is the real id.
+cat > "$T/bin/id" <<'S'
+#!/bin/sh
+[ "$*" = "-u" ] && { echo 0; exit 0; }
+exec /usr/bin/id "$@"
+S
 for f in chown sleep minisign; do printf '#!/bin/sh\nexit 0\n' > "$T/bin/$f"; done
 chmod +x "$T/bin/"*
 export PATH="$T/bin:$PATH"
