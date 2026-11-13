@@ -558,6 +558,34 @@ These are enforced in code and covered by tests; keep them when changing handler
 - **Firewall**: rules are validated and built in ufw syntax; enable keeps SSH/80/443/agent
   open; deny-for-everyone or deleting the last allow of those ports is refused.
 
+### Site operations run on the site's agent
+
+The API process is sandboxed (ProtectSystem/ProtectHome) and sites may live on other
+servers, so it never touches site files or host config itself. Each feature calls the
+site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
+
+| Feature | Agent route / job | Notes |
+|---|---|---|
+| File manager | `POST /tasks/files/op`, `/tasks/files/upload`, `GET /tasks/files/download` | `internal/sitefs`; owner = site user |
+| Raw vhost | `/tasks/vhost/get`, `/validate`, `/put` | put keeps the file only if `nginx -t` passes |
+| Disk usage, logs | `/tasks/site/usage`, `/tasks/logs/read` | |
+| SSH/FTP accounts | `/tasks/sshftp/create`, `/delete` | jails, fstab marker, sshd `-t` before reload |
+| Transfer | job `site.transfer` → `/tasks/site/transfer` | record + vhost regen only after the move; refused with SSH accounts, cron jobs or when suspended |
+| Cron | `/tasks/cron/sync` | `/etc/cron.d/sigardapanel-site-<id>`, runs as the site user (never root/system users) from the root; recorded only after the server accepted it; paused while suspended (`.suspended`), removed on delete |
+| IP restrictions | vhost regen | worker merges deny rules into blocked IPs and allow rules into an allowlist ending in `deny all` |
+| Backup files | job `backup.delete` (`store.QueueBackupFileDelete`) | never `os.Remove` in the API/worker; `clear_storage_path` for copies already on S3 |
+| Restore | `backup.restore` with `databases` | dumps imported before files are swapped; `.sql` backups import only |
+
+- **Backups remember their provider** (`backups.provider_id`, set by the worker from the
+  job's `s3_config`); `store.BackupProviderFor` resolves backup → site → default for
+  delete/restore/download/retention. Expired backups' S3 copies are deleted too.
+- **Login lock**: 20 failures per account in 15 min lock the account, except for
+  addresses it signed in from in the last 90 days (audit log); 10/IP/15 min applies.
+- **Docker sites** use the container `sp-site-<id>` (custom names refused); tenant
+  container actions match name, full id or 12-char short id only.
+- **Agent re-registration** from a known agent URL re-binds that server row.
+- **Cloudflare API tokens** are encrypted at rest (`secrets.Encrypt`).
+
 ## Panel Self-Update
 
 Settings → **Panel update** (super_admin). `internal/selfupdate` looks up the latest
