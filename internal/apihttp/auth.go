@@ -237,14 +237,16 @@ func (ah *authHandler) login(c echo.Context) error {
 	}
 
 	failKey := strings.ToLower(strings.TrimSpace(body.Username))
-	if ah.userFailures.blocked(failKey) {
-		return echo.NewHTTPError(http.StatusTooManyRequests, "too many failed attempts for this account, try again later")
-	}
-
 	user, err := ah.store.Users.GetByUsername(c.Request().Context(), body.Username)
 	if err != nil {
 		slog.Error("login: get user", "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
+	// The account lock stops distributed guessing, but it must not let an
+	// attacker lock the owner out: an address the account has signed in
+	// from before is still let through (the per-IP limit above applies).
+	if ah.userFailures.blocked(failKey) && (user == nil || !ah.store.HasRecentLoginFrom(c.Request().Context(), user.ID, ip)) {
+		return echo.NewHTTPError(http.StatusTooManyRequests, "too many failed attempts for this account, try again later")
 	}
 	if user == nil {
 		_, _ = auth.VerifyPassword(dummyPasswordHash, body.Password)

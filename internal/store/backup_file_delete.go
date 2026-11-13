@@ -93,3 +93,15 @@ func (s *Store) BackupProviderFor(ctx context.Context, b *Backup, site *Site) *B
 	p, _ := s.BackupProviders.GetDefault(ctx)
 	return p
 }
+
+// HasRecentLoginFrom reports whether userID logged in successfully from ip
+// within the last 90 days (per the audit log).
+func (s *Store) HasRecentLoginFrom(ctx context.Context, userID int64, ip string) bool {
+	if ip == "" {
+		return false
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_logs WHERE user_id = ? AND action = 'login'
+		AND json_valid(details) AND json_extract(details, '$.ip') = ? AND created_at > datetime('now', '-90 days')`, userID, ip).Scan(&n)
+	return err == nil && n > 0
+}
