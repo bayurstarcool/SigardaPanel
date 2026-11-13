@@ -67,6 +67,8 @@ func (h *stackHandler) tenantContainerNames(c echo.Context) (allowed map[string]
 	allowed = map[string]bool{}
 	add := func(site *store.Site) {
 		if site != nil {
+			allowed[fmt.Sprintf("sp-site-%d", site.ID)] = true
+			// Containers created before names carried the site id.
 			allowed["site-"+strings.ReplaceAll(site.Name, " ", "-")] = true
 		}
 	}
@@ -120,7 +122,9 @@ func (h *stackHandler) containerBelongsTo(server *store.Server, containerID stri
 		id, _ := m["id"].(string)
 		name, _ := m["name"].(string)
 		name = strings.TrimPrefix(name, "/")
-		if allowed[name] && containerID != "" && (containerID == name || (id != "" && (strings.HasPrefix(id, containerID) || strings.HasPrefix(containerID, id)))) {
+		// Exact matches only: the name, the full id or the 12-character short
+		// id. A shorter prefix could make docker act on another container.
+		if allowed[name] && containerID != "" && (containerID == name || (id != "" && (containerID == id || (len(containerID) >= 12 && strings.HasPrefix(id, containerID))))) {
 			return true
 		}
 	}

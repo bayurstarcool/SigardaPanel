@@ -262,6 +262,11 @@ func (h *siteHandler) create(c echo.Context) error {
 			body.DockerVolume, body.DockerRestart, body.DockerLanguage, body.RootPath); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
+		// The container is named after the site id (sp-site-<id>): custom
+		// names could collide with, and replace, another site's container.
+		if body.DockerName != "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "docker_name is assigned by the panel (sp-site-<id>); leave it empty")
+		}
 	}
 	if body.ManagedBy != "sigardapanel" && body.ManagedBy != "cloudpanel" && body.ManagedBy != "external" {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid managed_by")

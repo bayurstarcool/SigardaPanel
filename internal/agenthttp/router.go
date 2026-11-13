@@ -640,14 +640,12 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 			}
 		}
 
+		// One container per site, named after its id: names derived from
+		// the site name collided (and "docker rm -f" removed the other
+		// site's container).
 		containerName := payload.DockerName
 		if containerName == "" {
-			containerName = "site-" + strings.Map(func(r rune) rune {
-				if r == ' ' {
-					return '-'
-				}
-				return r
-			}, payload.Name)
+			containerName = siteContainerName(payload.SiteID)
 		}
 		if err := siteinput.DockerName(containerName); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -1086,6 +1084,9 @@ func dockerDefaultCmd(lang string) string {
 	}
 }
 
+// siteContainerName is the docker container of a docker site.
+func siteContainerName(siteID int64) string { return fmt.Sprintf("sp-site-%d", siteID) }
+
 func (r *Router) siteDeleteTask(c echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
@@ -1111,6 +1112,17 @@ func (r *Router) siteDeleteTask(c echo.Context) error {
 		r.executor.RunShell(ctx, "rm", "-f", "/etc/systemd/system/"+svcName+".service")
 		r.executor.RunShell(ctx, "systemctl", "daemon-reload")
 		cleaned = append(cleaned, "app service")
+	}
+
+	// 1b. Remove the site's docker container (named by site id).
+	if payload.SiteID > 0 {
+		if _, err := r.executor.RunShell(ctx, "docker", "inspect", "--type", "container", siteContainerName(payload.SiteID)); err == nil {
+			if out, err := r.executor.RunShell(ctx, "docker", "rm", "-f", siteContainerName(payload.SiteID)); err != nil {
+				errs = append(errs, "docker container: "+strings.TrimSpace(out))
+			} else {
+				cleaned = append(cleaned, "docker container")
+			}
+		}
 	}
 
 	// 2. Remove nginx config
