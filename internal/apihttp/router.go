@@ -182,7 +182,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/sites/:id/ssl", sslH.status, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/ssl/issue", sslH.issue, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/ssl/renew", sslH.renew, RequireAuth(s))
-	e.POST("/api/v1/ssl/renew-all", sslH.renewAll, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/ssl/renew-all", sslH.renewAll, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin)) // acts on every tenant's sites
 
 	// App process management (node/go/python runtimes)
 	e.GET("/api/v1/sites/:id/app/status", sitesH.appStatus, RequireAuth(s))
