@@ -2,887 +2,496 @@ package agenthttp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
-	"os/exec"
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/httpjson"
 )
 
-// StackInfo represents detected software on the server.
-type StackInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Status  string `json:"status"` // installed, running, stopped, missing
-	Path    string `json:"path,omitempty"`
-}
+// Stack management: detection of the server's software and package
+// operations (install / uninstall / update / extensions) plus service actions.
+//
+// Package operations can take many minutes (apt-get update, PPAs, dozens of
+// packages), longer than any proxy in front of the panel waits, so they run in
+// the background as an "operation": POST /tasks/stack/install answers 202 with
+// an op_id at once and GET /tasks/stack/ops/:id reports progress (log tail)
+// and the verified result. Only one package operation runs at a time (apt
+// cannot run concurrently anyway). Service actions (start/stop/restart/
+// reload) and listings are quick and answered synchronously.
 
 // StackRequest is the payload for stack operations.
 type StackRequest struct {
-	Package string `json:"package"` // nginx, php, node, python, go, docker, certbot, mariadb/mysql, redis, supervisor
-	Version string `json:"version,omitempty"`
-	Action  string `json:"action,omitempty"` // install, uninstall, restart, update, switch-version, start, stop
+	Package   string `json:"package"`
+	Version   string `json:"version,omitempty"`
+	Action    string `json:"action,omitempty"`
+	Extension string `json:"extension,omitempty"`
 }
 
-// StackResponse is the result of a stack operation.
+// StackResponse is the result of a synchronous stack action.
 type StackResponse struct {
-	OK      bool   `json:"ok"`
-	Message string `json:"message"`
-	Output  string `json:"output,omitempty"`
-	Version string `json:"version,omitempty"`
+	OK      bool       `json:"ok"`
+	Message string     `json:"message"`
+	Output  string     `json:"output,omitempty"`
+	Version string     `json:"version,omitempty"`
+	Info    *StackInfo `json:"info,omitempty"`
+}
+
+var stackVersionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+:~_\-]{0,63}$`)
+
+// asyncStackActions run as background operations.
+var asyncStackActions = map[string]bool{
+	"install": true, "uninstall": true, "update": true,
+	"install-extension": true, "uninstall-extension": true,
+}
+
+var serviceStackActions = map[string]bool{"start": true, "stop": true, "restart": true, "reload": true}
+
+// stackOp is one background package operation.
+type stackOp struct {
+	mu         sync.Mutex
+	ID         string
+	Package    string
+	Action     string
+	Version    string
+	Extension  string
+	Status     string // running | succeeded | failed
+	Message    string
+	log        cappedBuffer
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Info       *StackInfo
+}
+
+func (o *stackOp) Write(p []byte) (int, error) { return o.log.Write(p) }
+
+func (o *stackOp) snapshot(tail int) map[string]any {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	snap := map[string]any{
+		"op_id":      o.ID,
+		"package":    o.Package,
+		"action":     o.Action,
+		"version":    o.Version,
+		"extension":  o.Extension,
+		"status":     o.Status,
+		"ok":         o.Status == "succeeded",
+		"done":       o.Status != "running",
+		"message":    o.Message,
+		"output":     tailText(o.log.String(), tail),
+		"started_at": o.StartedAt.UTC().Format(time.RFC3339),
+	}
+	if !o.FinishedAt.IsZero() {
+		snap["finished_at"] = o.FinishedAt.UTC().Format(time.RFC3339)
+		snap["duration_ms"] = o.FinishedAt.Sub(o.StartedAt).Milliseconds()
+	} else {
+		snap["duration_ms"] = time.Since(o.StartedAt).Milliseconds()
+	}
+	if o.Info != nil {
+		snap["info"] = o.Info
+	}
+	return snap
+}
+
+// stackManager owns detection, the operation registry and the host access.
+type stackManager struct {
+	sys        stackSystem
+	binDir     string
+	sbinDir    string
+	phpRunDir  string
+	vhostDirs  []string
+	goDLURL    string
+	httpClient *http.Client
+	opTimeout  time.Duration
+
+	mu      sync.Mutex
+	ops     map[string]*stackOp
+	order   []string
+	running *stackOp
+	wg      sync.WaitGroup
+}
+
+func newStackManager(sys stackSystem, phpRunDir string, vhostDirs []string) *stackManager {
+	return &stackManager{
+		sys:        sys,
+		binDir:     "/usr/bin",
+		sbinDir:    "/usr/sbin",
+		phpRunDir:  phpRunDir,
+		vhostDirs:  vhostDirs,
+		goDLURL:    "https://go.dev/dl/",
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		opTimeout:  45 * time.Minute,
+		ops:        map[string]*stackOp{},
+	}
+}
+
+func newOpID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return "op_" + hex.EncodeToString(b)
+}
+
+// start registers and launches a background operation; it refuses while
+// another one runs.
+func (m *stackManager) start(req StackRequest, fn func(ctx context.Context, w io.Writer) (string, error)) (*stackOp, error) {
+	m.mu.Lock()
+	if m.running != nil {
+		r := m.running
+		m.mu.Unlock()
+		return nil, conflict("another stack operation is running (%s %s %s, %s); wait for it to finish",
+			r.Action, r.Package, r.Version, r.ID)
+	}
+	op := &stackOp{
+		ID: newOpID(), Package: req.Package, Action: req.Action, Version: req.Version,
+		Extension: req.Extension, Status: "running", StartedAt: time.Now(),
+		Message: fmt.Sprintf("%s %s %s in progress", req.Action, req.Package, req.Version),
+	}
+	op.log.max = 256 << 10
+	m.ops[op.ID] = op
+	m.order = append(m.order, op.ID)
+	for len(m.order) > 30 {
+		delete(m.ops, m.order[0])
+		m.order = m.order[1:]
+	}
+	m.running = op
+	m.wg.Add(1)
+	m.mu.Unlock()
+
+	go func() {
+		defer m.wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), m.opTimeout)
+		defer cancel()
+		fmt.Fprintf(op, "[sigardapanel] %s %s %s %s started\n", op.Action, op.Package, op.Version, op.Extension)
+		var msg string
+		var err error
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					err = fmt.Errorf("internal error: %v", p)
+				}
+			}()
+			msg, err = fn(ctx, op)
+		}()
+		if err == nil && ctx.Err() != nil {
+			err = fmt.Errorf("timed out after %s", m.opTimeout)
+		}
+		info := m.detect(context.Background(), req.Package)
+		op.mu.Lock()
+		op.FinishedAt = time.Now()
+		op.Info = &info
+		if err != nil {
+			op.Status = "failed"
+			op.Message = err.Error()
+		} else {
+			op.Status = "succeeded"
+			op.Message = msg
+		}
+		op.mu.Unlock()
+		fmt.Fprintf(op, "\n[sigardapanel] %s: %s\n", op.Status, op.Message)
+		elapsed := time.Since(op.StartedAt).Milliseconds()
+		if err != nil {
+			slog.Error("agent: stack operation failed", "op", op.ID, "package", op.Package, "action", op.Action, "version", op.Version, "error", err, "elapsed_ms", elapsed)
+		} else {
+			slog.Info("agent: stack operation ok", "op", op.ID, "package", op.Package, "action", op.Action, "version", op.Version, "elapsed_ms", elapsed)
+		}
+		m.mu.Lock()
+		m.running = nil
+		m.mu.Unlock()
+	}()
+	return op, nil
+}
+
+func (m *stackManager) get(id string) *stackOp {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ops[id]
+}
+
+func (m *stackManager) current() *stackOp {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running
+}
+
+// operation returns the background function for a package action, after
+// validating it (validation errors are returned before anything starts).
+func (m *stackManager) operation(req StackRequest) (func(ctx context.Context, w io.Writer) (string, error), error) {
+	p, a, v := req.Package, req.Action, req.Version
+	if a == "install-extension" || a == "uninstall-extension" {
+		if p != "php" {
+			return nil, badRequest("extensions are only managed for php")
+		}
+		if !phpVersionArgRe.MatchString(v) {
+			return nil, badRequest("a PHP version such as 8.3 is required")
+		}
+		if !phpExtRe.MatchString(req.Extension) {
+			return nil, badRequest("invalid extension name")
+		}
+		if a == "install-extension" {
+			return func(ctx context.Context, w io.Writer) (string, error) {
+				return m.phpExtensionInstall(ctx, w, v, req.Extension)
+			}, nil
+		}
+		if phpCoreParts[req.Extension] {
+			return nil, badRequest("%s is part of PHP %s itself; uninstall the version instead", req.Extension, v)
+		}
+		return func(ctx context.Context, w io.Writer) (string, error) {
+			return m.phpExtensionUninstall(ctx, w, v, req.Extension)
+		}, nil
+	}
+
+	switch p {
+	case "php":
+		if v == "" && a != "update" {
+			return nil, badRequest("a PHP version such as 8.3 is required to %s PHP", a)
+		}
+		if v != "" && !phpVersionArgRe.MatchString(v) {
+			return nil, badRequest("invalid PHP version %q (expected e.g. 8.3)", v)
+		}
+		switch a {
+		case "install":
+			return func(ctx context.Context, w io.Writer) (string, error) { return m.phpInstall(ctx, w, v) }, nil
+		case "uninstall":
+			if users := m.phpVhostUsers(v); len(users) > 0 {
+				return nil, conflict("PHP %s is still used by nginx vhost(s): %s. Switch those sites to another PHP version first", v, strings.Join(users, ", "))
+			}
+			return func(ctx context.Context, w io.Writer) (string, error) { return m.phpUninstall(ctx, w, v) }, nil
+		case "update":
+			return func(ctx context.Context, w io.Writer) (string, error) { return m.phpUpdate(ctx, w, v) }, nil
+		}
+	case "node":
+		switch a {
+		case "install", "update":
+			if v != "" && !nodeMajorRe.MatchString(v) {
+				return nil, badRequest("Node.js version must be a major version such as %s", nodeDefaultMajor)
+			}
+			if a == "update" && v == "" {
+				return func(ctx context.Context, w io.Writer) (string, error) {
+					info := m.detect(ctx, "node")
+					if info.Status == "missing" {
+						return "", badRequest("Node.js is not installed")
+					}
+					return m.nodeInstall(ctx, w, firstMajor(info.Version))
+				}, nil
+			}
+			return func(ctx context.Context, w io.Writer) (string, error) { return m.nodeInstall(ctx, w, v) }, nil
+		case "uninstall":
+			return func(ctx context.Context, w io.Writer) (string, error) { return m.aptComponentUninstall(ctx, w, "node") }, nil
+		}
+	case "go":
+		switch a {
+		case "install", "update":
+			if v != "" && !goVersionRe.MatchString(v) {
+				return nil, badRequest("invalid Go version %q (expected e.g. 1.25.4)", v)
+			}
+			return func(ctx context.Context, w io.Writer) (string, error) { return m.goInstall(ctx, w, v) }, nil
+		case "uninstall":
+			return func(ctx context.Context, w io.Writer) (string, error) {
+				if m.detect(ctx, "go").Status == "missing" {
+					return "", badRequest("Go is not installed")
+				}
+				if _, err := m.sys.Run(ctx, w, nil, "sh", "-c", goUninstallScript); err != nil {
+					return "", fmt.Errorf("removing /usr/local/go failed")
+				}
+				if info := m.detect(ctx, "go"); info.Status != "missing" {
+					return "", fmt.Errorf("Go is still installed at %s (not managed by the panel: installed from packages?)", info.Path)
+				}
+				return "Go removed from /usr/local/go", nil
+			}, nil
+		}
+	case "nginx", "python", "docker", "certbot", "mariadb", "mysql", "redis", "memcached", "supervisor":
+		name := p
+		if name == "mysql" {
+			name = "mariadb"
+		}
+		if v != "" {
+			return nil, badRequest("%s is installed from the distribution's packages; a version cannot be chosen", name)
+		}
+		switch a {
+		case "install":
+			return func(ctx context.Context, w io.Writer) (string, error) { return m.aptComponentInstall(ctx, w, name) }, nil
+		case "uninstall":
+			return func(ctx context.Context, w io.Writer) (string, error) { return m.aptComponentUninstall(ctx, w, name) }, nil
+		case "update":
+			return func(ctx context.Context, w io.Writer) (string, error) { return m.aptComponentUpdate(ctx, w, name) }, nil
+		}
+	default:
+		return nil, badRequest("unknown package: %s", p)
+	}
+	return nil, badRequest("unknown action %q for %s", a, p)
+}
+
+func firstMajor(v string) string {
+	for i := 0; i < len(v); i++ {
+		if v[i] == '.' {
+			return v[:i]
+		}
+	}
+	return v
 }
 
 // --- Agent task handlers ---
 
-// stackInfoTask detects all installed software and their versions.
-func (r *Router) stackInfoTask(c echo.Context) error {
-	var packages []StackInfo
-
-	detectors := []func() StackInfo{
-		r.detectNginx,
-		r.detectPHP,
-		r.detectNode,
-		r.detectPython,
-		r.detectGo,
-		r.detectDocker,
-		r.detectCertbot,
-		r.detectMariaDB,
-		r.detectRedis,
-		r.detectMemcached,
-		r.detectSupervisor,
+func stackJSONError(c echo.Context, err error) error {
+	var se *stackError
+	if errors.As(err, &se) {
+		return c.JSON(se.Code, map[string]any{"ok": false, "message": se.Msg})
 	}
-
-	for _, detect := range detectors {
-		packages = append(packages, detect())
-	}
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]any{
-			"packages": packages,
-			"os":       runtime.GOOS,
-			"arch":     runtime.GOARCH,
-		},
-		RequestID: "",
-	})
+	return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": err.Error()})
 }
 
-// stackInstallTask installs, updates, or removes a package.
+// stackInfoTask detects all installed software and their versions.
+func (r *Router) stackInfoTask(c echo.Context) error {
+	ctx := c.Request().Context()
+	m := r.stack
+	packages := make([]StackInfo, 0, len(stackPackages))
+	for _, name := range stackPackages {
+		packages = append(packages, m.detect(ctx, name))
+	}
+	osr := m.osRelease()
+	data := map[string]any{
+		"packages":        packages,
+		"os":              runtime.GOOS,
+		"arch":            runtime.GOARCH,
+		"distro":          osr.PrettyName,
+		"distro_id":       osr.ID,
+		"package_manager": detectPackageManager(m.sys),
+		"php_versions":    m.phpVersions(ctx),
+	}
+	if op := m.current(); op != nil {
+		data["operation"] = op.snapshot(4096)
+	}
+	return c.JSON(http.StatusOK, httpjson.Success{Data: data})
+}
+
+// stackOpTask reports a background operation.
+func (r *Router) stackOpTask(c echo.Context) error {
+	op := r.stack.get(c.Param("id"))
+	if op == nil {
+		return c.JSON(http.StatusNotFound, map[string]any{"ok": false, "message": "operation not found (the agent may have restarted)"})
+	}
+	return c.JSON(http.StatusOK, op.snapshot(64<<10))
+}
+
+// stackInstallTask handles every stack action.
 func (r *Router) stackInstallTask(c echo.Context) error {
 	ctx := c.Request().Context()
-	// Stack actions always run real commands — no stubDev bypass
+	m := r.stack
 
 	var req StackRequest
 	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid payload"})
 	}
-
 	if req.Package == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "package is required")
+		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "package is required"})
+	}
+	if req.Package == "mysql" {
+		req.Package = "mariadb"
 	}
 	if req.Action == "" {
 		req.Action = "install"
 	}
-	// Versions end up in apt arguments and shell snippets run as root.
 	if req.Version != "" && !stackVersionRe.MatchString(req.Version) {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid version")
+		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid version"})
+	}
+	known := false
+	for _, p := range stackPackages {
+		known = known || p == req.Package
+	}
+	if !known {
+		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "unknown package: " + req.Package})
 	}
 
-	// Handle special version listing actions
-	if req.Action == "list-versions" {
-		return r.listPackageVersions(c, req.Package)
-	}
-	if req.Action == "list-available" {
-		return r.listPackageAvailableVersions(c, req.Package)
-	}
-
-	pm := detectPackageManager()
-	if pm == "" {
-		return echo.NewHTTPError(http.StatusInternalServerError, "unsupported package manager")
-	}
-
-	var output string
-	var err error
-	start := time.Now()
-
-	switch req.Package {
-	case "nginx":
-		output, err = r.manageNginx(ctx, req.Action, req.Version, pm)
-	case "php":
-		output, err = r.managePHP(ctx, req.Action, req.Version, pm)
-	case "node":
-		output, err = r.manageNode(ctx, req.Action, req.Version, pm)
-	case "python":
-		output, err = r.managePython(ctx, req.Action, req.Version, pm)
-	case "go":
-		output, err = r.manageGo(ctx, req.Action, req.Version, pm)
-	case "docker":
-		output, err = r.manageDocker(ctx, req.Action, req.Version, pm)
-	case "certbot":
-		output, err = r.manageCertbot(ctx, req.Action, req.Version, pm)
-	case "mariadb", "mysql":
-		output, err = r.manageMariaDB(ctx, req.Action, req.Version, pm)
-	case "redis":
-		output, err = r.manageRedis(ctx, req.Action, req.Version, pm)
-	case "memcached":
-		output, err = r.manageMemcached(ctx, req.Action, req.Version, pm)
-	case "supervisor":
-		output, err = r.manageSupervisor(ctx, req.Action, req.Version, pm)
-	default:
-		return echo.NewHTTPError(http.StatusBadRequest, "unknown package: "+req.Package)
-	}
-
-	elapsed := time.Since(start).Milliseconds()
-	if err != nil {
-		slog.Error("agent: stack.install failed", "package", req.Package, "action", req.Action, "error", err, "elapsed_ms", elapsed)
-		return c.JSON(http.StatusOK, StackResponse{
-			OK:      false,
-			Message: fmt.Sprintf("%s %s failed", req.Action, req.Package),
-			Output:  output,
-		})
-	}
-
-	slog.Info("agent: stack.install ok", "package", req.Package, "action", req.Action, "elapsed_ms", elapsed)
-
-	info := r.detectPackage(req.Package)
-	return c.JSON(http.StatusOK, StackResponse{
-		OK:      true,
-		Message: fmt.Sprintf("%s %s completed", req.Action, req.Package),
-		Output:  output,
-		Version: info.Version,
-	})
-}
-
-// detectPackage dispatches to the right detector.
-func (r *Router) detectPackage(name string) StackInfo {
-	switch name {
-	case "nginx":
-		return r.detectNginx()
-	case "php":
-		return r.detectPHP()
-	case "node":
-		return r.detectNode()
-	case "python":
-		return r.detectPython()
-	case "go":
-		return r.detectGo()
-	case "docker":
-		return r.detectDocker()
-	case "certbot":
-		return r.detectCertbot()
-	case "mariadb", "mysql":
-		return r.detectMariaDB()
-	case "redis":
-		return r.detectRedis()
-	case "memcached":
-		return r.detectMemcached()
-	case "supervisor":
-		return r.detectSupervisor()
-	default:
-		return StackInfo{Name: name, Status: "unknown"}
-	}
-}
-
-// --- Detect helpers ---
-
-func (r *Router) detectNginx() StackInfo {
-	out, err := exec.Command("nginx", "-v").CombinedOutput()
-	if err != nil {
-		return StackInfo{Name: "nginx", Status: "missing"}
-	}
-	ver := extractVersion(string(out))
-	status := checkServiceStatus("nginx")
-	path, _ := exec.LookPath("nginx")
-	return StackInfo{Name: "nginx", Version: ver, Status: status, Path: path}
-}
-
-func (r *Router) detectPHP() StackInfo {
-	// Detect all installed PHP versions
-	var installedVersions []string
-	for _, ver := range []string{"8.5", "8.4", "8.3", "8.2", "8.1", "8.0", "7.4", "7.3", "7.2", "7.1", "7.0", "5.6"} {
-		bin := "php" + ver
-		if _, err := exec.LookPath(bin); err == nil {
-			installedVersions = append(installedVersions, ver)
+	switch req.Action {
+	case "list-versions":
+		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"versions": m.listInstalled(ctx, req.Package)}})
+	case "list-available":
+		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"versions": m.listAvailable(ctx, req.Package)}})
+	case "list-extensions":
+		if req.Package != "php" || !phpVersionArgRe.MatchString(req.Version) {
+			return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "list-extensions needs package php and a version"})
 		}
-	}
-
-	if len(installedVersions) == 0 {
-		// Try plain "php"
-		out, err := exec.Command("php", "-v").CombinedOutput()
+		ext, err := m.phpListExtensions(ctx, req.Version)
 		if err != nil {
-			return StackInfo{Name: "php", Status: "missing"}
+			return stackJSONError(c, err)
 		}
-		ver := extractVersion(string(out))
-		path, _ := exec.LookPath("php")
-		return StackInfo{Name: "php", Version: ver, Status: "installed", Path: path}
-	}
-
-	// Find the default (active) PHP version
-	defaultVer := installedVersions[len(installedVersions)-1] // highest version
-	defaultBin := "php" + defaultVer
-	out, err := exec.Command(defaultBin, "-v").CombinedOutput()
-	if err != nil {
-		return StackInfo{Name: "php", Status: "missing"}
-	}
-	ver := extractVersion(string(out))
-
-	// Check if any PHP-FPM is running
-	status := "installed"
-	for _, v := range installedVersions {
-		svcName := "php" + v + "-fpm"
-		if s := checkServiceStatus(svcName); s == "running" {
-			status = "running"
-			break
+		return c.JSON(http.StatusOK, httpjson.Success{Data: ext})
+	case "set-default":
+		if req.Package != "php" || !phpVersionArgRe.MatchString(req.Version) {
+			return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "set-default needs package php and a version"})
 		}
-		if s := checkServiceStatus(svcName); s == "stopped" {
-			status = "stopped"
+		sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		msg, err := m.phpSetDefault(sctx, nil, req.Version)
+		if err != nil {
+			return stackJSONError(c, err)
 		}
+		info := m.detect(ctx, "php")
+		return c.JSON(http.StatusOK, StackResponse{OK: true, Message: msg, Version: info.Version, Info: &info})
 	}
 
-	path, _ := exec.LookPath(defaultBin)
-	versions := strings.Join(installedVersions, ",")
-	return StackInfo{
-		Name:    "php",
-		Version: ver + " (installed: " + versions + ")",
-		Status:  status,
-		Path:    path,
-	}
-}
-
-func (r *Router) detectNode() StackInfo {
-	out, err := exec.Command("node", "--version").CombinedOutput()
-	if err != nil {
-		return StackInfo{Name: "node", Status: "missing"}
-	}
-	ver := strings.TrimSpace(string(out))
-	path, _ := exec.LookPath("node")
-	npmVer := ""
-	if npmOut, err := exec.Command("npm", "--version").Output(); err == nil {
-		npmVer = " (npm " + strings.TrimSpace(string(npmOut)) + ")"
-	}
-	return StackInfo{Name: "node", Version: ver + npmVer, Status: "installed", Path: path}
-}
-
-func (r *Router) detectPython() StackInfo {
-	for _, bin := range []string{"python3", "python"} {
-		out, err := exec.Command(bin, "--version").CombinedOutput()
-		if err == nil {
-			ver := extractVersion(string(out))
-			path, _ := exec.LookPath(bin)
-			return StackInfo{Name: "python", Version: ver, Status: "installed", Path: path}
+	if serviceStackActions[req.Action] {
+		if req.Package == "php" && req.Version != "" && !phpVersionArgRe.MatchString(req.Version) {
+			return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid PHP version"})
 		}
-	}
-	return StackInfo{Name: "python", Status: "missing"}
-}
-
-func (r *Router) detectGo() StackInfo {
-	out, err := exec.Command("go", "version").CombinedOutput()
-	if err != nil {
-		return StackInfo{Name: "go", Status: "missing"}
-	}
-	ver := "unknown"
-	fields := strings.Fields(string(out))
-	for _, f := range fields {
-		if strings.HasPrefix(f, "go1.") || strings.HasPrefix(f, "go2.") {
-			ver = strings.TrimPrefix(f, "go")
-			break
+		if req.Package == "php" && req.Version == "" && req.Action == "stop" {
+			return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "choose the PHP version whose PHP-FPM to stop"})
 		}
-	}
-	if ver == "unknown" {
-		ver = extractVersion(string(out))
-	}
-	path, _ := exec.LookPath("go")
-	return StackInfo{Name: "go", Version: ver, Status: "installed", Path: path}
-}
-
-func (r *Router) detectDocker() StackInfo {
-	out, err := exec.Command("docker", "--version").CombinedOutput()
-	if err != nil {
-		return StackInfo{Name: "docker", Status: "missing"}
-	}
-	ver := extractVersion(string(out))
-	status := checkServiceStatus("docker")
-	path, _ := exec.LookPath("docker")
-	return StackInfo{Name: "docker", Version: ver, Status: status, Path: path}
-}
-
-func (r *Router) detectCertbot() StackInfo {
-	out, err := exec.Command("certbot", "--version").CombinedOutput()
-	if err != nil {
-		return StackInfo{Name: "certbot", Status: "missing"}
-	}
-	ver := extractVersion(string(out))
-	path, _ := exec.LookPath("certbot")
-	return StackInfo{Name: "certbot", Version: ver, Status: "installed", Path: path}
-}
-
-func (r *Router) detectMariaDB() StackInfo {
-	for _, bin := range []string{"mysql", "mariadb"} {
-		out, err := exec.Command(bin, "--version").CombinedOutput()
-		if err == nil {
-			ver := extractVersion(string(out))
-			status := checkServiceStatus("mysql")
-			if status == "missing" {
-				status = checkServiceStatus("mariadb")
+		sctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		defer cancel()
+		msg, out, err := m.serviceAction(sctx, req.Package, req.Action, req.Version)
+		info := m.detect(ctx, req.Package)
+		if err != nil {
+			var se *stackError
+			if errors.As(err, &se) {
+				return c.JSON(se.Code, map[string]any{"ok": false, "message": se.Msg, "output": out})
 			}
-			path, _ := exec.LookPath(bin)
-			return StackInfo{Name: "mariadb", Version: ver, Status: status, Path: path}
+			slog.Error("agent: stack service action failed", "package", req.Package, "action", req.Action, "error", err)
+			return c.JSON(http.StatusOK, StackResponse{OK: false, Message: err.Error(), Output: out, Version: info.Version, Info: &info})
 		}
+		slog.Info("agent: stack service action ok", "package", req.Package, "action", req.Action, "version", req.Version)
+		return c.JSON(http.StatusOK, StackResponse{OK: true, Message: msg, Output: out, Version: info.Version, Info: &info})
 	}
-	return StackInfo{Name: "mariadb", Status: "missing"}
-}
 
-func (r *Router) detectRedis() StackInfo {
-	out, err := exec.Command("redis-server", "--version").CombinedOutput()
+	if !asyncStackActions[req.Action] {
+		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "unknown action: " + req.Action})
+	}
+	if pm := detectPackageManager(m.sys); pm != "apt-get" && req.Package != "go" {
+		return c.JSON(http.StatusNotImplemented, map[string]any{"ok": false, "message": "package operations are only supported on Debian/Ubuntu (apt); this server uses " + orUnknown(pm)})
+	}
+	fn, err := m.operation(req)
 	if err != nil {
-		return StackInfo{Name: "redis", Status: "missing"}
+		return stackJSONError(c, err)
 	}
-	ver := extractVersion(string(out))
-	status := checkServiceStatus("redis-server")
-	path, _ := exec.LookPath("redis-server")
-	return StackInfo{Name: "redis", Version: ver, Status: status, Path: path}
-}
-
-func (r *Router) detectSupervisor() StackInfo {
-	out, err := exec.Command("supervisord", "--version").CombinedOutput()
+	op, err := m.start(req, fn)
 	if err != nil {
-		return StackInfo{Name: "supervisor", Status: "missing"}
+		return stackJSONError(c, err)
 	}
-	ver := strings.TrimSpace(string(out))
-	status := checkServiceStatus("supervisor")
-	path, _ := exec.LookPath("supervisord")
-	return StackInfo{Name: "supervisor", Version: ver, Status: status, Path: path}
+	return c.JSON(http.StatusAccepted, op.snapshot(4096))
 }
 
-// --- Manage helpers ---
-
-var (
-	stackVersionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+:~_\-]{0,63}$`)
-	goVersionRe    = regexp.MustCompile(`^[0-9]+\.[0-9]+(\.[0-9]+)?$`)
-)
-
-func (r *Router) manageNginx(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		return r.executor.RunShell(ctx, pm, "install", "-y", "nginx")
-	case "uninstall":
-		return r.executor.RunShell(ctx, pm, "remove", "-y", "nginx")
-	case "restart":
-		return r.executor.RunShell(ctx, "systemctl", "restart", "nginx")
-	case "stop":
-		return r.executor.RunShell(ctx, "systemctl", "stop", "nginx")
-	case "start":
-		return r.executor.RunShell(ctx, "systemctl", "start", "nginx")
-	case "switch-version":
-		if version == "" {
-			return "", fmt.Errorf("version is required for switch-version")
-		}
-		return r.executor.RunShell(ctx, pm, "install", "-y", "nginx="+version)
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
+func orUnknown(s string) string {
+	if s == "" {
+		return "an unsupported package manager"
 	}
+	return s
 }
 
-func (r *Router) managePHP(ctx context.Context, action, version, pm string) (string, error) {
-	phpPkg := "php"
-	if version != "" {
-		phpPkg = "php" + version
-	}
-
-	switch action {
-	case "install", "update":
-		if pm == "apt" || pm == "apt-get" {
-			r.executor.RunShell(ctx, "apt-get", "update", "-qq")
+func detectPackageManager(sys stackSystem) string {
+	for _, pm := range []string{"apt-get", "dnf", "yum", "apk"} {
+		if _, err := sys.LookPath(pm); err == nil {
+			return pm
 		}
-		// Install each extension separately, skipping any that don't exist
-		// (e.g. php8.5-opcache is built-in, not a separate package).
-		candidates := []string{
-			phpPkg + "-fpm", phpPkg + "-mysql", phpPkg + "-curl",
-			phpPkg + "-gd", phpPkg + "-mbstring", phpPkg + "-xml",
-			phpPkg + "-zip", phpPkg + "-bcmath", phpPkg + "-soap",
-			phpPkg + "-intl", phpPkg + "-readline", phpPkg + "-cli",
-			phpPkg + "-opcache",
-		}
-		missing := []string{}
-		for _, pkg := range candidates {
-			if _, err := exec.LookPath("apt-cache"); err == nil {
-				if _, err := r.executor.RunShell(ctx, "apt-cache", "show", pkg); err != nil {
-					missing = append(missing, pkg)
-					continue
-				}
-			}
-			if _, err := r.executor.RunShell(ctx, pm, "install", "-y", pkg); err != nil {
-				missing = append(missing, pkg)
-			}
-		}
-		if len(missing) > 0 {
-			return fmt.Sprintf("installed (skipped missing: %s)", strings.Join(missing, ", ")), nil
-		}
-		return "all packages installed", nil
-	case "uninstall":
-		// apt-get does not expand globs: "remove -y php8.1*" either errors
-		// (exit 100) or matches nothing. Enumerate installed packages for
-		// the targeted version (or all php versions if version == "") and remove them.
-		if pm == "apt" || pm == "apt-get" {
-			pattern := "php[0-9.]"
-			if version != "" {
-				pattern = fmt.Sprintf("^php%s(-|$)", regexp.QuoteMeta(version))
-			}
-			cmd := fmt.Sprintf(`dpkg-query -W -f='${Package}\n' 'php*' 2>/dev/null | grep -E '%s' | sort -u | tr '\n' ' '`, pattern)
-			out, err := r.executor.RunShell(ctx, "bash", "-c", cmd)
-			if err == nil && strings.TrimSpace(out) != "" {
-				return r.executor.RunShell(ctx, pm, append([]string{"remove", "-y"}, strings.Fields(out)...)...)
-			}
-			return fmt.Sprintf("no packages found for %s", phpPkg), nil
-		}
-		return r.executor.RunShell(ctx, pm, "remove", "-y", phpPkg)
-	case "restart":
-		return r.executor.RunShell(ctx, "systemctl", "restart", resolvePHPFPMService(phpPkg))
-	case "stop":
-		return r.executor.RunShell(ctx, "systemctl", "stop", resolvePHPFPMService(phpPkg))
-	case "start":
-		return r.executor.RunShell(ctx, "systemctl", "start", resolvePHPFPMService(phpPkg))
-	case "switch-version":
-		if version == "" {
-			return "", fmt.Errorf("version is required")
-		}
-		newPkg := "php" + version + "-fpm"
-		r.executor.RunShell(ctx, pm, "install", "-y", newPkg)
-		r.executor.RunShell(ctx, "systemctl", "stop", phpPkg+"-fpm")
-		return r.executor.RunShell(ctx, "systemctl", "start", newPkg)
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-// resolvePHPFPMService returns the systemd service name for a php package.
-// If the package is generic ("php"), picks the newest installed FPM version.
-func resolvePHPFPMService(phpPkg string) string {
-	if phpPkg != "php" {
-		return phpPkg + "-fpm"
-	}
-	for _, v := range []string{"8.5", "8.4", "8.3", "8.2", "8.1", "8.0"} {
-		if _, err := exec.LookPath("php-fpm" + v); err == nil {
-			return "php" + v + "-fpm"
-		}
-	}
-	return "php-fpm"
-}
-
-func (r *Router) manageNode(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		if pm == "apt" || pm == "apt-get" {
-			r.executor.RunShell(ctx, "bash", "-c", "curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -")
-			return r.executor.RunShell(ctx, "apt-get", "install", "-y", "nodejs")
-		}
-		return r.executor.RunShell(ctx, pm, "install", "-y", "nodejs", "npm")
-	case "uninstall":
-		return r.executor.RunShell(ctx, pm, "remove", "-y", "nodejs", "npm")
-	case "switch-version":
-		if version == "" {
-			return "", fmt.Errorf("version is required")
-		}
-		return r.executor.RunShell(ctx, "sh", "-c",
-			fmt.Sprintf("export NVM_DIR=\"$HOME/.nvm\" && [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\" && nvm install %s && nvm use %s", version, version))
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-func (r *Router) managePython(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		return r.executor.RunShell(ctx, pm, "install", "-y", "python3", "python3-pip", "python3-venv")
-	case "uninstall":
-		return r.executor.RunShell(ctx, pm, "remove", "-y", "python3", "python3-pip")
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-func (r *Router) manageGo(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		ver := version
-		if ver == "" {
-			ver = "1.24.0"
-		}
-		if !goVersionRe.MatchString(ver) {
-			return "", fmt.Errorf("invalid go version %q", ver)
-		}
-		arch := "amd64"
-		if runtime.GOARCH == "arm64" {
-			arch = "arm64"
-		}
-		url := fmt.Sprintf("https://go.dev/dl/go%s.linux-%s.tar.gz", ver, arch)
-		return r.executor.RunShell(ctx, "sh", "-c",
-			fmt.Sprintf(`set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; curl -fsSL %s -o "$d/go.tar.gz"; rm -rf /usr/local/go; tar -C /usr/local -xzf "$d/go.tar.gz"; ln -sfn /usr/local/go/bin/go /usr/local/bin/go; ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt; printf '%%s\n' 'export PATH=/usr/local/go/bin:$PATH' 'export GOROOT=/usr/local/go' > /etc/profile.d/sigardapanel-go.sh; chmod 0644 /etc/profile.d/sigardapanel-go.sh`, url))
-	case "uninstall":
-		return r.executor.RunShell(ctx, "sh", "-c", "set -eu; rm -rf /usr/local/go; if [ \"$(readlink /usr/local/bin/go 2>/dev/null || true)\" = /usr/local/go/bin/go ]; then rm -f /usr/local/bin/go; fi; if [ \"$(readlink /usr/local/bin/gofmt 2>/dev/null || true)\" = /usr/local/go/bin/gofmt ]; then rm -f /usr/local/bin/gofmt; fi; rm -f /etc/profile.d/sigardapanel-go.sh")
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-func (r *Router) manageDocker(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		if pm == "apt" || pm == "apt-get" {
-			r.executor.RunShell(ctx, "sh", "-c", "curl -fsSL https://get.docker.com | sh")
-			r.executor.RunShell(ctx, "systemctl", "enable", "--now", "docker")
-			return "docker installed and started", nil
-		}
-		return r.executor.RunShell(ctx, pm, "install", "-y", "docker", "docker-compose")
-	case "uninstall":
-		// Ubuntu/Debian ships docker as "docker.io" (binary /usr/bin/docker);
-		// "docker" alone is a dummy/transitional package, so removing it did
-		// nothing. Remove the real packages plus container runtime bits.
-		pkgs := []string{
-			"docker.io", "docker-ce", "docker-ce-cli", "containerd",
-			"docker-compose", "docker-compose-v2", "docker-doc", "podman-docker",
-		}
-		return r.executor.RunShell(ctx, pm, append([]string{"remove", "-y"}, pkgs...)...)
-	case "restart":
-		return r.executor.RunShell(ctx, "systemctl", "restart", "docker")
-	case "stop":
-		return r.executor.RunShell(ctx, "systemctl", "stop", "docker")
-	case "start":
-		return r.executor.RunShell(ctx, "systemctl", "start", "docker")
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-func (r *Router) manageCertbot(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		if pm == "apt" || pm == "apt-get" {
-			r.executor.RunShell(ctx, "apt-get", "install", "-y", "certbot", "python3-certbot-nginx")
-		}
-		return r.executor.RunShell(ctx, pm, "install", "-y", "certbot")
-	case "uninstall":
-		return r.executor.RunShell(ctx, pm, "remove", "-y", "certbot")
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-func (r *Router) manageMariaDB(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		return r.executor.RunShell(ctx, pm, "install", "-y", "mariadb-server", "mariadb-client")
-	case "uninstall":
-		return r.executor.RunShell(ctx, pm, "remove", "-y", "mariadb-server", "mariadb-client")
-	case "restart":
-		return r.executor.RunShell(ctx, "systemctl", "restart", "mariadb")
-	case "stop":
-		return r.executor.RunShell(ctx, "systemctl", "stop", "mariadb")
-	case "start":
-		return r.executor.RunShell(ctx, "systemctl", "start", "mariadb")
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-func (r *Router) manageRedis(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		return r.executor.RunShell(ctx, pm, "install", "-y", "redis-server")
-	case "uninstall":
-		if pm == "apt" || pm == "apt-get" {
-			return r.executor.RunShell(ctx, pm, "remove", "-y", "redis-server", "redis-tools")
-		}
-		return r.executor.RunShell(ctx, pm, "remove", "-y", "redis-server")
-	case "restart":
-		return r.executor.RunShell(ctx, "systemctl", "restart", "redis-server")
-	case "stop":
-		return r.executor.RunShell(ctx, "systemctl", "stop", "redis-server")
-	case "start":
-		return r.executor.RunShell(ctx, "systemctl", "start", "redis-server")
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-func (r *Router) detectMemcached() StackInfo {
-	out, err := exec.Command("memcached", "-h").CombinedOutput()
-	if err != nil {
-		return StackInfo{Name: "memcached", Status: "missing"}
-	}
-	// memcached -h outputs version on first line, e.g. "memcached 1.6.18"
-	ver := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
-	ver = strings.TrimPrefix(ver, "memcached ")
-	status := checkServiceStatus("memcached")
-	path, _ := exec.LookPath("memcached")
-	return StackInfo{Name: "memcached", Version: ver, Status: status, Path: path}
-}
-
-func (r *Router) manageMemcached(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		return r.executor.RunShell(ctx, pm, "install", "-y", "memcached")
-	case "uninstall":
-		return r.executor.RunShell(ctx, pm, "remove", "-y", "memcached")
-	case "restart":
-		return r.executor.RunShell(ctx, "systemctl", "restart", "memcached")
-	case "stop":
-		return r.executor.RunShell(ctx, "systemctl", "stop", "memcached")
-	case "start":
-		return r.executor.RunShell(ctx, "systemctl", "start", "memcached")
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-func (r *Router) manageSupervisor(ctx context.Context, action, version, pm string) (string, error) {
-	switch action {
-	case "install", "update":
-		return r.executor.RunShell(ctx, pm, "install", "-y", "supervisor")
-	case "uninstall":
-		return r.executor.RunShell(ctx, pm, "remove", "-y", "supervisor")
-	case "restart":
-		return r.executor.RunShell(ctx, "systemctl", "restart", "supervisor")
-	case "stop":
-		return r.executor.RunShell(ctx, "systemctl", "stop", "supervisor")
-	case "start":
-		return r.executor.RunShell(ctx, "systemctl", "start", "supervisor")
-	default:
-		return "", fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-// --- Utility ---
-
-func detectPackageManager() string {
-	if _, err := exec.LookPath("apt-get"); err == nil {
-		return "apt-get"
-	}
-	if _, err := exec.LookPath("yum"); err == nil {
-		return "yum"
-	}
-	if _, err := exec.LookPath("dnf"); err == nil {
-		return "dnf"
-	}
-	if _, err := exec.LookPath("apk"); err == nil {
-		return "apk"
 	}
 	return ""
-}
-
-func checkServiceStatus(name string) string {
-	if out, err := exec.Command("systemctl", "is-active", name).Output(); err == nil {
-		if strings.TrimSpace(string(out)) == "active" {
-			return "running"
-		}
-		return "stopped"
-	}
-	if out, err := exec.Command("service", name, "status").Output(); err == nil {
-		if strings.Contains(string(out), "running") {
-			return "running"
-		}
-		return "stopped"
-	}
-	return "missing"
-}
-
-func extractVersion(output string) string {
-	output = strings.TrimSpace(output)
-	parts := strings.Fields(output)
-	for _, p := range parts {
-		if strings.HasPrefix(p, "v=") {
-			return strings.TrimPrefix(p, "v=")
-		}
-		p = strings.TrimPrefix(p, "v")
-		p = strings.TrimPrefix(p, "V")
-		p = strings.TrimSuffix(p, ",")
-		if len(p) >= 3 && p[0] >= '0' && p[0] <= '9' {
-			return p
-		}
-		if idx := strings.IndexByte(p, '/'); idx >= 0 {
-			ver := p[idx+1:]
-			ver = strings.TrimSuffix(ver, ",")
-			if len(ver) >= 3 {
-				return ver
-			}
-		}
-	}
-	if len(parts) > 0 {
-		return strings.TrimSuffix(parts[len(parts)-1], ",")
-	}
-	return "unknown"
-}
-
-type packageVersionItem struct {
-	Version   string `json:"version"`
-	Status    string `json:"status,omitempty"` // running, stopped, installed, missing
-	Path      string `json:"path,omitempty"`
-	Installed bool   `json:"installed"`
-}
-
-func (r *Router) listPackageVersions(c echo.Context, pkg string) error {
-	switch pkg {
-	case "php":
-		return r.listPHPVersions(c)
-	case "go":
-		info := r.detectGo()
-		var versions []packageVersionItem
-		if info.Status != "missing" && info.Version != "" && info.Version != "unknown" {
-			versions = append(versions, packageVersionItem{
-				Version:   info.Version,
-				Status:    info.Status,
-				Path:      info.Path,
-				Installed: true,
-			})
-		}
-		return c.JSON(http.StatusOK, httpjson.Success{
-			Data: map[string]any{"versions": versions, "count": len(versions)},
-		})
-	case "node":
-		info := r.detectNode()
-		var versions []packageVersionItem
-		if info.Status != "missing" && info.Version != "" {
-			versions = append(versions, packageVersionItem{
-				Version:   info.Version,
-				Status:    info.Status,
-				Path:      info.Path,
-				Installed: true,
-			})
-		}
-		return c.JSON(http.StatusOK, httpjson.Success{
-			Data: map[string]any{"versions": versions, "count": len(versions)},
-		})
-	default:
-		info := r.detectPackage(pkg)
-		var versions []packageVersionItem
-		if info.Status != "missing" && info.Version != "" {
-			versions = append(versions, packageVersionItem{
-				Version:   info.Version,
-				Status:    info.Status,
-				Path:      info.Path,
-				Installed: true,
-			})
-		}
-		return c.JSON(http.StatusOK, httpjson.Success{
-			Data: map[string]any{"versions": versions, "count": len(versions)},
-		})
-	}
-}
-
-func (r *Router) listPackageAvailableVersions(c echo.Context, pkg string) error {
-	switch pkg {
-	case "php":
-		return r.listAvailablePHPVersions(c)
-	case "go":
-		known := []string{"1.24.0", "1.23.6", "1.22.12", "1.22.4", "1.21.13"}
-		info := r.detectGo()
-		var versions []packageVersionItem
-		for _, v := range known {
-			versions = append(versions, packageVersionItem{
-				Version:   v,
-				Installed: info.Version == v,
-			})
-		}
-		return c.JSON(http.StatusOK, httpjson.Success{
-			Data: map[string]any{"versions": versions, "count": len(versions)},
-		})
-	case "node":
-		known := []string{"22", "20", "18"}
-		info := r.detectNode()
-		var versions []packageVersionItem
-		for _, v := range known {
-			inst := strings.HasPrefix(info.Version, "v"+v) || strings.HasPrefix(info.Version, v)
-			versions = append(versions, packageVersionItem{
-				Version:   v,
-				Installed: inst,
-			})
-		}
-		return c.JSON(http.StatusOK, httpjson.Success{
-			Data: map[string]any{"versions": versions, "count": len(versions)},
-		})
-	default:
-		info := r.detectPackage(pkg)
-		var versions []packageVersionItem
-		if info.Version != "" {
-			versions = append(versions, packageVersionItem{
-				Version:   info.Version,
-				Installed: info.Status != "missing",
-			})
-		}
-		return c.JSON(http.StatusOK, httpjson.Success{
-			Data: map[string]any{"versions": versions, "count": len(versions)},
-		})
-	}
-}
-
-// listPHPVersions returns all installed PHP versions
-func (r *Router) listPHPVersions(c echo.Context) error {
-	type phpVersion struct {
-		Version string `json:"version"`
-		Status  string `json:"status"` // running, stopped, installed
-		Path    string `json:"path"`
-	}
-
-	var versions []phpVersion
-	for _, ver := range []string{"8.5", "8.4", "8.3", "8.2", "8.1", "8.0", "7.4", "7.3", "7.2", "7.1", "7.0", "5.6"} {
-		bin := "php" + ver
-		if _, err := exec.LookPath(bin); err == nil {
-			svcName := "php" + ver + "-fpm"
-			status := checkServiceStatus(svcName)
-			if status == "missing" {
-				status = "installed"
-			}
-			path, _ := exec.LookPath(bin)
-			versions = append(versions, phpVersion{
-				Version: ver,
-				Status:  status,
-				Path:    path,
-			})
-		}
-	}
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]any{
-			"versions": versions,
-			"count":    len(versions),
-		},
-		RequestID: "",
-	})
-}
-
-// listAvailablePHPVersions returns PHP versions available for installation
-func (r *Router) listAvailablePHPVersions(c echo.Context) error {
-	type availableVersion struct {
-		Version   string `json:"version"`
-		Installed bool   `json:"installed"`
-	}
-
-	// Known PHP versions that can be installed via ondrej/php PPA
-	knownVersions := []string{"8.5", "8.4", "8.3", "8.2", "8.1", "8.0", "7.4", "7.3", "7.2", "7.1", "7.0", "5.6"}
-
-	var versions []availableVersion
-	for _, ver := range knownVersions {
-		bin := "php" + ver
-		installed := false
-		if _, err := exec.LookPath(bin); err == nil {
-			installed = true
-		}
-		versions = append(versions, availableVersion{
-			Version:   ver,
-			Installed: installed,
-		})
-	}
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]any{
-			"versions": versions,
-			"count":    len(versions),
-		},
-		RequestID: "",
-	})
 }

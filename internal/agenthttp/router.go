@@ -52,6 +52,7 @@ type Router struct {
 	certDir      string // placeholder certificate referenced by generated vhosts
 	phpRunDir    string // PHP-FPM sockets (php<version>-fpm.sock)
 	useraddCmd   string // creates site owners' Linux accounts
+	stack        *stackManager
 }
 
 // RouterOptions allows overriding router defaults for testing.
@@ -74,6 +75,14 @@ type RouterOptions struct {
 	// default to a command that does not exist, so tests can never create
 	// real accounts on the machine running them.
 	UseraddCommand string
+	// StackSystem is the host the Stack page manages. Injected routers
+	// default to one that runs nothing and detects nothing, so tests can
+	// never call apt-get or systemctl on the machine running them.
+	StackSystem stackSystem
+	// StackBinDir / StackSbinDir override /usr/bin and /usr/sbin for PHP
+	// version detection.
+	StackBinDir  string
+	StackSbinDir string
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -149,6 +158,20 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		if opts.UseraddCommand != "" {
 			r.useraddCmd = opts.UseraddCommand
 		}
+		var sys stackSystem = denyStackSystem{}
+		if opts.StackSystem != nil {
+			sys = opts.StackSystem
+		}
+		r.stack = newStackManager(sys, r.phpRunDir, []string{r.nginxConfDir})
+		if opts.StackBinDir != "" {
+			r.stack.binDir = opts.StackBinDir
+		}
+		if opts.StackSbinDir != "" {
+			r.stack.sbinDir = opts.StackSbinDir
+		}
+	} else {
+		r.stack = newStackManager(hostStackSystem{}, r.phpRunDir,
+			[]string{r.nginxConfDir, "/etc/nginx/conf.d", "/etc/nginx/sites-available"})
 	}
 
 	e.GET("/health", healthHandler)
@@ -191,6 +214,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	// Stack management (install/manage software on the server)
 	tasks.GET("/stack/info", r.stackInfoTask)
 	tasks.POST("/stack/install", r.stackInstallTask)
+	tasks.GET("/stack/ops/:id", r.stackOpTask)
 
 	// Application templates (WordPress, Laravel, etc.)
 	tasks.POST("/templates/wordpress", r.installWordPress)
@@ -2081,8 +2105,13 @@ func (r *Router) commandExecTask(c echo.Context) error {
 		payload.Timeout = 30
 	}
 
-	slog.Info("agent: command.exec", "command", payload.Command)
+	slog.Info("agent: command.exec", "command", payload.Command, "timeout_s", payload.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(payload.Timeout)*time.Second)
+	defer cancel()
 	output, err := r.executor.RunShell(ctx, "bash", "-c", payload.Command)
+	if ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("command timed out after %ds", payload.Timeout)
+	}
 	if err != nil {
 		return c.JSON(http.StatusOK, map[string]any{
 			"ok":      false,
