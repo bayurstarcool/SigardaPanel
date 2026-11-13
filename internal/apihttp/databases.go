@@ -95,6 +95,11 @@ func (h *dbHandler) createDatabase(c echo.Context) error {
 	if body.Type != "mysql" && body.Type != "postgres" {
 		return echo.NewHTTPError(http.StatusBadRequest, "type must be mysql or postgres")
 	}
+	// PostgreSQL folds unquoted identifiers to lower case, so a mixed-case
+	// name would be created as one name and dumped/restored as another.
+	if body.Type == "postgres" && body.Name != strings.ToLower(body.Name) {
+		return echo.NewHTTPError(http.StatusBadRequest, "PostgreSQL database names must be lower case")
+	}
 	if body.Charset == "" {
 		body.Charset = "utf8mb4"
 	}
@@ -337,6 +342,10 @@ func (h *dbHandler) rotateDBUserPassword(c echo.Context) error {
 	if err := h.store.DBUsers.UpdatePassword(c.Request().Context(), dbUser.ID, hashed); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
+	// Keep the decryptable copy in step (phpMyAdmin login, host changes, backups).
+	if enc, err := h.store.DBStore.EncryptPassword(newPassword); err == nil {
+		_ = h.store.DBUsers.UpdateEncryptedPassword(c.Request().Context(), dbUser.ID, enc)
+	}
 
 	// Enqueue job for agent (fallback)
 	payload := fmt.Sprintf(`{"user_id":%d,"database_id":%d,"database_name":%q,"type":%q,"username":%q,"password":%q,"host_pattern":%q,"privileges":%q}`,
@@ -522,6 +531,9 @@ func (h *dbHandler) createDBUser(c echo.Context) error {
 	if isReservedMySQLUser(body.Username) {
 		return echo.NewHTTPError(http.StatusBadRequest, "this username is reserved")
 	}
+	if database.Type == "postgres" && body.Username != strings.ToLower(body.Username) {
+		return echo.NewHTTPError(http.StatusBadRequest, "PostgreSQL user names must be lower case")
+	}
 	// MySQL account names are global across tenants: never "create" (and
 	// then rotate the password of) an account that already exists.
 	if rows, _ := h.store.DBUsers.ListByUsername(c.Request().Context(), body.Username); len(rows) > 0 {
@@ -568,13 +580,11 @@ func (h *dbHandler) createDBUser(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "hash failed")
 	}
 
-	// Encrypt and store the plaintext password for phpMyAdmin auto-login
+	// Encrypt and store the password: phpMyAdmin auto-login, host changes
+	// and PostgreSQL backups need it, whichever path creates the account.
 	encPassword := ""
-	if mysqlOK {
-		enc, err := h.store.DBStore.EncryptPassword(body.Password)
-		if err == nil {
-			encPassword = enc
-		}
+	if enc, err := h.store.DBStore.EncryptPassword(body.Password); err == nil {
+		encPassword = enc
 	}
 
 	dbUser := &store.DBUser{
@@ -681,6 +691,9 @@ func (h *dbHandler) deleteDBUser(c echo.Context) error {
 	}
 
 	database, _ := h.store.Databases.GetByID(c.Request().Context(), dbID)
+	if database == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "database not found")
+	}
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "user not found")
@@ -1044,35 +1057,39 @@ func (h *dbHandler) updateDBUser(c echo.Context) error {
 		needsMySQL = true
 	}
 
-	// Update in MySQL (drop + recreate for host pattern change, or just grant for privs change)
+	hostChanged := body.HostPattern != nil && newHost != dbUser.HostPattern
+	// Changing the host re-creates the MySQL account: refuse when that
+	// would lose it (no stored password to re-create it with) or take
+	// other databases' grants with it (an account shared across databases).
+	var password string
+	if hostChanged && database.Type == "mysql" {
+		if rows, _ := h.store.DBUsers.ListByUsername(c.Request().Context(), dbUser.Username); len(rows) > 1 {
+			return echo.NewHTTPError(http.StatusConflict, "this account is used by other databases; its host cannot be changed here")
+		}
+		if dbUser.EncryptedPassword != "" {
+			password, _ = h.store.DBStore.DecryptPassword(dbUser.EncryptedPassword)
+		}
+		if password == "" {
+			return echo.NewHTTPError(http.StatusConflict, "the panel does not hold this account's password; rotate the password first, then change the host")
+		}
+	}
+
+	// Update in MySQL (re-create at the new host, or just grant for privs change)
 	if needsMySQL && database.Type == "mysql" {
-		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
-			if body.HostPattern != nil && *body.HostPattern != dbUser.HostPattern {
-				// Host changed: drop old user by old host, create at new host
-				if err := conn.DeleteUser(c.Request().Context(), dbUser.Username, dbUser.HostPattern); err != nil {
-					slog.Warn("dbuser: delete old host failed", "error", err)
+		err := h.execMySQL(func(conn *dbserver.MySQLConn) error {
+			if hostChanged {
+				// Create at the new host first: a failure leaves the old account intact.
+				if err := conn.CreateUser(c.Request().Context(), dbUser.Username, password, newHost, database.Name, newPrivs); err != nil {
 					return err
 				}
-				// Recreate with same password — need to get it from encrypted store
-				// If encrypted password is available, use it; otherwise skip host change
-				if dbUser.EncryptedPassword != "" {
-					pass, decErr := h.store.DBStore.DecryptPassword(dbUser.EncryptedPassword)
-					if decErr == nil {
-						if err := conn.CreateUser(c.Request().Context(), dbUser.Username, pass, newHost, database.Name, newPrivs); err != nil {
-							slog.Warn("dbuser: recreate at new host failed", "error", err)
-							return err
-						}
-					}
-				}
-			} else {
-				// Just grant with new privileges
-				if err := conn.GrantPrivileges(c.Request().Context(), dbUser.Username, newHost, database.Name, newPrivs); err != nil {
-					slog.Warn("dbuser: grant failed", "error", err)
-					return err
-				}
+				return conn.DeleteUser(c.Request().Context(), dbUser.Username, dbUser.HostPattern)
 			}
-			return nil
+			return conn.GrantPrivileges(c.Request().Context(), dbUser.Username, newHost, database.Name, newPrivs)
 		})
+		if err != nil {
+			slog.Warn("dbuser: update in MySQL failed", "user", dbUser.Username, "error", err)
+			return echo.NewHTTPError(http.StatusBadGateway, "the database server refused the change: "+err.Error())
+		}
 	}
 
 	// Update in store

@@ -28,14 +28,18 @@ func TestImportBundleDumps(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "calls")
 	fakeCommand(t, bin, "mysql", log, 0)
 	fakeCommand(t, bin, "psql", log, 0)
+	// A root test run really switches to nobody: let it reach the fakes and the log.
+	for _, d := range []string{bin, filepath.Dir(bin), filepath.Dir(log), filepath.Dir(filepath.Dir(log))} {
+		os.Chmod(d, 0o777)
+	}
 	r := &Router{executor: newTestExecutor()}
 	dir := t.TempDir()
 	for _, n := range []string{"shop.sql", "pg.sql", "gone.sql"} {
 		os.WriteFile(filepath.Join(dir, n), []byte("-- dump"), 0o600)
 	}
 	restored, skipped, err := r.importBundleDumps(t.Context(), dir, []restoreDatabase{
-		{Name: "shop", Type: "mysql"}, {Name: "pg", Type: "postgres", User: "pguser", Password: "pw"},
-	})
+		{Name: "shop", Type: "mysql", User: "shopuser", Password: "pw"}, {Name: "pg", Type: "postgres", User: "pguser", Password: "pw"},
+	}, 65534, 65534)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,14 +47,19 @@ func TestImportBundleDumps(t *testing.T) {
 		t.Fatalf("restored=%v skipped=%v", restored, skipped)
 	}
 	calls, _ := os.ReadFile(log)
-	if !strings.Contains(string(calls), "mysql shop -e source "+filepath.Join(dir, "shop.sql")) ||
-		!strings.Contains(string(calls), "psql -Upguser -h localhost -d pg -v ON_ERROR_STOP=1 --single-transaction") {
+	// Never as root over the socket: the database's own account, dump on stdin.
+	if !strings.Contains(string(calls), "mysql --no-defaults -ushopuser shop") ||
+		!strings.Contains(string(calls), "psql -X -Upguser -h localhost -d pg -v ON_ERROR_STOP=1 --single-transaction -q -f -") {
 		t.Fatalf("calls:\n%s", calls)
 	}
 
 	// A failing import is reported (the caller then leaves the files alone).
 	fakeCommand(t, bin, "mysql", log, 1)
-	if _, _, err := r.importBundleDumps(t.Context(), dir, []restoreDatabase{{Name: "shop", Type: "mysql"}}); err == nil {
+	if _, _, err := r.importBundleDumps(t.Context(), dir, []restoreDatabase{{Name: "shop", Type: "mysql", User: "shopuser", Password: "pw"}}, 65534, 65534); err == nil {
 		t.Fatal("failed import not reported")
+	}
+	// Without a known account of the database nothing is imported.
+	if _, _, err := r.importBundleDumps(t.Context(), dir, []restoreDatabase{{Name: "shop", Type: "mysql"}}, 65534, 65534); err == nil {
+		t.Fatal("imported without a database account")
 	}
 }

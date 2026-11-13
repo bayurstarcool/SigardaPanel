@@ -217,17 +217,16 @@ func (h *backupHandler) restore(c echo.Context) error {
 		"backup_path": backupPath,
 		"root_path":   site.RootPath,
 	}
-	// The site's databases, so the agent can import the dumps of a full
-	// backup or a database backup (MySQL imports run as root on the server;
-	// PostgreSQL needs the database's own account).
+	// The site's databases with one of each database's own accounts: the
+	// agent imports dumps with that account, as the site's Linux user, never
+	// as root (dumps live in the site's user-writable tree).
+	payloadMap["system_user"] = site.SystemUser.String
 	if dbs, err := h.store.Databases.ListBySite(c.Request().Context(), site.ID); err == nil && len(dbs) > 0 {
 		list := make([]map[string]string, 0, len(dbs))
 		for _, d := range dbs {
 			entry := map[string]string{"name": d.Name, "type": d.Type}
-			if !strings.EqualFold(d.Type, "mysql") && !strings.EqualFold(d.Type, "mariadb") {
-				if u, pw, err := h.store.DatabaseBackupCredentials(c.Request().Context(), d); err == nil {
-					entry["user"], entry["password"] = u, pw
-				}
+			if u, pw := h.restoreAccount(c.Request().Context(), d); u != "" {
+				entry["user"], entry["password"] = u, pw
 			}
 			list = append(list, entry)
 		}
@@ -1038,4 +1037,30 @@ func openBackupFile(path string, site *store.Site) (*os.File, error) {
 		return nil, fmt.Errorf("not a regular file")
 	}
 	return f, nil
+}
+
+// restoreAccount returns an account of database d whose password the panel
+// holds, preferring one with ALL privileges ("" when there is none).
+func (h *backupHandler) restoreAccount(ctx context.Context, d store.Database) (string, string) {
+	users, err := h.store.DBUsers.ListByDatabase(ctx, d.ID)
+	if err != nil {
+		return "", ""
+	}
+	var user, pass string
+	for _, u := range users {
+		if u.EncryptedPassword == "" {
+			continue
+		}
+		pw, err := h.store.DBStore.DecryptPassword(u.EncryptedPassword)
+		if err != nil || pw == "" {
+			continue
+		}
+		if strings.EqualFold(u.Privileges, "ALL") || strings.Contains(strings.ToUpper(u.Privileges), "ALL PRIVILEGES") {
+			return u.Username, pw
+		}
+		if user == "" {
+			user, pass = u.Username, pw
+		}
+	}
+	return user, pass
 }

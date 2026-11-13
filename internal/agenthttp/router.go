@@ -1791,6 +1791,7 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 		BackupPath string            `json:"backup_path"`
 		RootPath   string            `json:"root_path"`
 		Databases  []restoreDatabase `json:"databases"`
+		SystemUser string            `json:"system_user"`
 		S3Config   *struct {
 			Bucket    string `json:"bucket"`
 			Endpoint  string `json:"endpoint"`
@@ -1860,7 +1861,8 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 		if !ok {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "none of the site's databases matches this dump; recreate the database first")
 		}
-		if out, err := r.importDatabaseDump(ctx, db, backupPath); err != nil {
+		uid, gid := restoreRunAs(payload.SystemUser)
+		if out, err := r.importDatabaseDump(ctx, db, backupPath, uid, gid); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "database import failed: "+strings.TrimSpace(out+" "+err.Error()))
 		}
 		slog.Info("agent: backup.restore (database)", "backup_id", payload.BackupID, "db", db.Name)
@@ -1886,7 +1888,8 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 
 	// A full backup carries database dumps: import them before the files are
 	// swapped, so a failed import leaves the site's files untouched.
-	dbsRestored, dbsSkipped, err := r.importBundleDumps(ctx, filepath.Join(tmpDir, "database_dumps"), payload.Databases)
+	runUID, runGID := restoreRunAs(payload.SystemUser)
+	dbsRestored, dbsSkipped, err := r.importBundleDumps(ctx, filepath.Join(tmpDir, "database_dumps"), payload.Databases, runUID, runGID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "database "+err.Error()+" (site files left unchanged)")
 	}
@@ -2223,8 +2226,12 @@ func (r *Router) dbUserCreateTask(c echo.Context) error {
 	switch payload.Type {
 	case "mysql":
 		sql := fmt.Sprintf(
-			"CREATE USER IF NOT EXISTS %s@%s IDENTIFIED BY %s; GRANT %s ON `%s`.* TO %s@%s; FLUSH PRIVILEGES;\n",
-			sqlQuote(payload.Username), sqlQuote(payload.HostPattern), sqlQuote(payload.Password), payload.Privileges, payload.DatabaseName, sqlQuote(payload.Username), sqlQuote(payload.HostPattern),
+			// ALTER after CREATE: an existing account (password rotation, re-run
+			// job) gets the new password too; CREATE IF NOT EXISTS alone keeps the old.
+			"CREATE USER IF NOT EXISTS %s@%s IDENTIFIED BY %s; ALTER USER %s@%s IDENTIFIED BY %s; GRANT %s ON `%s`.* TO %s@%s; FLUSH PRIVILEGES;\n",
+			sqlQuote(payload.Username), sqlQuote(payload.HostPattern), sqlQuote(payload.Password),
+			sqlQuote(payload.Username), sqlQuote(payload.HostPattern), sqlQuote(payload.Password),
+			payload.Privileges, payload.DatabaseName, sqlQuote(payload.Username), sqlQuote(payload.HostPattern),
 		)
 		if output, err := r.executor.RunWithInput(ctx, sql, "mysql"); err != nil {
 			return echo.NewHTTPError(http.StatusFailedDependency, "mysql create user failed: "+strings.TrimSpace(output))
