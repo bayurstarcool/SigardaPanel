@@ -287,7 +287,7 @@ func (h *fileManagerHandler) uploadFile(c echo.Context) error {
 	req.ContentLength = src.Size
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/octet-stream")
-	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
+	resp, err := agentClient(10 * time.Minute).Do(req)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
@@ -330,7 +330,7 @@ func (h *fileManagerHandler) downloadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to prepare download")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := (&http.Client{Timeout: 30 * time.Minute}).Do(req)
+	resp, err := agentClient(30 * time.Minute).Do(req)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}

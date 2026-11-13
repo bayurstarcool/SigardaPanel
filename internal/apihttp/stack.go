@@ -676,7 +676,7 @@ func (h *stackHandler) redisProxy(c echo.Context, action string) error {
 
 // agentRequest makes an HTTP request to the agent.
 func agentRequest(method, url, token string, body any) (*http.Response, error) {
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := agentClient(5 * time.Minute)
 
 	var reqBody io.Reader
 	if body != nil {
@@ -882,7 +882,7 @@ func (h *stackHandler) serverBenchmark(c echo.Context) error {
 	}
 
 	// Use longer timeout for benchmark (up to 60 seconds)
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := agentClient(60 * time.Second)
 
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/system/benchmark"
 	req, err := http.NewRequest("GET", agentURL, nil)
