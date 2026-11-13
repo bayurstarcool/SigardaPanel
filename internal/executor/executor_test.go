@@ -24,11 +24,14 @@ func TestRunShell_Allowed(t *testing.T) {
 func TestRunShell_NotAllowed(t *testing.T) {
 	e := &Executor{Timeout: 5 * time.Second}
 	ctx := context.Background()
-	_, err := e.RunShell(ctx, "rm", "-rf", "/")
+	// A name that is never allowlisted (and harmless if it ever ran): this
+	// test used to call `rm -rf /`, which became a real call once rm was
+	// allowlisted for site cleanup.
+	_, err := e.RunShell(ctx, "sigardapanel-not-allowlisted", "--version")
 	if err == nil {
 		t.Fatal("expected error for disallowed command")
 	}
-	want := "command not allowed: rm"
+	want := "command not allowed: sigardapanel-not-allowlisted"
 	if err.Error() != want {
 		t.Fatalf("unexpected error: got %q, want %q", err.Error(), want)
 	}

@@ -64,7 +64,7 @@ func TestRunAsUserRefusesRoot(t *testing.T) {
 	if _, err := e.RunAsUser(context.Background(), 0, 0, "/", "echo", "x"); err == nil {
 		t.Fatal("uid 0 must be refused")
 	}
-	if _, err := e.RunAsUser(context.Background(), 65534, 65534, "/", "rm", "-rf", "/"); err == nil {
+	if _, err := e.RunAsUser(context.Background(), 65534, 65534, "/", "sigardapanel-not-allowlisted"); err == nil {
 		t.Fatal("non-allowlisted command must be refused")
 	}
 }
