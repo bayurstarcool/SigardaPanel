@@ -42,7 +42,16 @@ for arch in amd64 arm64; do
     -ldflags "-s -w -X sigardapanel/internal/buildinfo.Version=${VERSION}" \
     -o "$OUT/sigardapanel-linux-${arch}" ./cmd/sigardapanel
 done
-tar -czf "$OUT/sigardapanel-web.tar.gz" -C web/build .
+chmod 755 "$OUT"/sigardapanel-linux-*
+# The web bundle is run by the unprivileged sigardapanel user: its files must
+# be world-readable (and directories traversable) whatever the build umask
+# was. v1.7.0 was built under umask 077 and shipped owner-only files.
+chmod -R u+rwX,go+rX,go-w web/build
+tar -czf "$OUT/sigardapanel-web.tar.gz" --owner=0 --group=0 --numeric-owner \
+  --mode='u+rwX,go+rX,go-w' -C web/build .
+if tar -tvzf "$OUT/sigardapanel-web.tar.gz" | awk '{print $1}' | grep -qv '^.r..r..r'; then
+  echo "web bundle has entries that are not world-readable" >&2; exit 1
+fi
 
 echo "==> checksums + signature"
 ( cd "$OUT" && sha256sum sigardapanel-linux-amd64 sigardapanel-linux-arm64 sigardapanel-web.tar.gz > SHA256SUMS )

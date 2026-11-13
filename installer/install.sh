@@ -118,6 +118,9 @@ download_release() {
 unpack_web() { # <tarball> <dest>
   mkdir -p "$2"
   tar -xzf "$1" -C "$2" --no-same-owner --no-same-permissions
+  # The web service runs as an unprivileged user: make the bundle readable
+  # whatever modes the archive carried (v1.7.0's were owner-only).
+  chmod -R u+rwX,go+rX,go-w "$2"
   echo '{"type":"module"}' > "$2/package.json"
   [ -f "$2/index.js" ] || die "Web bundle is missing index.js"
 }

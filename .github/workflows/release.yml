@@ -103,9 +103,11 @@ jobs:
           RELEASE_TARGET: ${{ github.sha }}
         run: |
           [ -n "$MINISIGN_SECRET_KEY" ] || { echo "::error::MINISIGN_SECRET_KEY is not set"; exit 1; }
-          umask 077
+          # Only the key file is private: a umask for the whole step made the
+          # web bundle and binaries owner-only (v1.7.0 shipped unreadable files).
           keydir="$(mktemp -d)"
           trap 'rm -rf "$keydir"' EXIT
-          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$keydir/sigardapanel.key"
+          chmod 700 "$keydir"
+          (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$keydir/sigardapanel.key")
           MINISIGN_KEY="$keydir/sigardapanel.key" OUT="$RUNNER_TEMP/release-dist" \
             bash scripts/release.sh "${TAG#v}" --publish
