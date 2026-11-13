@@ -241,6 +241,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/sites/:id/files/rename", fmH.renameEntry, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/files/move", fmH.moveEntries, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/files/compress", fmH.compressEntries, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/files/extract", fmH.extractArchive, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/files/chmod", fmH.chmodEntry, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/files/upload", fmH.uploadFile, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/files/download", fmH.downloadFile, RequireAuth(s))
 

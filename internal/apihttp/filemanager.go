@@ -164,7 +164,7 @@ func (h *fileManagerHandler) readFile(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
 			"path": relPath, "content": out["content"], "size": out["size"],
-			"mod_time": out["mod_time"], "mode": out["mode"],
+			"mod_time": out["mod_time"], "mode": out["mode"], "binary": out["binary"] == true,
 		},
 		RequestID: rid,
 	})
@@ -427,6 +427,56 @@ func (h *fileManagerHandler) compressEntries(c echo.Context) error {
 	siteDisk.grew(site.ID, int64(archiveSize))
 	h.auditFile(c, site, map[string]any{"action": "file_compress", "count": len(body.Paths), "archive": filepath.Join(body.Dest, fmt.Sprint(out["archive"])), "size": out["size"]})
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Compressed", "archive": out["archive"], "size": out["size"]}, RequestID: rid})
+}
+
+// POST /sites/:id/files/extract {path, dest}: unpack a .zip archive.
+func (h *fileManagerHandler) extractArchive(c echo.Context) error {
+	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+	site, err := h.resolveSiteWrite(c)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		Path string `json:"path"`
+		Dest string `json:"dest"`
+	}
+	if err := c.Bind(&body); err != nil || body.Path == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "path required")
+	}
+	if body.Dest == "" {
+		body.Dest = filepath.Dir(body.Path)
+	}
+	if err := checkSiteDiskQuota(c.Request().Context(), h.store, site, 0); err != nil {
+		return err
+	}
+	out, err := h.fileOp(c, site, "extract", map[string]any{"path": body.Path, "dest": body.Dest})
+	siteDisk.grew(site.ID, 0) // even a failed extraction may have written files
+	if err != nil {
+		return err
+	}
+	h.auditFile(c, site, map[string]any{"action": "file_extract", "path": body.Path, "dest": body.Dest, "extracted": out["extracted"], "skipped": out["skipped"]})
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "extracted": out["extracted"], "skipped": out["skipped"]}, RequestID: rid})
+}
+
+// POST /sites/:id/files/chmod {path, mode}: set permission bits (octal).
+func (h *fileManagerHandler) chmodEntry(c echo.Context) error {
+	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+	site, err := h.resolveSiteWrite(c)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		Path string `json:"path"`
+		Mode string `json:"mode"`
+	}
+	if err := c.Bind(&body); err != nil || body.Path == "" || body.Mode == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "path and mode required")
+	}
+	if _, err := h.fileOp(c, site, "chmod", map[string]any{"path": body.Path, "mode": body.Mode}); err != nil {
+		return err
+	}
+	h.auditFile(c, site, map[string]any{"action": "file_chmod", "path": body.Path, "mode": body.Mode})
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success"}, RequestID: rid})
 }
 
 // addToZip is kept for callers in this package (see sitefs.AddToZip).

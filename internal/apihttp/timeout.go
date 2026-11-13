@@ -22,9 +22,23 @@ func DefaultTimeoutConfig() TimeoutConfig {
 			if c.Request().Header.Get("Upgrade") == "websocket" {
 				return true
 			}
-			// Streaming transfers legitimately outlive the request budget.
+			// Streaming transfers and long file operations on the site's
+			// server (large archives, deleting/moving big trees, measuring a
+			// large site) legitimately outlive the request budget; each has
+			// its own agent timeout. Cut at 30 s they failed in the browser
+			// while the agent finished the work anyway.
 			p := c.Request().URL.Path
-			return strings.HasSuffix(p, "/download") || strings.HasSuffix(p, "/upload")
+			if strings.HasSuffix(p, "/download") || strings.HasSuffix(p, "/upload") {
+				return true
+			}
+			if strings.HasPrefix(p, "/api/v1/sites/") {
+				if strings.HasSuffix(p, "/files/compress") || strings.HasSuffix(p, "/files/extract") ||
+					strings.HasSuffix(p, "/files/move") || strings.HasSuffix(p, "/usage") ||
+					(strings.HasSuffix(p, "/files") && c.Request().Method == "DELETE") {
+					return true
+				}
+			}
+			return false
 		},
 	}
 }
