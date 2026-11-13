@@ -230,11 +230,6 @@ func (h *siteHandler) sshInfo(c echo.Context) error {
 		return err
 	}
 
-	sysUser := site.SystemUser.String
-	if sysUser == "" {
-		sysUser = "root"
-	}
-
 	// Prefer public IP address over hostname for external connections
 	host := "your-server-ip"
 	if srv, err := h.store.Servers.GetByID(c.Request().Context(), site.ServerID); err == nil && srv != nil {
@@ -245,15 +240,32 @@ func (h *siteHandler) sshInfo(c echo.Context) error {
 		}
 	}
 
+	// Connections go through the site's SSH/SFTP accounts (chrooted, key
+	// authentication, the site at /htdocs). The site's own Linux user has no
+	// password or key, so "ssh <system_user>@host" never worked.
+	accounts := []map[string]any{}
+	if users, err := h.store.SSH.ListBySiteID(c.Request().Context(), site.ID); err == nil {
+		for _, u := range users {
+			accounts = append(accounts, map[string]any{
+				"id": u.ID, "username": u.Username,
+				"ssh_command":  "ssh -i ~/.ssh/" + u.Username + " " + u.Username + "@" + host,
+				"sftp_command": "sftp -i ~/.ssh/" + u.Username + " " + u.Username + "@" + host,
+				"path":         "/htdocs",
+			})
+		}
+	}
+	note := "Create an SSH/SFTP account below to connect. Accounts use key authentication and see the site at /htdocs."
+	if len(accounts) > 0 {
+		note = "Use the account's private key (downloaded when the account was created). The site is at /htdocs."
+	}
 	return c.JSON(http.StatusOK, map[string]any{
 		"data": map[string]any{
 			"host":        host,
 			"port":        22,
-			"system_user": sysUser,
+			"system_user": site.SystemUser.String,
 			"root_path":   site.RootPath,
-			"ssh_command": "ssh " + sysUser + "@" + host,
-			"scp_hint":    "scp -r ./local-folder " + sysUser + "@" + host + ":" + site.RootPath,
-			"note":        "Use your existing SSH key or server password. SigardaPanel does not store SSH credentials.",
+			"accounts":    accounts,
+			"note":        note,
 		},
 	})
 }

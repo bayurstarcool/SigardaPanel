@@ -10,8 +10,10 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/labstack/echo/v4"
 )
@@ -57,9 +59,32 @@ func (r *Router) writeFstabLines(lines []string) error {
 	return os.Rename(tmp, r.fstabPath)
 }
 
-// mountedUnder lists the mount points at or below dir.
+// privateMountNS reports whether the agent runs in its own mount namespace
+// (systemd's ProtectKernelTunables/ProtectControlGroups and similar give a
+// service one). Bind mounts made there are invisible to sshd, so jails
+// looked empty and logins failed until a reboot applied fstab.
+func privateMountNS() bool {
+	self, err1 := os.Readlink("/proc/self/ns/mnt")
+	host, err2 := os.Readlink("/proc/1/ns/mnt")
+	return err1 == nil && err2 == nil && self != host
+}
+
+// hostMount runs mount/umount in the host's mount namespace.
+func (r *Router) hostMount(ctx context.Context, cmd string, args ...string) (string, error) {
+	if privateMountNS() {
+		return r.executor.RunShell(ctx, "nsenter", append([]string{"-t", "1", "-m", "--", cmd}, args...)...)
+	}
+	return r.executor.RunShell(ctx, cmd, args...)
+}
+
+// mountedUnder lists the mount points at or below dir, as the host (and
+// sshd) sees them.
 func mountedUnder(dir string) []string {
-	f, err := os.Open("/proc/self/mounts")
+	mounts := "/proc/self/mounts"
+	if privateMountNS() {
+		mounts = "/proc/1/mounts"
+	}
+	f, err := os.Open(mounts)
 	if err != nil {
 		return nil
 	}
@@ -152,7 +177,18 @@ func (r *Router) sshCreateTask(c echo.Context) error {
 	}
 	home := r.sshHome(p.Username)
 
-	if out, err := r.executor.RunShell(ctx, r.useraddCmd, "-m", "-d", home, "-s", "/bin/bash", p.Username); err != nil {
+	// The account shares the uid/gid of the site's owner (a second name for
+	// the same Linux user), so it can edit the site's files and what it
+	// uploads belongs to the site user. As a separate user it could read the
+	// site but not write it. The chroot keeps it inside this site.
+	useradd := []string{"-m", "-d", home, "-s", "/bin/bash"}
+	if fi, err := os.Stat(p.SiteRoot); err == nil {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid >= 1000 {
+			useradd = append(useradd, "-o", "-u", strconv.FormatUint(uint64(st.Uid), 10), "-g", strconv.FormatUint(uint64(st.Gid), 10))
+		}
+	}
+	useradd = append(useradd, p.Username)
+	if out, err := r.executor.RunShell(ctx, r.useraddCmd, useradd...); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "create user failed: " + strings.TrimSpace(out)})
 	}
 	cleanup := func() { r.removeSSHAccount(ctx, p.Username, home) }
@@ -199,10 +235,28 @@ func (r *Router) sshCreateTask(c echo.Context) error {
 		}
 		dst := filepath.Join(home, d)
 		_ = os.MkdirAll(dst, 0o755)
-		_, _ = r.executor.RunShell(ctx, "mount", "--bind", d, dst)
-		_, _ = r.executor.RunShell(ctx, "mount", "-o", "remount,bind,ro", dst)
+		_, _ = r.hostMount(ctx, "mount", "--bind", d, dst)
+		_, _ = r.hostMount(ctx, "mount", "-o", "remount,bind,ro", dst)
 		fstab = append(fstab, fmt.Sprintf("%s %s none bind,ro 0 0  %s", d, dst, sshMarker(p.Username)))
 	}
+	// Shells and tools (git, composer, php) need a few devices and /tmp.
+	devDir := filepath.Join(home, "dev")
+	_ = os.MkdirAll(devDir, 0o755)
+	for _, dev := range []string{"null", "zero", "urandom", "random", "tty"} {
+		src := filepath.Join("/dev", dev)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		dst := filepath.Join(devDir, dev)
+		if f, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			f.Close()
+		}
+		_, _ = r.hostMount(ctx, "mount", "--bind", src, dst)
+		fstab = append(fstab, fmt.Sprintf("%s %s none bind 0 0  %s", src, dst, sshMarker(p.Username)))
+	}
+	tmpDir := filepath.Join(home, "tmp")
+	_ = os.MkdirAll(tmpDir, 0o1777)
+	_ = os.Chmod(tmpDir, 0o1777|os.ModeSticky)
 	etc := filepath.Join(home, "etc")
 	_ = os.MkdirAll(etc, 0o755)
 	_ = os.WriteFile(filepath.Join(etc, "passwd"), []byte(fmt.Sprintf("root:x:0:0:root:/root:/sbin/nologin\n%s:x:%s:%s::/:/bin/bash\n", p.Username, u.Uid, u.Gid)), 0o644)
@@ -215,7 +269,7 @@ func (r *Router) sshCreateTask(c echo.Context) error {
 		cleanup()
 		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "create mount point failed"})
 	}
-	if out, err := r.executor.RunShell(ctx, "mount", "--bind", p.SiteRoot, htdocs); err != nil {
+	if out, err := r.hostMount(ctx, "mount", "--bind", p.SiteRoot, htdocs); err != nil {
 		cleanup()
 		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "bind mount of the site failed: " + strings.TrimSpace(out)})
 	}
@@ -251,13 +305,19 @@ func (r *Router) removeSSHAccount(ctx context.Context, username, home string) er
 	_ = r.writeFstabLines(kept)
 
 	targets := []string{filepath.Join(home, "htdocs"), filepath.Join(home, "usr"), filepath.Join(home, "lib64"), filepath.Join(home, "lib"), filepath.Join(home, "bin")}
+	for _, dev := range []string{"null", "zero", "urandom", "random", "tty"} {
+		targets = append(targets, filepath.Join(home, "dev", dev))
+	}
 	targets = append(targets, mountedUnder(home)...)
 	for _, t := range targets {
-		if _, err := r.executor.RunShell(ctx, "umount", t); err != nil {
-			_, _ = r.executor.RunShell(ctx, "umount", "-l", t)
+		if _, err := r.hostMount(ctx, "umount", t); err != nil {
+			_, _ = r.hostMount(ctx, "umount", "-l", t)
 		}
 	}
-	_, _ = r.executor.RunShell(ctx, "userdel", username)
+	// -f: the account shares the site owner's uid, whose processes (cron,
+	// the app) would otherwise block the removal. Without -r no files are
+	// removed, and no group is (the account has none of its own).
+	_, _ = r.executor.RunShell(ctx, "userdel", "-f", username)
 	if left := mountedUnder(home); len(left) > 0 {
 		return fmt.Errorf("still mounted, %s kept: %s", home, strings.Join(left, ", "))
 	}

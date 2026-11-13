@@ -221,10 +221,12 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/sites/:id/ip-restrictions", ipH.list, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/ip-restrictions", ipH.create, RequireAuth(s))
 	e.DELETE("/api/v1/sites/:id/ip-restrictions/:restriction_id", ipH.delete, RequireAuth(s))
-	e.GET("/api/v1/sites/:id/ssh-ftp", sitesH.getSshFtp, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/sites/:id/ssh-ftp", sitesH.createSshFtp, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/sites/:id/ssh-ftp/:ssh_id", sitesH.deleteSshFtp, RequireAuth(s), RequireAdmin(s))
-	e.GET("/api/v1/sites/:id/ssh-ftp/:ssh_id/key", sitesH.getSSHPrivateKey, RequireAuth(s), RequireAdmin(s))
+	// SSH/FTP accounts: the handlers require read (list) or write permission
+	// on the site, so owners and site writers manage their own accounts.
+	e.GET("/api/v1/sites/:id/ssh-ftp", sitesH.getSshFtp, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/ssh-ftp", sitesH.createSshFtp, RequireAuth(s))
+	e.DELETE("/api/v1/sites/:id/ssh-ftp/:ssh_id", sitesH.deleteSshFtp, RequireAuth(s))
+	e.GET("/api/v1/sites/:id/ssh-ftp/:ssh_id/key", sitesH.getSSHPrivateKey, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/cron", sitesH.listCron, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/cron", sitesH.createCron, RequireAuth(s), RequireAdmin(s))
 	e.DELETE("/api/v1/sites/:id/cron/:cron_id", sitesH.deleteCron, RequireAuth(s), RequireAdmin(s))

@@ -92,8 +92,10 @@
     let initialFitDone = false;
     resizeObserver = new ResizeObserver(() => {
       if (disposed) return;
-      // Only fit on very first observation (initial layout)
-      if (!initialFitDone) {
+      // Only fit on very first observation (initial layout), and on
+      // devices with a fine pointer (desktop window resizes); touch
+      // keyboards resize the viewport while typing.
+      if (!initialFitDone || window.matchMedia('(pointer: fine)').matches) {
         initialFitDone = true;
         try { fitAddon?.fit(); } catch {}
         sendResize();
@@ -102,6 +104,7 @@
     resizeObserver.observe(termEl);
   });
 
+  let failures = 0;
   async function connectWS() {
     if (disposed) return;
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
@@ -114,15 +117,19 @@
         session: sessionId || undefined,
       });
     } catch (e: any) {
+      // Refused (no permission, not an admin, panel host needs a super
+      // admin): retrying cannot help.
       term?.write(`\r\n\x1b[31m[Terminal unavailable: ${e?.message || 'denied'}]\x1b[0m\r\n`);
-      if (!disposed) reconnectTimer = setTimeout(connectWS, 5000);
       return;
     }
     sessionId = ticket.session;
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${proto}//${window.location.host}/api/v1/ws/terminal?ticket=${encodeURIComponent(ticket.ticket)}`);
     ws.binaryType = 'arraybuffer';
+    let opened = false;
     ws.onopen = () => {
+      opened = true;
+      failures = 0;
       connected = true;
       term?.focus();
       ws?.send(JSON.stringify({ type: 'resize', cols: term?.cols || 120, rows: term?.rows || 40 }));
@@ -142,12 +149,26 @@
       }
       term?.write(data);
     };
-    ws.onclose = () => {
+    ws.onclose = (ev: CloseEvent) => {
       connected = false;
-      if (!disposed) {
-        term?.write('\r\n\x1b[38;5;245m[Disconnected. Reconnecting...]\x1b[0m\r\n');
-        reconnectTimer = setTimeout(connectWS, 3000);
+      ws = null;
+      if (disposed) return;
+      if (ev.code === 1000 && /shell exited/i.test(ev.reason)) {
+        sessionId = '';
+        term?.write('\r\n\x1b[38;5;245m[Session ended. Reload the page for a new shell.]\x1b[0m\r\n');
+        return;
       }
+      if (ev.code >= 4000 && ev.code < 5000) {
+        term?.write(`\r\n\x1b[31m[${ev.reason || 'The server closed the terminal'}]\x1b[0m\r\n`);
+        return;
+      }
+      if (!opened && ++failures >= 3) {
+        term?.write('\r\n\x1b[31m[Cannot connect to the terminal. Reload the page to try again.]\x1b[0m\r\n');
+        return;
+      }
+      const delay = 3000 * 2 ** failures;
+      term?.write(`\r\n\x1b[38;5;245m[Disconnected. Reconnecting in ${delay / 1000}s...]\x1b[0m\r\n`);
+      reconnectTimer = setTimeout(connectWS, delay);
     };
     ws.onerror = () => { connected = false; };
   }

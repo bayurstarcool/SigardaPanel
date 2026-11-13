@@ -3,6 +3,7 @@ package apihttp
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -196,7 +197,21 @@ func (h *terminalHandler) serve(c echo.Context) error {
 	}
 	target.RawQuery = q.Encode()
 
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	// Upgrade first, so a failure to reach the agent can be reported with a
+	// close code the client understands (it then stops reconnecting instead
+	// of retrying every few seconds, each try opening a new audit entry).
+	client, err := terminalClientUpgrader.Upgrade(c.Response(), c.Request(), nil)
+	if err != nil {
+		return nil // Upgrade already wrote the error response
+	}
+	defer client.Close()
+	client.SetReadLimit(1 << 20)
+	closeClient := func(code int, reason string) {
+		_ = client.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(5*time.Second))
+	}
+
+	// Same dial-time address checks as every other panel→agent call.
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, NetDialContext: dialAgent}
 	agentConn, resp, err := dialer.Dial(target.String(), http.Header{"Authorization": {"Bearer " + t.token}})
 	if err != nil {
 		status := 0
@@ -204,16 +219,36 @@ func (h *terminalHandler) serve(c echo.Context) error {
 			status = resp.StatusCode
 		}
 		slog.Warn("terminal: agent dial failed", "status", status, "error", err)
-		return echo.NewHTTPError(http.StatusBadGateway, "cannot reach agent terminal")
+		switch {
+		case status == http.StatusForbidden || status == http.StatusBadRequest:
+			// The agent refused (e.g. not a regular user account): permanent.
+			closeClient(4403, "the server refused to open this terminal")
+		case status == http.StatusNotFound:
+			closeClient(4404, "the agent on this server does not support the terminal; update the agent")
+		default:
+			closeClient(4502, "cannot reach the server's agent")
+		}
+		return nil
 	}
 	defer agentConn.Close()
 
-	client, err := terminalClientUpgrader.Upgrade(c.Response(), c.Request(), nil)
-	if err != nil {
-		return nil // Upgrade already wrote the error response
-	}
-	defer client.Close()
-	client.SetReadLimit(1 << 20)
+	// Keepalive towards the browser (the agent pings the API's side).
+	stopPing := make(chan struct{})
+	defer close(stopPing)
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopPing:
+				return
+			case <-t.C:
+				if client.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)) != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	done := make(chan struct{}, 2)
 	pump := func(dst, src *websocket.Conn) {
@@ -221,6 +256,13 @@ func (h *terminalHandler) serve(c echo.Context) error {
 		for {
 			mt, msg, err := src.ReadMessage()
 			if err != nil {
+				// Pass a close (e.g. the agent's "shell exited") on to the
+				// other side, so the browser can tell it from a dropped
+				// connection and does not start a new shell.
+				var ce *websocket.CloseError
+				if errors.As(err, &ce) && ce.Code != websocket.CloseNoStatusReceived && ce.Code != websocket.CloseAbnormalClosure {
+					_ = dst.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(ce.Code, ce.Text), time.Now().Add(5*time.Second))
+				}
 				return
 			}
 			if err := dst.WriteMessage(mt, msg); err != nil {

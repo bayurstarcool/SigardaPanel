@@ -18,9 +18,9 @@
   let sessionId = $state('');
   let expanded = $state(false);
 
-  function getSystemUser(): string {
-    return site?.system_user || 'root';
-  }
+  // The shell runs as the site's Linux user; the server refuses sites without one.
+  const systemUser = $derived(site?.system_user || '');
+  let failures = 0; // consecutive connections that never opened
 
   async function connect() {
     if (disposed || connecting) return;
@@ -119,7 +119,10 @@
     ws = new WebSocket(`${proto}//${window.location.host}/api/v1/ws/terminal?ticket=${encodeURIComponent(ticket.ticket)}`);
     ws.binaryType = 'arraybuffer';
 
+    let opened = false;
     ws.onopen = () => {
+      opened = true;
+      failures = 0;
       connected = true;
       connecting = false;
       term?.focus();
@@ -142,12 +145,33 @@
       term?.write(data);
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev: CloseEvent) => {
       connected = false;
       connecting = false;
-      if (!disposed && expanded) {
-        term?.write('\r\n\x1b[38;5;245m[Disconnected. Reconnecting in 3s...]\x1b[0m\r\n');
-        reconnectTimer = setTimeout(doConnect, 3000);
+      ws = null;
+      if (disposed) return;
+      // The shell ended (exit / Ctrl+D): do not start a new one by itself.
+      if (ev.code === 1000 && /shell exited/i.test(ev.reason)) {
+        sessionId = '';
+        term?.write('\r\n\x1b[38;5;245m[Session ended. Press Connect to start a new shell.]\x1b[0m\r\n');
+        return;
+      }
+      // Refused by the server (4xxx): retrying would fail the same way.
+      if (ev.code >= 4000 && ev.code < 5000) {
+        term?.write(`\r\n\x1b[31m[${ev.reason || 'The server closed the terminal'}]\x1b[0m\r\n`);
+        return;
+      }
+      if (!opened) failures++;
+      if (failures >= 3) {
+        term?.write('\r\n\x1b[31m[Cannot connect to the terminal. Press Connect to try again.]\x1b[0m\r\n');
+        failures = 0;
+        return;
+      }
+      if (expanded) {
+        // Back off: 3 s, 6 s, 12 s.
+        const delay = 3000 * 2 ** failures;
+        term?.write(`\r\n\x1b[38;5;245m[Disconnected. Reconnecting in ${delay / 1000}s...]\x1b[0m\r\n`);
+        reconnectTimer = setTimeout(doConnect, delay);
       }
     };
 
@@ -156,7 +180,10 @@
 
   function disconnect() {
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    // Ask the server to end the shell instead of leaving it to the idle cleanup.
+    if (ws?.readyState === WebSocket.OPEN) { try { ws.send(JSON.stringify({ type: 'close' })); } catch {} }
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
+    failures = 0;
     connected = false;
     connecting = false;
     sessionId = '';
@@ -199,7 +226,7 @@
     <div class="flex min-w-0 items-center gap-2">
       <TerminalIcon size={16} class="shrink-0 text-subtle" />
       <span class="card-title">SSH terminal</span>
-      <span class="code max-md:hidden">{getSystemUser()}@server</span>
+      {#if systemUser}<span class="code max-md:hidden">{systemUser}@server</span>{/if}
       {#if connected}
         <span class="badge badge-success"><span class="dot"></span>Connected</span>
       {:else if connecting}
@@ -212,7 +239,7 @@
       {#if connected || connecting}
         <button onclick={disconnect} class="btn btn-danger-ghost btn-xs"><Power size={12} /> Disconnect</button>
       {:else}
-        <button onclick={connect} class="btn btn-secondary btn-xs"><Power size={12} /> Connect</button>
+        <button onclick={connect} disabled={!systemUser} class="btn btn-secondary btn-xs" title={systemUser ? '' : 'This site has no Linux user'}><Power size={12} /> Connect</button>
       {/if}
       <button onclick={toggleExpand} class="btn btn-ghost btn-icon btn-xs" aria-label={expanded ? 'Collapse terminal' : 'Expand terminal'} title={expanded ? 'Collapse' : 'Expand'}>
         {#if expanded}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
@@ -240,10 +267,12 @@
 
   {#if !expanded}
     <p class="px-4 py-3 text-[13px] text-muted">
-      {#if connected}
-        <span class="inline-flex items-center gap-1.5 text-success"><span class="dot"></span>Terminal active</span> — <span class="code">ssh {getSystemUser()}@server</span>
+      {#if !systemUser}
+        This site has no Linux user, so a terminal cannot be opened for it.
+      {:else if connected}
+        <span class="inline-flex items-center gap-1.5 text-success"><span class="dot"></span>Terminal active</span> as <span class="code">{systemUser}</span>
       {:else}
-        Click <strong class="font-medium text-fg">Connect</strong> to open a terminal as <span class="code">{getSystemUser()}</span> on this site's server.
+        Click <strong class="font-medium text-fg">Connect</strong> to open a terminal as <span class="code">{systemUser}</span> on this site's server.
       {/if}
     </p>
   {/if}

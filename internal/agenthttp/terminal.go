@@ -386,17 +386,37 @@ func (r *Router) terminalWebSocket(c echo.Context) error {
 			sess.pendingMu.Unlock()
 		}
 
-		// Trigger SIGWINCH to make bash redraw prompt
+		// A size change (SIGWINCH) makes the shell or full-screen program
+		// redraw; the client sends its real size right after. No Enter is
+		// typed: that ran half-typed commands and put newlines into editors
+		// on every reconnect.
 		sess.mu.Lock()
-		pty.Setsize(sess.ptmx, &pty.Winsize{Cols: 120, Rows: 40})
-		// Send Enter to force bash to redraw prompt
-		sess.ptmx.Write([]byte("\n"))
+		pty.Setsize(sess.ptmx, &pty.Winsize{Cols: 119, Rows: 39})
 		sess.mu.Unlock()
 	}
 
 	// Send session ID
 	sessionMsg, _ := json.Marshal(map[string]string{"type": "session", "id": sessionID})
 	sess.write(ws, websocket.TextMessage, sessionMsg)
+
+	// Keepalive: proxies close idle websockets (nginx after 900 s), which
+	// forced reconnects. Browsers answer pings automatically.
+	pingDone := make(chan struct{})
+	defer close(pingDone)
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-pingDone:
+				return
+			case <-t.C:
+				if sess.write(ws, websocket.PingMessage, nil) != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	// WS → PTY loop
 	for {
@@ -414,6 +434,12 @@ func (r *Router) terminalWebSocket(c echo.Context) error {
 		case websocket.TextMessage:
 			if len(message) > 0 && message[0] == '{' {
 				var msg resizeMsg
+				if json.Unmarshal(message, &msg) == nil && msg.Type == "close" {
+					// The user closed the terminal: end the shell now instead
+					// of leaving it to the idle cleanup.
+					sess.close()
+					return nil
+				}
 				if json.Unmarshal(message, &msg) == nil && msg.Type == "resize" {
 					sess.mu.Lock()
 					pty.Setsize(sess.ptmx, &pty.Winsize{Cols: msg.Cols, Rows: msg.Rows})
