@@ -336,21 +336,60 @@ func (h *userHandler) usage(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "user not found")
 	}
 
-	// Usage is what the limits apply to: the sites the user owns, measured on
-	// each site's server (cached briefly). Sites they are only assigned to
-	// count against their owners.
-	disk, ownedCount, err := ownedDiskUsage(c.Request().Context(), h.store, id, siteDiskWait)
+	ctx := c.Request().Context()
+	limitBytes := diskLimitBytes(user)
+	ownedSites, err := h.store.Sites.List(ctx, store.SiteListFilter{OwnerID: id, Limit: maxOwnedSites})
 	if err != nil {
 		slog.Error("api: request failed", "route", c.Path(), "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
-	assigned := 0
-	if as, err := h.store.UserSites.ListByUser(c.Request().Context(), id); err == nil {
-		owned := map[int64]bool{}
-		if sites, err := h.store.Sites.List(c.Request().Context(), store.SiteListFilter{OwnerID: id, Limit: maxOwnedSites}); err == nil {
-			for _, s := range sites {
-				owned[s.ID] = true
+	// What the figure covers:
+	//   - a user with a disk limit: the sites they own, against the limit
+	//     (what the limit is enforced on; assigned sites count to their owners);
+	//   - an admin without a limit: every site on the panel, against the
+	//     disk capacity of all servers;
+	//   - anyone else without a limit: their own sites, against the capacity
+	//     of the servers those sites are on.
+	scope := "owned"
+	sites := ownedSites
+	if limitBytes == 0 && auth.HasRole(user.Role, auth.RoleAdmin) {
+		all, err := h.store.Sites.List(ctx, store.SiteListFilter{Limit: maxOwnedSites})
+		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		scope, sites = "all", all
+	}
+	disk := siteDisk.total(ctx, h.store, sites, siteDiskWait)
+
+	// Disk capacity (latest metrics) of the servers in scope, for users
+	// without a limit: shown as "used / capacity".
+	var capacity int64
+	if limitBytes == 0 {
+		servers := map[int64]bool{}
+		if scope == "all" {
+			if list, err := h.store.Servers.List(ctx); err == nil {
+				for _, sv := range list {
+					servers[sv.ID] = true
+				}
 			}
+		} else {
+			for _, s := range sites {
+				servers[s.ServerID] = true
+			}
+		}
+		for sid := range servers {
+			if m, err := h.store.Metrics.GetLatest(ctx, sid); err == nil && m != nil && m.DiskTotal.Valid && m.DiskTotal.Int64 > 0 {
+				capacity += m.DiskTotal.Int64
+			}
+		}
+	}
+
+	assigned := 0
+	if as, err := h.store.UserSites.ListByUser(ctx, id); err == nil {
+		owned := make(map[int64]bool, len(ownedSites))
+		for _, s := range ownedSites {
+			owned[s.ID] = true
 		}
 		for _, a := range as {
 			if !owned[a.SiteID] {
@@ -358,11 +397,16 @@ func (h *userHandler) usage(c echo.Context) error {
 			}
 		}
 	}
+	// Site count follows max_sites (owned sites); without it, an admin sees
+	// every site.
+	siteCount := len(ownedSites)
+	if !user.MaxSites.Valid && scope == "all" {
+		siteCount = len(sites)
+	}
 	var measuredAt any
 	if !disk.MeasuredAt.IsZero() {
 		measuredAt = disk.MeasuredAt.UTC().Format(time.RFC3339)
 	}
-	limitBytes := diskLimitBytes(user)
 
 	var maxSites *int64
 	if user.MaxSites.Valid {
@@ -381,7 +425,9 @@ func (h *userHandler) usage(c echo.Context) error {
 			"disk_limit_gb":         user.DiskLimit.Int64,
 			"disk_unlimited":        limitBytes == 0,
 			"disk_over_limit":       limitBytes > 0 && disk.Bytes >= limitBytes,
-			"site_count":            ownedCount,
+			"disk_scope":            scope,
+			"disk_capacity_bytes":   capacity,
+			"site_count":            siteCount,
 			"assigned_site_count":   assigned,
 			"max_sites":             maxSites,
 		},
