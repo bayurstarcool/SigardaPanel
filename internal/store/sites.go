@@ -4,11 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"time"
 
 	"sigardapanel/internal/auth"
@@ -647,7 +643,7 @@ func (s *SQLiteSiteStore) Transfer(ctx context.Context, siteID, newOwnerID int64
 	}
 
 	// New root path under target user's home
-	newRoot := "/home/" + newUsername + "/htdocs/" + site.Domain
+	newRoot := TransferRoot(newUsername, site.Domain)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -683,51 +679,14 @@ func (s *SQLiteSiteStore) Transfer(ctx context.Context, siteID, newOwnerID int64
 		return fmt.Errorf("transfer site commit: %w", err)
 	}
 
-	// Move files to new owner's home directory
-	// This happens outside the transaction since it's filesystem operation
-	if site.RootPath != "" && site.RootPath != newRoot {
-		go moveSiteFiles(site.RootPath, site.Domain, newUsername)
-	}
-
+	// The files are moved by the site.transfer job (on the site's server)
+	// before this runs; nothing touches the filesystem here.
 	return nil
 }
 
-// moveSiteFiles moves site files from old path to new owner's home.
-func moveSiteFiles(oldRoot, domain, newUsername string) {
-	newRoot := "/home/" + newUsername + "/htdocs/" + domain
-
-	// Create target directory
-	if err := os.MkdirAll(filepath.Dir(newRoot), 0755); err != nil {
-		slog.Error("transfer: create target dir", "error", err)
-		return
-	}
-
-	// Move files
-	if err := os.Rename(oldRoot, newRoot); err != nil {
-		slog.Error("transfer: move files failed, copying instead", "error", err)
-		// Fallback: copy
-		if err := copyDir(oldRoot, newRoot); err != nil {
-			slog.Error("transfer: copy files failed", "error", err)
-			return
-		}
-		os.RemoveAll(oldRoot)
-	}
-
-	// Chown to new owner
-	if err := chownR(newRoot, newUsername); err != nil {
-		slog.Error("transfer: chown failed", "error", err)
-	}
-}
-
-func chownR(path, username string) error {
-	// Look up user's UID/GID
-	cmd := exec.Command("chown", "-R", username+":"+username, path)
-	return cmd.Run()
-}
-
-func copyDir(src, dst string) error {
-	cmd := exec.Command("cp", "-a", src+"/", dst+"/")
-	return cmd.Run()
+// TransferRoot returns the root path a site gets when transferred to username.
+func TransferRoot(username, domain string) string {
+	return "/home/" + username + "/htdocs/" + domain
 }
 
 func scanSite(row *sql.Row) (*Site, error) {

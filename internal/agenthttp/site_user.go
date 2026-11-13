@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/siteinput"
 )
 
@@ -110,4 +112,54 @@ func (r *Router) chownNewSiteRoot(ctx context.Context, owner *siteOwner, rootPat
 			slog.Warn("agent: chown htdocs", "dir", htdocs, "error", err, "output", strings.TrimSpace(out))
 		}
 	}
+}
+
+// siteTransferTask answers POST /tasks/site/transfer: move a site root to
+// its new owner's home and hand the files to that owner. Nothing changes
+// when a step fails before the move; the panel updates its records only
+// after this succeeded.
+func (r *Router) siteTransferTask(c echo.Context) error {
+	ctx := c.Request().Context()
+	var p struct {
+		SiteID     int64  `json:"site_id"`
+		Domain     string `json:"domain"`
+		OldRoot    string `json:"old_root"`
+		NewRoot    string `json:"new_root"`
+		SystemUser string `json:"system_user"`
+	}
+	if err := c.Bind(&p); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+	}
+	if !isValidDomain(p.Domain) || !r.isAllowedSitePath(p.OldRoot) || !r.isAllowedSitePath(p.NewRoot) || filepath.Base(p.NewRoot) != p.Domain {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid paths")
+	}
+	if err := siteinput.SystemUser(p.SystemUser); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid system_user")
+	}
+	if filepath.Clean(p.OldRoot) == filepath.Clean(p.NewRoot) {
+		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "already in place", "root_path": p.NewRoot})
+	}
+	if _, err := os.Lstat(p.NewRoot); err == nil {
+		return echo.NewHTTPError(http.StatusConflict, "the target "+p.NewRoot+" already exists")
+	}
+	owner, err := r.ensureSiteUser(ctx, p.SystemUser)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	if err := os.MkdirAll(filepath.Dir(p.NewRoot), 0o755); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "create target directory failed: "+err.Error())
+	}
+	if _, err := os.Stat(p.OldRoot); err != nil {
+		// Nothing to move (e.g. never deployed): just create the new root.
+		if err := os.MkdirAll(p.NewRoot, 0o755); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "create root failed: "+err.Error())
+		}
+	} else if err := movePath(p.OldRoot, p.NewRoot); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "move files failed: "+err.Error())
+	}
+	if owner != nil {
+		r.chownNewSiteRoot(ctx, owner, p.NewRoot, false)
+	}
+	slog.Info("agent: site.transfer", "site_id", p.SiteID, "from", p.OldRoot, "to", p.NewRoot, "user", p.SystemUser)
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "root_path": p.NewRoot})
 }

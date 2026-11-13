@@ -412,6 +412,36 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			}
 		}
 
+	case jobmodel.TypeSiteTransfer:
+		// The files are in place on the server: now the panel follows.
+		var p struct {
+			SiteID     int64  `json:"site_id"`
+			NewOwnerID int64  `json:"new_owner_id"`
+			Domain     string `json:"domain"`
+			SystemUser string `json:"system_user"`
+		}
+		if json.Unmarshal([]byte(job.Payload), &p) == nil && p.SiteID > 0 && p.NewOwnerID > 0 {
+			before, _ := w.store.Sites.GetByID(ctx, p.SiteID)
+			if err := w.store.Sites.Transfer(ctx, p.SiteID, p.NewOwnerID); err != nil {
+				slog.Error("worker: transfer site record", "site_id", p.SiteID, "error", err)
+				break
+			}
+			if site, _ := w.store.Sites.GetByID(ctx, p.SiteID); site != nil {
+				regen, _ := json.Marshal(map[string]any{
+					"site_id": site.ID, "name": site.Name, "domain": site.Domain,
+					"runtime": site.Runtime, "root_path": site.RootPath, "vhost_regen": true,
+				})
+				_ = w.store.Jobs.Create(ctx, &jobmodel.Job{
+					ServerID: job.ServerID, SiteID: job.SiteID, Type: jobmodel.TypeSiteCreate,
+					Description: "Point the vhost of " + site.Domain + " at its new root", Payload: string(regen),
+				})
+			}
+			if before != nil && before.OwnerID.Valid {
+				w.store.Notify(ctx, before.OwnerID.Int64, "site_transferred", "Site Transferred", fmt.Sprintf("Transferred %s to %s", p.Domain, p.SystemUser), "info", "site", p.SiteID)
+			}
+			w.store.Notify(ctx, p.NewOwnerID, "site_received", "Site Received", fmt.Sprintf("You received %s", p.Domain), "success", "site", p.SiteID)
+		}
+
 	case jobmodel.TypeSSLIssue, jobmodel.TypeSSLRenew:
 		// Both must record the new expiry: if a renewal left the old date in
 		// place, the scheduler would keep re-queuing it (and alerting) every minute.

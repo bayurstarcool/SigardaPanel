@@ -35,7 +35,7 @@ func TestTransfer_RegularUser_NoPanic(t *testing.T) {
 	if rec.Code == http.StatusInternalServerError {
 		t.Fatalf("transfer by owner returned 500: %s", rec.Body.String())
 	}
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("owner should be able to transfer their site, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

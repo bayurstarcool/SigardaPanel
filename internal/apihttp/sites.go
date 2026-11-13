@@ -954,7 +954,29 @@ func (h *siteHandler) transfer(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "cannot transfer to yourself")
 	}
 
-	if err := h.store.Sites.Transfer(c.Request().Context(), id, target.ID); err != nil {
+	if site.Status == "suspended" {
+		return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+	}
+	// SSH/FTP jails bind-mount the current root path.
+	if accts, _ := h.store.SSH.ListBySiteID(c.Request().Context(), id); len(accts) > 0 {
+		return echo.NewHTTPError(http.StatusConflict, "remove the site's SSH/FTP accounts before transferring it")
+	}
+	// The files move on the site's server first (site.transfer job); owner,
+	// root path and system user change only when that succeeded, then the
+	// vhost is regenerated for the new path.
+	newRoot := store.TransferRoot(target.Username, site.Domain)
+	payload, _ := json.Marshal(map[string]any{
+		"site_id": site.ID, "domain": site.Domain, "old_root": site.RootPath, "new_root": newRoot,
+		"system_user": target.Username, "new_owner_id": target.ID,
+	})
+	job := &jobmodel.Job{
+		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
+		SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
+		Type:        jobmodel.TypeSiteTransfer,
+		Description: fmt.Sprintf("Transfer %s to %s", site.Domain, target.Username),
+		Payload:     string(payload),
+	}
+	if err := h.store.Jobs.Create(c.Request().Context(), job); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -963,11 +985,8 @@ func (h *siteHandler) transfer(c echo.Context) error {
 		"to":   target.ID,
 	})
 
-	h.store.Notify(c.Request().Context(), site.OwnerID.Int64, "site_transferred", "Site Transferred", fmt.Sprintf("Transferred %s to %s", site.Domain, target.Username), "info", "site", id)
-	h.store.Notify(c.Request().Context(), target.ID, "site_received", "Site Received", fmt.Sprintf("You received %s", site.Domain), "success", "site", id)
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      map[string]any{"transferred": true, "site_id": id, "new_owner_email": body.NewOwnerEmail, "new_owner_id": target.ID},
+	return c.JSON(http.StatusAccepted, httpjson.Success{
+		Data:      map[string]any{"transferred": false, "status": "queued", "job_id": job.ID, "site_id": id, "new_owner_email": body.NewOwnerEmail, "new_owner_id": target.ID},
 		RequestID: rid,
 	})
 }

@@ -161,6 +161,8 @@ func endpointForType(t string) string {
 		return "/tasks/backup/create"
 	case jobmodel.TypeBackupRestore:
 		return "/tasks/backup/restore"
+	case jobmodel.TypeSiteTransfer:
+		return "/tasks/site/transfer"
 	case jobmodel.TypeBackupDelete:
 		return "/tasks/backup/delete"
 	case jobmodel.TypeDBBackupCreate:

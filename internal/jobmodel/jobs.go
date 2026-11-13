@@ -35,6 +35,7 @@ const (
 	TypeAppRestart     = "app.restart"
 	TypeDBBackupCreate = "db_backup.create"
 	TypeBackupDelete   = "backup.delete"
+	TypeSiteTransfer   = "site.transfer"
 )
 
 // Job represents a queued background task.

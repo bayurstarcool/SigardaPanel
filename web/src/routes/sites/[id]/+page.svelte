@@ -112,7 +112,7 @@
 
   async function doTransfer() {
     if (!transferEmail) return; transferBusy = true;
-    try { await apiFetch(auth.token, 'POST', `sites/${siteId}/transfer`, { new_owner_email: transferEmail }); toasts.success('Site transferred'); showTransfer = false; transferEmail = ''; }
+    try { await apiFetch(auth.token, 'POST', `sites/${siteId}/transfer`, { new_owner_email: transferEmail }); toasts.success('Transfer queued: the files move on the server, then ownership changes'); showTransfer = false; transferEmail = ''; }
     catch (e: any) { toasts.error(e.message); } finally { transferBusy = false; }
   }
 

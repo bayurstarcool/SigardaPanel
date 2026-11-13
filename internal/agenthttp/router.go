@@ -230,6 +230,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/site/deploy", r.siteDeployTask)
 	tasks.POST("/site/suspend", r.siteSuspendTask)
 	tasks.POST("/site/resume", r.siteResumeTask)
+	tasks.POST("/site/transfer", r.siteTransferTask)
 	tasks.POST("/nginx/reload", r.nginxReloadTask)
 	tasks.POST("/ssl/issue", r.sslIssueTask)
 	tasks.POST("/ssl/renew", r.sslRenewTask)
