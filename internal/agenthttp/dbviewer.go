@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,15 +17,15 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// Database viewer: list tables, show columns, browse rows and run read-only
-// queries for one database, with that database's own account (never root),
-// on the server that hosts it.
+// Database viewer: list tables, show columns and browse rows (with filters,
+// sorting and pages) of one database, with that database's own account
+// (never root), on the server that hosts it.
 //
-// Read-only is enforced three ways: only SELECT-like statements are accepted
-// (a DDL statement would implicitly commit a MySQL read-only transaction and
-// run anyway), every request runs in a READ ONLY transaction that is rolled
-// back, and a query is a single statement (MySQL without multiStatements,
-// PostgreSQL through a prepared statement, which refuses several commands).
+// No SQL text from the request ever reaches the database: table and column
+// names used in a query are the ones read back from the database's catalog
+// (after looking up the requested name as a bound parameter), and filter
+// values, limit and offset are bound parameters. Every request also runs in
+// a READ ONLY transaction that is rolled back.
 
 const (
 	viewerMaxRows     = 500
@@ -37,19 +36,34 @@ const (
 )
 
 type viewerRequest struct {
-	Type     string `json:"type"` // mysql | postgres
-	Database string `json:"database"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-	Action   string `json:"action"` // tables | columns | rows | query
-	Schema   string `json:"schema"`
-	Table    string `json:"table"`
-	Limit    int    `json:"limit"`
-	Offset   int    `json:"offset"`
-	OrderBy  string `json:"order_by"`
-	Desc     bool   `json:"desc"`
-	SQL      string `json:"sql"`
+	Type     string         `json:"type"` // mysql | postgres
+	Database string         `json:"database"`
+	User     string         `json:"user"`
+	Password string         `json:"password"`
+	Action   string         `json:"action"` // tables | columns | rows
+	Schema   string         `json:"schema"`
+	Table    string         `json:"table"`
+	Limit    int            `json:"limit"`
+	Offset   int            `json:"offset"`
+	OrderBy  string         `json:"order_by"`
+	Desc     bool           `json:"desc"`
+	Filters  []viewerFilter `json:"filters"`
 }
+
+// viewerFilter is one condition of a rows request: column OP value.
+type viewerFilter struct {
+	Column string `json:"column"`
+	Op     string `json:"op"`
+	Value  string `json:"value"`
+}
+
+// viewerOps maps the accepted operators to SQL (the value is always bound).
+var viewerOps = map[string]string{
+	"eq": "= %s", "ne": "<> %s", "lt": "< %s", "le": "<= %s", "gt": "> %s", "ge": ">= %s",
+	"contains": "LIKE %s", "starts": "LIKE %s", "null": "IS NULL", "notnull": "IS NOT NULL",
+}
+
+const viewerMaxFilters = 10
 
 type viewerResult struct {
 	Columns   []string `json:"columns"`
@@ -87,40 +101,6 @@ func openViewerDB(req viewerRequest) (*sql.DB, error) {
 		return sql.Open("postgres", dsn.String())
 	}
 	return nil, fmt.Errorf("unsupported database type")
-}
-
-// readOnlyStatement accepts one statement that only reads: SELECT, WITH,
-// SHOW, DESCRIBE/DESC, EXPLAIN (not EXPLAIN ANALYZE, which executes) and
-// TABLE/VALUES.
-var leadingComments = regexp.MustCompile(`^(\s|--[^\n]*\n|/\*.*?\*/)+`)
-
-func readOnlyStatement(q string) (string, error) {
-	q = strings.TrimSpace(q)
-	q = strings.TrimSpace(strings.TrimSuffix(q, ";"))
-	if q == "" {
-		return "", errors.New("query is empty")
-	}
-	if len(q) > 64<<10 {
-		return "", errors.New("query is too long")
-	}
-	body := strings.TrimLeft(leadingComments.ReplaceAllString(q, ""), "( \t\r\n")
-	word := strings.ToUpper(strings.FieldsFunc(body+" ", func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
-	})[0])
-	switch word {
-	case "SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "TABLE", "VALUES":
-	case "EXPLAIN":
-		if regexp.MustCompile(`(?i)^EXPLAIN\s*(\(|\s)[^;]*\bANALY[SZ]E\b`).MatchString(body) {
-			return "", errors.New("EXPLAIN ANALYZE runs the statement: not allowed in the read-only viewer")
-		}
-	default:
-		return "", fmt.Errorf("the viewer is read-only: %s statements are not allowed (use SELECT, SHOW, DESCRIBE or EXPLAIN)", word)
-	}
-	// MySQL: SELECT ... INTO OUTFILE/DUMPFILE writes files; FOR UPDATE takes locks.
-	if regexp.MustCompile(`(?i)\bINTO\s+(OUTFILE|DUMPFILE)\b`).MatchString(q) {
-		return "", errors.New("INTO OUTFILE/DUMPFILE is not allowed")
-	}
-	return q, nil
 }
 
 func quoteIdent(dbType, name string) string {
@@ -176,12 +156,6 @@ func (r *Router) viewerTask(c echo.Context) error {
 		res, err = viewerColumns(ctx, tx, req)
 	case "rows":
 		res, err = viewerRows(ctx, tx, req)
-	case "query":
-		var q string
-		if q, err = readOnlyStatement(req.SQL); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": err.Error()})
-		}
-		res, err = viewerQuery(ctx, tx, req.Type, q, nil, clampLimit(req.Limit))
 	default:
 		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "unknown action"})
 	}
@@ -236,48 +210,77 @@ func viewerTables(ctx context.Context, tx *sql.Tx, req viewerRequest) (*viewerRe
 		       AND has_schema_privilege(n.oid, 'USAGE')
 		     ORDER BY n.nspname <> 'public', n.nspname, c.relname`
 	}
-	return viewerQuery(ctx, tx, req.Type, q, nil, 100000)
+	return viewerQuery(ctx, tx, q, nil, 100000)
 }
 
-// tableExists makes sure schema/table name a table of this database before
-// they are put (quoted) into SQL.
-func tableExists(ctx context.Context, tx *sql.Tx, req viewerRequest) (string, error) {
+// catalogTable looks the requested table up in the database's catalog (the
+// name is a bound parameter) and returns the quoted identifier built from
+// the name the catalog returns, with the table's column names (also from the
+// catalog). Nothing from the request is put into SQL text.
+func catalogTable(ctx context.Context, tx *sql.Tx, req viewerRequest) (string, []string, error) {
 	if req.Table == "" {
-		return "", &viewerError{http.StatusBadRequest, "table required"}
+		return "", nil, &viewerError{http.StatusBadRequest, "table required"}
 	}
-	var n int
+	schema := req.Schema
+	if req.Type == "postgres" && schema == "" {
+		schema = "public"
+	}
+	var catSchema, catTable string
 	var err error
 	if req.Type == "mysql" {
-		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`, req.Table).Scan(&n)
+		err = tx.QueryRowContext(ctx, `SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`, req.Table).Scan(&catTable)
 	} else {
-		schema := req.Schema
-		if schema == "" {
-			schema = "public"
-		}
-		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`, schema, req.Table).Scan(&n)
+		err = tx.QueryRowContext(ctx, `SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`, schema, req.Table).Scan(&catSchema, &catTable)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, &viewerError{http.StatusNotFound, "table not found"}
 	}
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	if n == 0 {
-		return "", &viewerError{http.StatusNotFound, "table not found"}
+	var rows *sql.Rows
+	if req.Type == "mysql" {
+		rows, err = tx.QueryContext(ctx, `SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position`, catTable)
+	} else {
+		rows, err = tx.QueryContext(ctx, `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`, catSchema, catTable)
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return "", nil, err
+		}
+		cols = append(cols, c)
+	}
+	if err := rows.Err(); err != nil {
+		return "", nil, err
 	}
 	if req.Type == "postgres" {
-		schema := req.Schema
-		if schema == "" {
-			schema = "public"
-		}
-		return quoteIdent("postgres", schema) + "." + quoteIdent("postgres", req.Table), nil
+		return quoteIdent("postgres", catSchema) + "." + quoteIdent("postgres", catTable), cols, nil
 	}
-	return quoteIdent("mysql", req.Table), nil
+	return quoteIdent("mysql", catTable), cols, nil
+}
+
+// catalogColumn returns the catalog's spelling of a requested column name.
+func catalogColumn(cols []string, name string) (string, bool) {
+	for _, c := range cols {
+		if c == name {
+			return c, true
+		}
+	}
+	return "", false
 }
 
 func viewerColumns(ctx context.Context, tx *sql.Tx, req viewerRequest) (*viewerResult, error) {
-	if _, err := tableExists(ctx, tx, req); err != nil {
+	if _, _, err := catalogTable(ctx, tx, req); err != nil {
 		return nil, err
 	}
 	if req.Type == "mysql" {
-		return viewerQuery(ctx, tx, "mysql", `SELECT column_name AS name, column_type AS type, is_nullable AS nullable, column_key AS `+"`key`"+`, column_default AS `+"`default`"+`, extra
+		return viewerQuery(ctx, tx, `SELECT column_name AS name, column_type AS type, is_nullable AS nullable, column_key AS `+"`key`"+`, column_default AS `+"`default`"+`, extra
 			FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position`,
 			[]any{req.Table}, 10000)
 	}
@@ -285,7 +288,7 @@ func viewerColumns(ctx context.Context, tx *sql.Tx, req viewerRequest) (*viewerR
 	if schema == "" {
 		schema = "public"
 	}
-	return viewerQuery(ctx, tx, "postgres", `SELECT c.column_name AS name,
+	return viewerQuery(ctx, tx, `SELECT c.column_name AS name,
 			CASE WHEN c.character_maximum_length IS NOT NULL THEN c.data_type || '(' || c.character_maximum_length || ')' ELSE c.data_type END AS type,
 			c.is_nullable AS nullable,
 			CASE WHEN EXISTS (SELECT 1 FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage k
@@ -298,7 +301,7 @@ func viewerColumns(ctx context.Context, tx *sql.Tx, req viewerRequest) (*viewerR
 }
 
 func viewerRows(ctx context.Context, tx *sql.Tx, req viewerRequest) (*viewerResult, error) {
-	table, err := tableExists(ctx, tx, req)
+	table, cols, err := catalogTable(ctx, tx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -307,50 +310,76 @@ func viewerRows(ctx context.Context, tx *sql.Tx, req viewerRequest) (*viewerResu
 	if offset < 0 {
 		offset = 0
 	}
-	q := "SELECT * FROM " + table
-	if req.OrderBy != "" {
-		// Only a real column of this table can be sorted on.
-		cols, err := viewerColumns(ctx, tx, req)
-		if err != nil {
-			return nil, err
+	var args []any
+	ph := func(v any) string {
+		args = append(args, v)
+		if req.Type == "postgres" {
+			return fmt.Sprintf("$%d", len(args))
 		}
-		ok := false
-		for _, row := range cols.Rows {
-			if len(row) > 0 && row[0] == req.OrderBy {
-				ok = true
-				break
+		return "?"
+	}
+	if len(req.Filters) > viewerMaxFilters {
+		return nil, &viewerError{http.StatusBadRequest, fmt.Sprintf("at most %d filters", viewerMaxFilters)}
+	}
+	var where []string
+	for _, f := range req.Filters {
+		col, ok := catalogColumn(cols, f.Column)
+		if !ok {
+			return nil, &viewerError{http.StatusBadRequest, "unknown column to filter on"}
+		}
+		tmpl, ok := viewerOps[f.Op]
+		if !ok {
+			return nil, &viewerError{http.StatusBadRequest, "unknown filter operator"}
+		}
+		lhs := quoteIdent(req.Type, col)
+		if f.Op == "contains" || f.Op == "starts" {
+			// Compare as text so any column type can be searched.
+			if req.Type == "postgres" {
+				lhs += "::text"
+			} else {
+				lhs = "CAST(" + lhs + " AS CHAR)"
 			}
 		}
+		switch f.Op {
+		case "null", "notnull":
+			where = append(where, lhs+" "+tmpl)
+		case "contains":
+			where = append(where, lhs+" "+fmt.Sprintf(tmpl, ph("%"+escapeLike(f.Value)+"%")))
+		case "starts":
+			where = append(where, lhs+" "+fmt.Sprintf(tmpl, ph(escapeLike(f.Value)+"%")))
+		default:
+			where = append(where, lhs+" "+fmt.Sprintf(tmpl, ph(f.Value)))
+		}
+	}
+	q := "SELECT * FROM " + table
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	if req.OrderBy != "" {
+		col, ok := catalogColumn(cols, req.OrderBy)
 		if !ok {
 			return nil, &viewerError{http.StatusBadRequest, "unknown column to sort on"}
 		}
-		q += " ORDER BY " + quoteIdent(req.Type, req.OrderBy)
+		q += " ORDER BY " + quoteIdent(req.Type, col)
 		if req.Desc {
 			q += " DESC"
 		}
 	}
-	q += fmt.Sprintf(" LIMIT %d OFFSET %d", limit+1, offset)
-	return viewerQuery(ctx, tx, req.Type, q, nil, limit)
+	q += " LIMIT " + ph(limit+1) + " OFFSET " + ph(offset)
+	return viewerQuery(ctx, tx, q, args, limit)
 }
 
-// viewerQuery runs one statement and returns at most limit rows as JSON-safe
+// escapeLike makes a filter value match literally inside LIKE (both engines
+// use backslash as the default escape character).
+func escapeLike(v string) string {
+	return strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(v)
+}
+
+// viewerQuery runs one of the viewer's own statements and returns at most limit rows as JSON-safe
 // values (text; NULL as nil; binary as a placeholder; long values cut).
-func viewerQuery(ctx context.Context, tx *sql.Tx, dbType, q string, args []any, limit int) (*viewerResult, error) {
+func viewerQuery(ctx context.Context, tx *sql.Tx, q string, args []any, limit int) (*viewerResult, error) {
 	start := time.Now()
-	var rows *sql.Rows
-	var err error
-	if dbType == "postgres" && args == nil {
-		// A prepared statement holds exactly one command: "SELECT 1; COMMIT;
-		// DROP ..." cannot leave the read-only transaction.
-		stmt, perr := tx.PrepareContext(ctx, q)
-		if perr != nil {
-			return nil, perr
-		}
-		defer stmt.Close()
-		rows, err = stmt.QueryContext(ctx)
-	} else {
-		rows, err = tx.QueryContext(ctx, q, args...)
-	}
+	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

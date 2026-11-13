@@ -282,7 +282,7 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `GET /api/v1/databases/:id/available-users` — Available users
 - `GET /api/v1/db-users` — List all DB users
 - `PATCH /api/v1/db-users/:id` — Update DB user
-- `GET /api/v1/databases/:id/viewer/tables|columns|rows`, `POST …/viewer/query` — Read-only database viewer
+- `GET /api/v1/databases/:id/viewer/tables|columns|rows` — Read-only database viewer (`rows`: `table, schema, limit, offset, order_by, desc, filters=[{column,op,value}]`)
 
 ### Backups (16 endpoints)
 - `POST /api/v1/backups/bulk` — Bulk create
@@ -559,7 +559,7 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
 | Raw vhost | `/tasks/vhost/get`, `/validate`, `/put` | put keeps the file only if `nginx -t` passes |
 | Disk usage, logs | `/tasks/site/usage`, `/tasks/logs/read` | |
 | SSH/SFTP accounts | `/tasks/sshftp/create`, `/delete` | chroot jail at `/home/<account>` (site at `/htdocs`, system dirs read-only, `/dev/{null,zero,urandom,random,tty}`, `/tmp`), fstab marker, sshd `-t` before reload; the account shares the site owner's uid/gid (`useradd -o`), mounts are made in the host mount namespace (`nsenter -t 1 -m` when the agent has a private one), key auth only, private key stored encrypted (`secrets.Encrypt`) |
-| Database viewer | `/tasks/db/view` | tables/columns/rows/query with the database's own account; read-only (SELECT-like statements only, READ ONLY transaction rolled back, one statement: MySQL without multiStatements, PostgreSQL prepared), 500 rows, 10 KB per value, timeouts; API `/databases/:id/viewer/*` needs site write, queries audited |
+| Database viewer | `/tasks/db/view` | tables, columns and rows (sort, pages, filters `column op value`) with the database's own account. No SQL text from a request reaches the database: table/column names come from the catalog (looked up as bound parameters), filter values, limit and offset are bound; READ ONLY transaction rolled back; 500 rows, 10 KB per value, timeouts. API `/databases/:id/viewer/tables|columns|rows` needs site write. There is no free-form SQL (use phpMyAdmin) |
 | PostgreSQL admin | `database.create`/`delete`, `dbuser.create`/`delete` jobs | psql runs as the `postgres` OS account (peer auth, `postgresAdmin`), never as root; users get the public schema (PG15+) |
 | Transfer | job `site.transfer` → `/tasks/site/transfer` | record + vhost regen only after the move; refused with SSH accounts, cron jobs or when suspended |
 | Cron | `/tasks/cron/sync` | `/etc/cron.d/sigardapanel-site-<id>`, runs as the site user (never root/system users) from the root; recorded only after the server accepted it; paused while suspended (`.suspended`), removed on delete |
