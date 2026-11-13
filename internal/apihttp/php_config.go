@@ -1,6 +1,7 @@
 package apihttp
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -34,6 +35,31 @@ func availablePHPVersions() []string {
 	return versions
 }
 
+// sitePHPVersions lists the PHP-FPM versions installed on the site's server
+// (asked from its agent). When the agent cannot answer and the server is the
+// panel host, the local /etc/php scan is used.
+func (h *siteHandler) sitePHPVersions(ctx context.Context, serverID int64) []string {
+	server, err := h.store.Servers.GetByID(ctx, serverID)
+	if err != nil || server == nil {
+		return []string{}
+	}
+	list, err := serverPHPVersions(ctx, server)
+	if err != nil {
+		if isLocalServer(*server) {
+			return availablePHPVersions()
+		}
+		return []string{}
+	}
+	versions := []string{}
+	for _, m := range list {
+		if v, ok := m["version"].(string); ok && phpVersionRe.MatchString(v) {
+			versions = append(versions, v)
+		}
+	}
+	sort.Strings(versions)
+	return versions
+}
+
 // getPHPConfig returns the site's PHP version, custom php.ini, and available versions.
 func (h *siteHandler) getPHPConfig(c echo.Context) error {
 	site, err := h.getSiteForUser(c)
@@ -47,7 +73,7 @@ func (h *siteHandler) getPHPConfig(c echo.Context) error {
 		"data": map[string]any{
 			"php_version":        site.PHPVersion.String,
 			"php_ini":            site.PHPIni.String,
-			"available_versions": availablePHPVersions(),
+			"available_versions": h.sitePHPVersions(c.Request().Context(), site.ServerID),
 			"default_note":       "Empty version = CloudPanel default (clp-php-fpm.sock)",
 		},
 	})
@@ -78,7 +104,7 @@ func (h *siteHandler) updatePHPConfig(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid PHP version format")
 		}
 		valid := false
-		for _, v := range availablePHPVersions() {
+		for _, v := range h.sitePHPVersions(c.Request().Context(), site.ServerID) {
 			if v == body.Version {
 				valid = true
 				break
