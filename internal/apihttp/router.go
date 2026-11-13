@@ -191,7 +191,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/sites/:id/app/restart", sitesH.appRestart, RequireAuth(s))
 	e.PUT("/api/v1/sites/:id/app/config", sitesH.appUpdateConfig, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/app/resource-usage", sitesH.appResourceUsage, RequireAuth(s))
-	e.PUT("/api/v1/sites/:id/app/resource-limits", sitesH.appUpdateResourceLimits, RequireAuth(s), RequireAdmin(s))
+	e.PUT("/api/v1/sites/:id/app/resource-limits", sitesH.appUpdateResourceLimits, RequireAuth(s))
 
 	// PHP runtime config (per-site version + php.ini)
 	e.GET("/api/v1/sites/:id/php/config", sitesH.getPHPConfig, RequireAuth(s))
@@ -206,7 +206,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/sites/:id/vhost", sitesH.getVhost, RequireAuth(s))
 	// Raw vhost editing can read/write arbitrary files via nginx directives, so it is admin-only.
 	e.PUT("/api/v1/sites/:id/vhost", sitesH.updateVhost, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/sites/:id/vhost/validate", sitesH.validateVhost, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/vhost/validate", sitesH.validateVhost, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/sites/:id/varnish", sitesH.getVarnish, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/varnish/purge", sitesH.purgeVarnish, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/security", sitesH.getSecurity, RequireAuth(s))
@@ -445,8 +445,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// ─── Git Deploy v2 ──
 	e.GET("/api/v1/sites/:id/git/branches", sitesH.gitBranches, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/git/log", sitesH.gitLog, RequireAuth(s))
-	e.POST("/api/v1/sites/:id/git/rollback", sitesH.gitRollback, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/sites/:id/git/checkout", sitesH.gitCheckout, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/sites/:id/git/rollback", sitesH.gitRollback, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/git/checkout", sitesH.gitCheckout, RequireAuth(s))
 
 	// ─── Firewall (UFW) Management ──
 	e.GET("/api/v1/servers/:id/firewall/status", stackH.firewallStatus, RequireAuth(s), RequireAdmin(s))

@@ -1157,14 +1157,19 @@ func (h *siteHandler) gitLog(c echo.Context) error {
 // gitRollback proxies to agent POST /tasks/git/rollback.
 func (h *siteHandler) gitRollback(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-	site, server, err := h.resolveSiteAndServer(c)
+	// Changing the deployed code needs write permission on the site (read
+	// assignees could do it, owners with the user role could not).
+	site, server, err := h.resolveSiteAndServerPerm(c, "write")
 	if err != nil {
 		return err
 	}
-	reqBody, _ := io.ReadAll(c.Request().Body)
-	var body map[string]any
-	json.Unmarshal(reqBody, &body)
-	body["root_path"] = site.RootPath
+	var req struct {
+		Commit string `json:"commit"`
+	}
+	if err := c.Bind(&req); err != nil || strings.TrimSpace(req.Commit) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "commit is required")
+	}
+	body := map[string]any{"commit": strings.TrimSpace(req.Commit), "root_path": site.RootPath}
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/rollback"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
@@ -1180,14 +1185,19 @@ func (h *siteHandler) gitRollback(c echo.Context) error {
 // gitCheckout proxies to agent POST /tasks/git/checkout.
 func (h *siteHandler) gitCheckout(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-	site, server, err := h.resolveSiteAndServer(c)
+	// Changing the deployed code needs write permission on the site (read
+	// assignees could do it, owners with the user role could not).
+	site, server, err := h.resolveSiteAndServerPerm(c, "write")
 	if err != nil {
 		return err
 	}
-	reqBody, _ := io.ReadAll(c.Request().Body)
-	var body map[string]any
-	json.Unmarshal(reqBody, &body)
-	body["root_path"] = site.RootPath
+	var req struct {
+		Branch string `json:"branch"`
+	}
+	if err := c.Bind(&req); err != nil || strings.TrimSpace(req.Branch) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "branch is required")
+	}
+	body := map[string]any{"branch": strings.TrimSpace(req.Branch), "root_path": site.RootPath}
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/git/checkout"
 	resp, err := agentRequest("POST", agentURL, server.AgentToken, body)
 	if err != nil {
@@ -1202,6 +1212,12 @@ func (h *siteHandler) gitCheckout(c echo.Context) error {
 
 // resolveSiteAndServer resolves site and its server from URL params.
 func (h *siteHandler) resolveSiteAndServer(c echo.Context) (*store.Site, *store.Server, error) {
+	return h.resolveSiteAndServerPerm(c, "read")
+}
+
+// resolveSiteAndServerPerm is resolveSiteAndServer requiring a permission
+// level on the site, checked before anything about the server is revealed.
+func (h *siteHandler) resolveSiteAndServerPerm(c echo.Context, perm string) (*store.Site, *store.Server, error) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
@@ -1212,7 +1228,8 @@ func (h *siteHandler) resolveSiteAndServer(c echo.Context) (*store.Site, *store.
 	}
 	// Ownership / assignment check: without it any logged-in user could read
 	// another tenant's repository (branches, history) or roll it back.
-	if !h.canAccess(c.Request().Context(), sessionFromEcho(c), site) {
+	if !h.canAccess(c.Request().Context(), sessionFromEcho(c), site) ||
+		(perm != "read" && !h.checkSitePermission(c.Request().Context(), sessionFromEcho(c), site, perm)) {
 		return nil, nil, echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 	server, err := h.store.Servers.GetByID(c.Request().Context(), site.ServerID)
@@ -1238,9 +1255,10 @@ func (h *siteHandler) appResourceUsage(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
 	}
 
-	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	_ = id
+	site, err := h.getSiteForUserPerm(c, sitePermRead)
+	if err != nil {
+		return err
 	}
 
 	server, err := h.store.Servers.GetByID(c.Request().Context(), site.ServerID)
@@ -1301,9 +1319,9 @@ func (h *siteHandler) appUpdateResourceLimits(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid site id")
 	}
 
-	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
-	if err != nil || site == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	site, err := h.getSiteForUserPerm(c, sitePermWrite)
+	if err != nil {
+		return err
 	}
 
 	var body struct {
@@ -1313,8 +1331,8 @@ func (h *siteHandler) appUpdateResourceLimits(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
 
-	if body.MemoryMax <= 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "memory_max is required (MB)")
+	if body.MemoryMax < 64 || body.MemoryMax > 65536 {
+		return echo.NewHTTPError(http.StatusBadRequest, "memory_max must be 64-65536 (MB)")
 	}
 
 	// Update memory limit in DB
@@ -1322,18 +1340,23 @@ func (h *siteHandler) appUpdateResourceLimits(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "update failed")
 	}
 
-	// Restart the app to apply new limits
-	server, err := h.store.Servers.GetByID(c.Request().Context(), site.ServerID)
-	if err != nil || server == nil || !server.AgentURL.Valid || server.AgentToken == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "agent not configured")
+	// Apply the new limit: app.restart rewrites the systemd unit with
+	// MemoryMax (a bare "systemctl restart" kept the old limit).
+	if site.AppStatus.String == "running" {
+		payload, _ := json.Marshal(map[string]any{
+			"site_id": site.ID, "domain": site.Domain, "root_path": site.RootPath,
+			"system_user": site.SystemUser.String, "app_port": site.AppPort.Int64,
+			"app_command": site.AppCommand.String, "app_memory_max": body.MemoryMax,
+		})
+		if err := h.store.Jobs.Create(c.Request().Context(), &jobmodel.Job{
+			ServerID: sql.NullInt64{Int64: site.ServerID, Valid: true},
+			SiteID:   sql.NullInt64{Int64: site.ID, Valid: true},
+			Type:     jobmodel.TypeAppRestart,
+			Payload:  string(payload),
+		}); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to enqueue the restart")
+		}
 	}
-
-	svcName := fmt.Sprintf("sigarda-app-%d", site.ID)
-	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/command/exec"
-	restartPayload := map[string]string{
-		"command": fmt.Sprintf("systemctl restart %s", svcName),
-	}
-	agentRequest("POST", agentURL, server.AgentToken, restartPayload)
 
 	h.audit.RecordAction(c.Request().Context(), sessionFromEcho(c).UserID, audit.ActionSiteUpdate, "site", id, map[string]any{
 		"memory_max": body.MemoryMax,

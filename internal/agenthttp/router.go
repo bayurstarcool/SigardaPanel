@@ -1161,9 +1161,35 @@ func (r *Router) siteDeployTask(c echo.Context) error {
 		// Cloning never executes repository code, so root may do it; ownership is
 		// handed to the site user right after so every later git/npm/pip step
 		// runs unprivileged.
-		output, err := r.executor.RunShell(ctx, "git", "clone", "-b", payload.Branch, "--", payload.Repo, payload.RootPath)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
+		cloneArgs := []string{"clone"}
+		if payload.Branch != "" {
+			cloneArgs = append(cloneArgs, "-b", payload.Branch)
+		}
+		if !exists {
+			cloneArgs = append(cloneArgs, "--", payload.Repo, payload.RootPath)
+			if output, err := r.executor.RunShell(ctx, "git", cloneArgs...); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
+			}
+		} else {
+			// The root exists but is not a repository (site.create writes
+			// starter files): "git clone" refuses a non-empty directory, so
+			// clone the history next to it and check it out in place.
+			tmp, err := os.MkdirTemp(filepath.Dir(payload.RootPath), ".sigarda-clone-")
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "prepare clone failed: "+err.Error())
+			}
+			defer os.RemoveAll(tmp)
+			cloneArgs = append(cloneArgs, "--no-checkout", "--", payload.Repo, tmp)
+			if output, err := r.executor.RunShell(ctx, "git", cloneArgs...); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
+			}
+			if err := os.Rename(filepath.Join(tmp, ".git"), filepath.Join(payload.RootPath, ".git")); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "install repository failed: "+err.Error())
+			}
+			if output, err := r.executor.RunShell(ctx, "git", "-C", payload.RootPath, "checkout", "-f", "HEAD", "--", "."); err != nil {
+				_ = os.RemoveAll(filepath.Join(payload.RootPath, ".git"))
+				return echo.NewHTTPError(http.StatusInternalServerError, "git checkout failed: "+strings.TrimSpace(output))
+			}
 		}
 		if haveSiteUser {
 			if out, err := r.executor.RunShell(ctx, "chown", "-R", fmt.Sprintf("%d:%d", siteUID, siteGID), payload.RootPath); err != nil {

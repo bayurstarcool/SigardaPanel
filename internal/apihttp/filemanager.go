@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"sigardapanel/internal/audit"
@@ -699,9 +700,12 @@ func (h *fileManagerHandler) compressEntries(c echo.Context) error {
 
 // addToZip walks src (file or dir) and writes entries under baseName inside the zip.
 func addToZip(zw *zip.Writer, src, baseName string) error {
-	info, err := os.Stat(src)
+	info, err := os.Lstat(src)
 	if err != nil {
 		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+		return nil // never follow links (they may point outside the site)
 	}
 	if !info.IsDir() {
 		return writeFileToZip(zw, src, baseName, info)
@@ -725,6 +729,11 @@ func addToZip(zw *zip.Writer, src, baseName string) error {
 			_, err := zw.Create(zipName + "/")
 			return err
 		}
+		// Symlinks (e.g. one to /etc/shadow committed in a repo) and special
+		// files are skipped: os.Open would follow the link out of the site.
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
 		return writeFileToZip(zw, path, zipName, fi)
 	})
 }
@@ -740,7 +749,7 @@ func writeFileToZip(zw *zip.Writer, path, zipName string, fi os.FileInfo) error 
 	if err != nil {
 		return err
 	}
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) // the entry may have been swapped for a link
 	if err != nil {
 		return err
 	}

@@ -223,7 +223,8 @@ func (h *siteHandler) deprovisionSSHUser(ctx echo.Context, username, homeDir str
 	if lines, err := readFstab(); err == nil {
 		var filtered []string
 		for _, l := range lines {
-			if strings.Contains(l, marker) || strings.Contains(l, htdocsDir) {
+			// Exact matches only: deleting "bo" must not drop "bob"'s mounts.
+			if f := strings.Fields(l); strings.HasSuffix(strings.TrimSpace(l), marker) || (len(f) >= 2 && f[1] == htdocsDir) {
 				continue
 			}
 			filtered = append(filtered, l)
@@ -426,8 +427,9 @@ func (h *siteHandler) validateVhost(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
-	// Access check: user must be admin, owner, or assigned to this site
-	if !h.canAccess(c.Request().Context(), sess, site) {
+	// Validation swaps the content into the live vhost to run nginx -t, so it
+	// needs the same rights as saving it (admin + write on the site).
+	if !h.checkSitePermission(c.Request().Context(), sess, site, "write") {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
@@ -783,7 +785,12 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 		"username": body.Username,
 	})
 
-	return c.JSON(http.StatusCreated, httpjson.Success{Data: map[string]any{"status": "success", "message": "SSH/FTP user created"}, RequestID: rid})
+	// The generated key pair is shown once (the UI displays it right after
+	// creation; it used to read these fields from a response without them).
+	return c.JSON(http.StatusCreated, httpjson.Success{Data: map[string]any{
+		"status": "success", "message": "SSH/FTP user created",
+		"username": body.Username, "ssh_public_key": pubKey, "ssh_private_key": privKey,
+	}, RequestID: rid})
 }
 
 func (h *siteHandler) deleteSshFtp(c echo.Context) error {

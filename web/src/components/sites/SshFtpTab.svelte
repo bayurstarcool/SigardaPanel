@@ -23,7 +23,16 @@
   const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
 
   function copyText(text: string, field: string) { navigator.clipboard.writeText(text); copiedField = field; setTimeout(() => copiedField = '', 1500); }
-  function sshUsername(): string { if (!site?.domain) return 'deploy'; return 'deploy-' + site.domain.replace(/\./g, '-'); }
+  // Linux usernames are limited to 31 characters here (^[a-z][a-z0-9_-]{0,30}$):
+  // long domains get a short hash suffix instead of failing with a 400.
+  function sshUsername(): string {
+    if (!site?.domain) return 'deploy';
+    const name = 'deploy-' + site.domain.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+    if (name.length <= 31) return name;
+    let h = 5381;
+    for (const ch of site.domain) h = ((h << 5) + h + ch.charCodeAt(0)) >>> 0;
+    return name.slice(0, 25).replace(/-+$/, '') + '-' + h.toString(36).slice(0, 5);
+  }
 
   $effect(() => { if (sshUsers.length === 0 && !sshLoading && sshLoaded === false) { sshLoaded = true; loadSSH(); } });
   $effect(() => { if (!sshInfoLoaded) { sshInfoLoaded = true; loadSSHInfo(); } });
