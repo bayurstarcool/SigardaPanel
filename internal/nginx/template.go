@@ -34,6 +34,9 @@ const staticTemplate = `server {
     # ACME challenge for Let's Encrypt (future use)
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
+        # Certificate validation must pass IP rules and basic auth.
+        allow all;
+        auth_basic off;
     }
 
     # Panel backups are stored under the site root: never serve them.
@@ -53,11 +56,14 @@ const staticTemplate = `server {
     auth_basic_user_file {{.BasicAuthPasswordPath}};
 {{end}}
 
+    # Access rules apply to every location (PHP, static files, the app);
+    # only the ACME challenge below stays open.
+{{range .BlockedIPs}}    deny {{.}};
+{{end}}{{range .AllowedIPs}}    allow {{.}};
+{{end}}{{if .AllowedIPs}}    deny all;
+{{end}}
     location / {
-{{range .BlockedIPs}}        deny {{.}};
-{{end}}{{range .AllowedIPs}}        allow {{.}};
-{{end}}{{if .AllowedIPs}}        deny all;
-{{end}}        try_files $uri $uri/ =404;
+        try_files $uri $uri/ =404;
     }
 
     # SigardaPanel marker
@@ -86,6 +92,9 @@ const phpTemplate = `server {
     # ACME challenge for Let's Encrypt
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
+        # Certificate validation must pass IP rules and basic auth.
+        allow all;
+        auth_basic off;
     }
 
     # Panel backups are stored under the site root: never serve them.
@@ -105,11 +114,14 @@ const phpTemplate = `server {
     auth_basic_user_file {{.BasicAuthPasswordPath}};
 {{end}}
 
+    # Access rules apply to every location (PHP, static files, the app);
+    # only the ACME challenge below stays open.
+{{range .BlockedIPs}}    deny {{.}};
+{{end}}{{range .AllowedIPs}}    allow {{.}};
+{{end}}{{if .AllowedIPs}}    deny all;
+{{end}}
     location / {
-{{range .BlockedIPs}}        deny {{.}};
-{{end}}{{range .AllowedIPs}}        allow {{.}};
-{{end}}{{if .AllowedIPs}}        deny all;
-{{end}}        try_files $uri $uri/ /index.php?$query_string;
+        try_files $uri $uri/ /index.php?$query_string;
     }
 
     location ~ \.php$ {
@@ -142,6 +154,9 @@ const nodeTemplate = `server {
     # ACME challenge for Let's Encrypt
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
+        # Certificate validation must pass IP rules and basic auth.
+        allow all;
+        auth_basic off;
     }
 
     # Panel backups are stored under the site root: never serve them.
@@ -158,11 +173,14 @@ const nodeTemplate = `server {
     auth_basic_user_file {{.BasicAuthPasswordPath}};
 {{end}}
 
+    # Access rules apply to every location (PHP, static files, the app);
+    # only the ACME challenge below stays open.
+{{range .BlockedIPs}}    deny {{.}};
+{{end}}{{range .AllowedIPs}}    allow {{.}};
+{{end}}{{if .AllowedIPs}}    deny all;
+{{end}}
     location / {
-{{range .BlockedIPs}}        deny {{.}};
-{{end}}{{range .AllowedIPs}}        allow {{.}};
-{{end}}{{if .AllowedIPs}}        deny all;
-{{end}}        proxy_pass http://127.0.0.1:{{.Port}};
+        proxy_pass http://127.0.0.1:{{.Port}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -188,6 +206,9 @@ const proxyTemplate = `server {
     # ACME challenge for Let's Encrypt
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
+        # Certificate validation must pass IP rules and basic auth.
+        allow all;
+        auth_basic off;
     }
 
     # Panel backups are stored under the site root: never serve them.
@@ -204,11 +225,14 @@ const proxyTemplate = `server {
     auth_basic_user_file {{.BasicAuthPasswordPath}};
 {{end}}
 
+    # Access rules apply to every location (PHP, static files, the app);
+    # only the ACME challenge below stays open.
+{{range .BlockedIPs}}    deny {{.}};
+{{end}}{{range .AllowedIPs}}    allow {{.}};
+{{end}}{{if .AllowedIPs}}    deny all;
+{{end}}
     location / {
-{{range .BlockedIPs}}        deny {{.}};
-{{end}}{{range .AllowedIPs}}        allow {{.}};
-{{end}}{{if .AllowedIPs}}        deny all;
-{{end}}        proxy_pass {{.ProxyPassURL}};
+        proxy_pass {{.ProxyPassURL}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -230,6 +254,9 @@ const staticSSLTemplate = `server {
     # ACME challenge for Let's Encrypt
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
+        # Certificate validation must pass IP rules and basic auth.
+        allow all;
+        auth_basic off;
     }
 
     # Panel backups are stored under the site root: never serve them.
@@ -249,11 +276,14 @@ const staticSSLTemplate = `server {
     auth_basic_user_file {{.BasicAuthPasswordPath}};
 {{end}}
 
+    # Access rules apply to every location (PHP, static files, the app);
+    # only the ACME challenge below stays open.
+{{range .BlockedIPs}}    deny {{.}};
+{{end}}{{range .AllowedIPs}}    allow {{.}};
+{{end}}{{if .AllowedIPs}}    deny all;
+{{end}}
     location / {
-{{range .BlockedIPs}}        deny {{.}};
-{{end}}{{range .AllowedIPs}}        allow {{.}};
-{{end}}{{if .AllowedIPs}}        deny all;
-{{end}}        try_files $uri $uri/ =404;
+        try_files $uri $uri/ =404;
     }
 
     # SigardaPanel marker
@@ -275,6 +305,9 @@ const phpSSLTemplate = `server {
     # ACME challenge for Let's Encrypt
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
+        # Certificate validation must pass IP rules and basic auth.
+        allow all;
+        auth_basic off;
     }
 
     # Panel backups are stored under the site root: never serve them.
@@ -294,11 +327,14 @@ const phpSSLTemplate = `server {
     auth_basic_user_file {{.BasicAuthPasswordPath}};
 {{end}}
 
+    # Access rules apply to every location (PHP, static files, the app);
+    # only the ACME challenge below stays open.
+{{range .BlockedIPs}}    deny {{.}};
+{{end}}{{range .AllowedIPs}}    allow {{.}};
+{{end}}{{if .AllowedIPs}}    deny all;
+{{end}}
     location / {
-{{range .BlockedIPs}}        deny {{.}};
-{{end}}{{range .AllowedIPs}}        allow {{.}};
-{{end}}{{if .AllowedIPs}}        deny all;
-{{end}}        try_files $uri $uri/ /index.php?$query_string;
+        try_files $uri $uri/ /index.php?$query_string;
     }
 
     location ~ \.php$ {
@@ -324,6 +360,9 @@ const nodeSSLTemplate = `server {
     # ACME challenge for Let's Encrypt
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
+        # Certificate validation must pass IP rules and basic auth.
+        allow all;
+        auth_basic off;
     }
 
     # Panel backups are stored under the site root: never serve them.
@@ -340,11 +379,14 @@ const nodeSSLTemplate = `server {
     auth_basic_user_file {{.BasicAuthPasswordPath}};
 {{end}}
 
+    # Access rules apply to every location (PHP, static files, the app);
+    # only the ACME challenge below stays open.
+{{range .BlockedIPs}}    deny {{.}};
+{{end}}{{range .AllowedIPs}}    allow {{.}};
+{{end}}{{if .AllowedIPs}}    deny all;
+{{end}}
     location / {
-{{range .BlockedIPs}}        deny {{.}};
-{{end}}{{range .AllowedIPs}}        allow {{.}};
-{{end}}{{if .AllowedIPs}}        deny all;
-{{end}}        proxy_pass http://127.0.0.1:{{.Port}};
+        proxy_pass http://127.0.0.1:{{.Port}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -363,6 +405,9 @@ const proxySSLTemplate = `server {
     # ACME challenge for Let's Encrypt
     location /.well-known/acme-challenge/ {
         root /var/www/certbot/{{.Domain}};
+        # Certificate validation must pass IP rules and basic auth.
+        allow all;
+        auth_basic off;
     }
 
     # Panel backups are stored under the site root: never serve them.
@@ -379,11 +424,14 @@ const proxySSLTemplate = `server {
     auth_basic_user_file {{.BasicAuthPasswordPath}};
 {{end}}
 
+    # Access rules apply to every location (PHP, static files, the app);
+    # only the ACME challenge below stays open.
+{{range .BlockedIPs}}    deny {{.}};
+{{end}}{{range .AllowedIPs}}    allow {{.}};
+{{end}}{{if .AllowedIPs}}    deny all;
+{{end}}
     location / {
-{{range .BlockedIPs}}        deny {{.}};
-{{end}}{{range .AllowedIPs}}        allow {{.}};
-{{end}}{{if .AllowedIPs}}        deny all;
-{{end}}        proxy_pass {{.ProxyPassURL}};
+        proxy_pass {{.ProxyPassURL}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
