@@ -170,6 +170,9 @@ func (h *siteHandler) create(c echo.Context) error {
 		DockerEnv      string `json:"docker_env,omitempty"`
 		DockerVolume   string `json:"docker_volume,omitempty"`
 		DockerRestart  string `json:"docker_restart,omitempty"`
+		// CloudflareProvision: false skips the DNS record even when the user
+		// has Cloudflare configured (absent = provision, as before).
+		CloudflareProvision *bool `json:"cloudflare_provision,omitempty"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -415,6 +418,9 @@ func (h *siteHandler) create(c echo.Context) error {
 	cloudflareDNS := map[string]any{"provisioned": false, "zone": "", "record_id": "", "error": ""}
 	cfEnabled := false
 	cfCfg, err := h.store.Cloudflare.GetConfig(userID)
+	if body.CloudflareProvision != nil && !*body.CloudflareProvision {
+		err = fmt.Errorf("skipped")
+	}
 	if err == nil && cfCfg.APIToken != "" {
 		cfEnabled = true
 		cfClient := cloudflare.NewClient(cloudflare.Config{APIToken: cfCfg.APIToken, Email: cfCfg.Email})
@@ -507,7 +513,9 @@ func (h *siteHandler) delete(c echo.Context) error {
 	// SSH/FTP jails bind-mount the site root: remove them on the server
 	// first (their rows used to vanish with the site while the Linux users,
 	// mounts and keys stayed, and lost their chroot on the next sshd sync).
-	h.removeSiteSSHAccounts(c.Request().Context(), site)
+	if err := h.removeSiteSSHAccounts(c.Request().Context(), site); err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, err.Error()+"; the site was not deleted")
+	}
 	// Its cron jobs would otherwise keep running from a deleted root.
 	if jobs, _ := h.store.Cron.ListBySiteID(c.Request().Context(), id); len(jobs) > 0 {
 		if err := h.syncSiteCron(c.Request().Context(), site, nil); err != nil {
@@ -990,6 +998,10 @@ func (h *siteHandler) transfer(c echo.Context) error {
 	// SSH/FTP jails bind-mount the current root path.
 	if accts, _ := h.store.SSH.ListBySiteID(c.Request().Context(), id); len(accts) > 0 {
 		return echo.NewHTTPError(http.StatusConflict, "remove the site's SSH/FTP accounts before transferring it")
+	}
+	// A container bind-mounts the current root; it is not re-created by the move.
+	if site.Runtime == "docker" {
+		return echo.NewHTTPError(http.StatusConflict, "docker sites cannot be transferred")
 	}
 	// Cron jobs run as the current owner's Linux user from the current root.
 	if jobs, _ := h.store.Cron.ListBySiteID(c.Request().Context(), id); len(jobs) > 0 {

@@ -159,3 +159,41 @@ func TestSiteCreatePayloadIncludesIPRestrictions(t *testing.T) {
 		t.Fatalf("security = %+v (%s)", p.Security, raw)
 	}
 }
+
+func TestOldAgentIgnoringIPRulesIsReported(t *testing.T) {
+	s := regenWorkerDB(t)
+	ctx := t.Context()
+	newAgent := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(agentclient.TaskResult{OK: true, AccessRules: newAgent})
+	}))
+	defer ts.Close()
+	w := NewWorker(s, agentclient.New(ts.URL, "token"))
+	admin := &store.User{Username: "root", Email: "r@example.com", PasswordHash: "x", Role: "super_admin"}
+	s.Users.Create(ctx, admin)
+	srv := &store.Server{Name: "s", Hostname: "h", Status: "active", AgentToken: "token", AgentURL: sql.NullString{String: ts.URL, Valid: true}}
+	s.Servers.Create(ctx, srv)
+	site := &store.Site{ServerID: srv.ID, Name: "n", Domain: "old.example.com", Runtime: "static", RootPath: "/home/u/htdocs/old.example.com", Status: "active"}
+	s.Sites.Create(ctx, site)
+	s.Sites.UpdateStatus(ctx, site.ID, "active")
+	s.IPRestrictions.Create(ctx, &store.IPRestriction{SiteID: site.ID, IP: "10.0.0.0/8", Action: "allow"})
+	count := func() int {
+		var n int
+		s.DB().QueryRow(`SELECT COUNT(*) FROM notifications WHERE type = 'agent_outdated'`).Scan(&n)
+		return n
+	}
+	run := func() {
+		s.Jobs.Create(ctx, &jobmodel.Job{Type: jobmodel.TypeSiteCreate, ServerID: sql.NullInt64{Int64: srv.ID, Valid: true},
+			SiteID: sql.NullInt64{Int64: site.ID, Valid: true}, Payload: `{"site_id":1,"domain":"old.example.com","root_path":"/home/u/htdocs/old.example.com"}`})
+		w.processOne(ctx)
+	}
+	run()
+	if count() != 1 {
+		t.Fatalf("old agent not reported (notifications=%d)", count())
+	}
+	newAgent = true
+	run()
+	if count() != 1 {
+		t.Fatal("a current agent was reported as outdated")
+	}
+}

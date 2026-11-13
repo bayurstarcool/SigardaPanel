@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"sigardapanel/internal/secrets"
 )
 
 // BackupStorageProvider represents an S3-compatible storage config.
@@ -50,10 +52,14 @@ func (s *SQLiteBackupStorageProviderStore) Create(ctx context.Context, p *Backup
 			return fmt.Errorf("clear defaults: %w", err)
 		}
 	}
+	secret, err := secrets.Encrypt(p.SecretKey)
+	if err != nil {
+		return fmt.Errorf("encrypt provider secret: %w", err)
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO backup_storage_providers (name, provider_type, bucket, endpoint, region, access_key, secret_key, is_default, retention_days)
 	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.ProviderType, p.Bucket, p.Endpoint, p.Region, p.AccessKey, p.SecretKey, providerBoolToInt(p.IsDefault), p.RetentionDays,
+		p.Name, p.ProviderType, p.Bucket, p.Endpoint, p.Region, p.AccessKey, secret, providerBoolToInt(p.IsDefault), p.RetentionDays,
 	)
 	if err != nil {
 		return fmt.Errorf("insert backup provider: %w", err)
@@ -102,9 +108,13 @@ func (s *SQLiteBackupStorageProviderStore) Update(ctx context.Context, p *Backup
 			return fmt.Errorf("clear defaults: %w", err)
 		}
 	}
-	_, err := s.db.ExecContext(ctx,
+	secret, err := secrets.Encrypt(p.SecretKey)
+	if err != nil {
+		return fmt.Errorf("encrypt provider secret: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx,
 		`UPDATE backup_storage_providers SET name=?, provider_type=?, bucket=?, endpoint=?, region=?, access_key=?, secret_key=?, is_default=?, retention_days=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-		p.Name, p.ProviderType, p.Bucket, p.Endpoint, p.Region, p.AccessKey, p.SecretKey, providerBoolToInt(p.IsDefault), p.RetentionDays, p.ID,
+		p.Name, p.ProviderType, p.Bucket, p.Endpoint, p.Region, p.AccessKey, secret, providerBoolToInt(p.IsDefault), p.RetentionDays, p.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update backup provider: %w", err)
@@ -147,14 +157,31 @@ func scanBackupProvider(row *sql.Row) (*BackupStorageProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan backup provider: %w", err)
 	}
+	if err := decryptProviderSecret(&p); err != nil {
+		return nil, err
+	}
 	return &p, nil
 }
 
+// decryptProviderSecret: secrets are stored encrypted; ones saved before
+// that read as they are.
+func decryptProviderSecret(p *BackupStorageProvider) error {
+	sk, err := secrets.Decrypt(p.SecretKey)
+	if err != nil {
+		return fmt.Errorf("decrypt provider secret: %w", err)
+	}
+	p.SecretKey = sk
+	return nil
+}
+
 func scanBackupProviderRows(rows *sql.Rows, p *BackupStorageProvider) error {
-	return rows.Scan(
+	if err := rows.Scan(
 		&p.ID, &p.Name, &p.ProviderType, &p.Bucket, &p.Endpoint, &p.Region,
 		&p.AccessKey, &p.SecretKey, &p.IsDefault, &p.RetentionDays, &p.CreatedAt, &p.UpdatedAt,
-	)
+	); err != nil {
+		return err
+	}
+	return decryptProviderSecret(p)
 }
 
 func providerBoolToInt(b bool) int {

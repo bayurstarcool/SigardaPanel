@@ -18,6 +18,13 @@
   let success = $state('');
   let recoveryCodes = $state<string[]>([]);
 
+  // API errors are either a string or {code, message} (echo/CSRF errors).
+  function errText(data: any, fallback: string): string {
+    const e = data?.error;
+    if (!e) return fallback;
+    return typeof e === 'string' ? e : e.message || e.code || fallback;
+  }
+
   onMount(async () => {
     if (!auth.user) { goto('/login'); return; }
     await checkStatus();
@@ -47,7 +54,7 @@
         headers: { ...bearerHeaders() }
       });
       const data = await res.json();
-      if (data.error) { error = data.error; return; }
+      if (data.error) { error = errText(data, 'Request failed'); return; }
       qrUrl = data.qr_url;
       secret = data.secret;
       setupPhase = true;
@@ -76,12 +83,13 @@
         body: JSON.stringify({ code })
       });
       const data = await res.json();
-      if (data.error) { error = data.error; return; }
+      if (data.error) { error = errText(data, 'Request failed'); return; }
       enabled = true;
       setupPhase = false;
       success = '2FA enabled successfully!';
       code = '';
-      await getRecoveryCodes();
+      // The first recovery codes come with enabling.
+      if (data.recovery_codes) recoveryCodes = data.recovery_codes;
     } catch (e) {
       error = 'Failed to enable 2FA';
     }
@@ -103,7 +111,7 @@
         body: JSON.stringify({ code })
       });
       const data = await res.json();
-      if (data.error) { error = data.error; return; }
+      if (data.error) { error = errText(data, 'Request failed'); return; }
       enabled = false;
       setupPhase = false;
       success = '2FA disabled successfully';
@@ -114,20 +122,6 @@
     }
   }
 
-  async function getRecoveryCodes() {
-    try {
-      const res = await fetch('/api/v1/auth/2fa/recovery-codes', {
-        method: 'POST',
-        headers: { ...bearerHeaders() }
-      });
-      const data = await res.json();
-      if (data.recovery_codes) {
-        recoveryCodes = data.recovery_codes;
-      }
-    } catch (e) {
-      console.error('Failed to get recovery codes');
-    }
-  }
 </script>
 
 <DashboardLayout active="Settings">
@@ -173,7 +167,11 @@
               <div>
                 <h3 class="text-sm font-semibold text-fg">1. Scan QR code</h3>
                 <p class="mt-1 text-[13px] text-muted">Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)</p>
-                {#if qrDataUrl}
+                {#if !qrUrl}
+                  <!-- Setup was started earlier (e.g. before a reload): the secret is not shown again. -->
+                  <p class="mt-2 text-[13px] text-muted">Setup was started earlier. Start again to get a new QR code.</p>
+                  <button class="btn btn-secondary btn-sm mt-2" onclick={startSetup}><KeyRound size={14} /> Start again</button>
+                {:else if qrDataUrl}
                   <div class="mt-3 inline-block rounded-lg border border-line bg-white p-3">
                     <img src={qrDataUrl} alt="QR code for your authenticator app" width="180" height="180" />
                   </div>

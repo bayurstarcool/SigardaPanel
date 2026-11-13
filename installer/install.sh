@@ -229,6 +229,9 @@ Environment=HOST=127.0.0.1
 Environment=PORT=7720
 Environment=ORIGIN=${ORIGIN}
 Environment=SIGARDAPANEL_API_URL=http://127.0.0.1:7700
+# adapter-node refuses bodies over 512K by default (file manager uploads
+# go through the web process; the API caps them at 32M).
+Environment=BODY_SIZE_LIMIT=34M
 ExecStart=/usr/bin/node ${WEB_DIR}/index.js
 Restart=always
 RestartSec=3

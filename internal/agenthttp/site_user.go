@@ -140,6 +140,11 @@ func (r *Router) siteTransferTask(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "already in place", "root_path": p.NewRoot})
 	}
 	if _, err := os.Lstat(p.NewRoot); err == nil {
+		// A retry after the move went through (lost response, worker
+		// restart): the files are already in place.
+		if _, oldErr := os.Lstat(p.OldRoot); os.IsNotExist(oldErr) {
+			return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "already moved", "root_path": p.NewRoot})
+		}
 		return echo.NewHTTPError(http.StatusConflict, "the target "+p.NewRoot+" already exists")
 	}
 	owner, err := r.ensureSiteUser(ctx, p.SystemUser)

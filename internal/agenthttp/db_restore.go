@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// restoreDatabase is one of the site's databases a restore may import into.
-// MySQL/MariaDB imports run as root over the local socket (the dedicated
-// backup account is read-only); PostgreSQL uses the database's own account.
+// restoreDatabase is one of the site's databases a restore may import into,
+// with an account of that database (the panel sends one whose password it
+// holds).
 type restoreDatabase struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
@@ -21,27 +21,44 @@ type restoreDatabase struct {
 
 func isSQLDump(path string) bool { return strings.HasSuffix(strings.ToLower(path), ".sql") }
 
-// importDatabaseDump loads a plain SQL dump into an existing database. Both
-// clients stop at the first error; psql applies the dump in one transaction.
-func (r *Router) importDatabaseDump(ctx context.Context, db restoreDatabase, file string) (string, error) {
+// importDatabaseDump loads a plain SQL dump into an existing database.
+//
+// Dumps live in the site's own (user-writable) tree, so their content is the
+// site owner's: the client runs as the site's Linux user (nobody without
+// one), never root, with the database's own account and the dump on stdin.
+// Client meta-commands such as \! therefore only get the site user's rights,
+// and the SQL only that account's privileges. Both clients stop at the first
+// error; psql applies the dump in one transaction.
+func (r *Router) importDatabaseDump(ctx context.Context, db restoreDatabase, file string, uid, gid uint32) (string, error) {
 	if !isValidDBIdentifier(db.Name) {
 		return "", fmt.Errorf("invalid database name %q", db.Name)
 	}
-	if strings.ContainsAny(file, " \t\r\n;'\"\\") {
-		return "", fmt.Errorf("unsafe dump path")
+	if !isValidDBIdentifier(db.User) || db.Password == "" {
+		return "", fmt.Errorf("no account of database %s is known to the panel (create a database user first)", db.Name)
 	}
+	f, err := os.Open(file)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
 	switch strings.ToLower(db.Type) {
 	case "mysql", "mariadb":
-		return r.executor.RunShell(ctx, "mysql", db.Name, "-e", "source "+file)
+		return r.executor.RunAsUserInput(ctx, uid, gid, []string{"MYSQL_PWD=" + db.Password}, f,
+			"mysql", "--no-defaults", "-u"+db.User, db.Name)
 	case "postgres", "postgresql":
-		if !isValidDBIdentifier(db.User) {
-			return "", fmt.Errorf("invalid database user")
-		}
-		return r.executor.RunShellEnv(ctx, []string{"PGPASSWORD=" + db.Password}, "psql",
-			"-U"+db.User, "-h", "localhost", "-d", db.Name, "-v", "ON_ERROR_STOP=1", "--single-transaction", "-q", "-f", file)
+		return r.executor.RunAsUserInput(ctx, uid, gid, []string{"PGPASSWORD=" + db.Password}, f,
+			"psql", "-X", "-U"+db.User, "-h", "localhost", "-d", db.Name, "-v", "ON_ERROR_STOP=1", "--single-transaction", "-q", "-f", "-")
 	default:
 		return "", fmt.Errorf("unsupported database type %q", db.Type)
 	}
+}
+
+// restoreRunAs is the unprivileged account dump imports run as.
+func restoreRunAs(systemUser string) (uint32, uint32) {
+	if uid, gid, ok := siteUserIDs(systemUser); ok {
+		return uid, gid
+	}
+	return 65534, 65534 // nobody
 }
 
 // pickDumpDatabase chooses the database a single-database dump belongs to:
@@ -68,7 +85,7 @@ func pickDumpDatabase(dbs []restoreDatabase, fileName string) (restoreDatabase, 
 // importBundleDumps imports the database_dumps/<name>.sql files of a full
 // backup into the matching databases. Dumps without a matching database
 // (e.g. one deleted since) are skipped and reported.
-func (r *Router) importBundleDumps(ctx context.Context, dumpsDir string, dbs []restoreDatabase) (restored, skipped []string, err error) {
+func (r *Router) importBundleDumps(ctx context.Context, dumpsDir string, dbs []restoreDatabase, uid, gid uint32) (restored, skipped []string, err error) {
 	entries, rerr := os.ReadDir(dumpsDir)
 	if rerr != nil {
 		return nil, nil, nil // a files-only archive
@@ -90,7 +107,7 @@ func (r *Router) importBundleDumps(ctx context.Context, dumpsDir string, dbs []r
 			skipped = append(skipped, strings.TrimSuffix(n, ".sql"))
 			continue
 		}
-		if out, err := r.importDatabaseDump(ctx, db, filepath.Join(dumpsDir, n)); err != nil {
+		if out, err := r.importDatabaseDump(ctx, db, filepath.Join(dumpsDir, n), uid, gid); err != nil {
 			return restored, skipped, fmt.Errorf("import into %s failed: %s", db.Name, strings.TrimSpace(out+" "+err.Error()))
 		}
 		restored = append(restored, db.Name)

@@ -13,6 +13,7 @@ import (
 	"sigardapanel/internal/jobmodel"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -21,7 +22,6 @@ import (
 	"sigardapanel/internal/nginx"
 	"sigardapanel/internal/store"
 )
-
 
 var sshUsernameRegex = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
 
@@ -53,17 +53,29 @@ func (h *siteHandler) sshAccountsOnServer(ctx context.Context, serverID int64, w
 
 // removeSiteSSHAccounts deprovisions every SSH/FTP account of a site on its
 // server (used when the site is deleted; their jails bind-mount the site).
-func (h *siteHandler) removeSiteSSHAccounts(ctx context.Context, site *store.Site) {
+// sshMu serializes SSH/FTP account changes: each one sends the agent the
+// full list of accounts (it rewrites the sshd jail config from it), so two
+// concurrent changes could each drop the other's account from the jails.
+var sshMu sync.Mutex
+
+// removeSiteSSHAccounts removes the site's SSH/FTP accounts on its server.
+// It fails if any account could not be removed: deleting the site anyway
+// would drop the record while the Linux user and its key stay, and the next
+// jail rewrite would leave that user unconfined.
+func (h *siteHandler) removeSiteSSHAccounts(ctx context.Context, site *store.Site) error {
+	sshMu.Lock()
+	defer sshMu.Unlock()
 	users, _ := h.store.SSH.ListBySiteID(ctx, site.ID)
 	for _, u := range users {
 		code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/delete",
 			map[string]any{"username": u.Username, "accounts": h.sshAccountsOnServer(ctx, site.ServerID, u.Username, "")}, 2*time.Minute)
 		if err != nil || code >= 400 {
 			slog.Warn("site delete: ssh account not removed", "site_id", site.ID, "user", u.Username, "error", err, "message", agentMessage(out, ""))
-			continue
+			return fmt.Errorf("SSH/FTP account %s could not be removed from the server: %s", u.Username, agentMessage(out, fmt.Sprint(err)))
 		}
 		_ = h.store.SSH.Delete(ctx, site.ID, u.ID)
 	}
+	return nil
 }
 
 // siteAgentCall calls the agent of the server that hosts site.
@@ -456,6 +468,19 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 	if site.RootPath == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "the site has no root path")
 	}
+	// Panel usernames become site owners' Linux users on the servers their
+	// sites land on: an SSH account with such a name would later be reused
+	// as that owner's account (its key held by this tenant).
+	if u, _ := h.store.Users.GetByUsername(ctx, body.Username); u != nil {
+		return echo.NewHTTPError(http.StatusConflict, "this name belongs to a panel user; choose another SSH username")
+	}
+	var n int
+	_ = h.store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sites WHERE system_user = ?`, body.Username).Scan(&n)
+	if n > 0 {
+		return echo.NewHTTPError(http.StatusConflict, "this name is a site's system user; choose another SSH username")
+	}
+	sshMu.Lock()
+	defer sshMu.Unlock()
 	// The account (a chrooted Linux user) is created on the site's server.
 	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/create", map[string]any{
 		"username": body.Username, "site_root": site.RootPath, "ssh_keys": body.SSHKeys,
@@ -523,6 +548,8 @@ func (h *siteHandler) deleteSshFtp(c echo.Context) error {
 	if site == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
+	sshMu.Lock()
+	defer sshMu.Unlock()
 	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/delete",
 		map[string]any{"username": user.Username, "accounts": h.sshAccountsOnServer(ctx, site.ServerID, user.Username, "")}, 2*time.Minute)
 	if err != nil && code == 0 {

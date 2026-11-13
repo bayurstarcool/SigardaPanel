@@ -287,7 +287,7 @@ func (h *fileManagerHandler) uploadFile(c echo.Context) error {
 	req.ContentLength = src.Size
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/octet-stream")
-	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
+	resp, err := agentClient(10 * time.Minute).Do(req)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
@@ -330,7 +330,7 @@ func (h *fileManagerHandler) downloadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to prepare download")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := (&http.Client{Timeout: 30 * time.Minute}).Do(req)
+	resp, err := agentClient(30 * time.Minute).Do(req)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "agent unreachable")
 	}
@@ -340,6 +340,9 @@ func (h *fileManagerHandler) downloadFile(c echo.Context) error {
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out)
 		if out == nil {
 			out = map[string]any{}
+		}
+		if resp.StatusCode == http.StatusNotFound && agentMessage(out, "Not Found") == "Not Found" {
+			return echo.NewHTTPError(http.StatusBadGateway, "the agent on this server is too old for the file manager; update the agent")
 		}
 		return agentHTTPError(resp.StatusCode, out)
 	}

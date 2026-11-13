@@ -39,7 +39,7 @@
     if (!auth.user || document.hidden) return;
     try {
       const data = await apiFetch(auth.token, 'GET', 'notifications/unread-count');
-      unreadCount = data?.unread ?? 0;
+      unreadCount = data?.count ?? data?.unread ?? 0;
     } catch {
       // silent — the header must never break on a failed poll
     }

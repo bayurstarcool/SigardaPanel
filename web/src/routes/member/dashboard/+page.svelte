@@ -1,17 +1,14 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
-  import { Shield, Copy, Check, ArrowRight, Server, Globe, Activity, Key, CreditCard, LayoutDashboard } from 'lucide-svelte';
+  import { Shield, ArrowRight, Server, Globe, Activity, Key, CreditCard, LayoutDashboard } from 'lucide-svelte';
   import StatCard from '$components/StatCard.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import { onMount } from 'svelte';
 
-  let token = $state('');
-  let copied = $state(false);
   let servers = $state(0);
   let sites = $state(0);
 
   onMount(() => {
-    token = auth.token || '';
     // Fetch real stats — the HttpOnly session cookie authenticates via the
     // proxy; an explicit Bearer header is only needed for impersonation.
     if (auth.user) {
@@ -26,11 +23,6 @@
     }
   });
 
-  function copyToken() {
-    navigator.clipboard.writeText(token);
-    copied = true;
-    setTimeout(() => copied = false, 2000);
-  }
 
   const links = [
     { href: '/member/api-keys', title: 'API Keys', desc: 'Manage your API tokens and access.', icon: Key },
@@ -70,15 +62,9 @@
       <h2 class="card-title">API token</h2>
     </div>
     <div class="card-body">
-      <p class="mb-3 text-[13px] text-muted">Use this token to authenticate API requests and CLI commands.</p>
-      <div class="flex items-center gap-2">
-        <div class="min-w-0 flex-1 truncate rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[13px] text-muted">
-          {token || 'No token available'}
-        </div>
-        <button onclick={copyToken} class="btn btn-secondary btn-icon" aria-label="Copy token" title="Copy token" disabled={!token}>
-          {#if copied}<Check size={14} class="text-success" />{:else}<Copy size={14} />{/if}
-        </button>
-      </div>
+      <!-- The session token is HttpOnly by design and never shown: API access uses API keys. -->
+      <p class="mb-3 text-[13px] text-muted">Create an API key to authenticate API requests and CLI commands.</p>
+      <a href="/member/api-keys" class="btn btn-secondary btn-sm"><Key size={14} /> Manage API keys</a>
       <div class="mt-4 rounded-lg border border-line bg-surface-2 p-3">
         <p class="mb-1.5 text-xs text-subtle">Quick start with CLI:</p>
         <code class="font-mono text-[13px] break-all text-fg">sigardapanel login --api-url https://panel.sigarda.dev</code>

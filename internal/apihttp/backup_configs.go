@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 
@@ -105,6 +106,12 @@ func (h *backupConfigHandler) create(c echo.Context) error {
 		ExcludePatterns: body.ExcludePatterns,
 		DatabaseIDs:     body.DatabaseIDs,
 	}
+	if err := validateExcludePatterns(body.ExcludePatterns); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if body.RetentionDays != nil && *body.RetentionDays < 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "retention_days must be 0 (keep) or more")
+	}
 	if body.RetentionDays != nil {
 		cfg.RetentionDays = *body.RetentionDays
 	}
@@ -194,10 +201,16 @@ func (h *backupConfigHandler) update(c echo.Context) error {
 		existing.Enabled = *body.Enabled
 	}
 	if body.ExcludePatterns != nil {
+		if err := validateExcludePatterns(body.ExcludePatterns); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		existing.ExcludePatterns = body.ExcludePatterns
 	}
 	if body.DatabaseIDs != nil {
 		existing.DatabaseIDs = body.DatabaseIDs
+	}
+	if body.RetentionDays != nil && *body.RetentionDays < 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "retention_days must be 0 (keep) or more")
 	}
 	if body.RetentionDays != nil {
 		existing.RetentionDays = *body.RetentionDays
@@ -327,7 +340,7 @@ func (h *backupConfigHandler) run(c echo.Context) error {
 			if err := h.store.Backups.Create(ctx, backup); err != nil {
 				continue
 			}
-			payloadMap := map[string]any{"backup_id": backup.ID, "site_id": site.ID, "domain": site.Domain, "root_path": site.RootPath, "storage": storageType, "backup_type": "both", "databases": dbPayloads, "scheduled": true}
+			payloadMap := map[string]any{"backup_id": backup.ID, "site_id": site.ID, "domain": site.Domain, "root_path": site.RootPath, "storage": storageType, "backup_type": "both", "databases": dbPayloads, "scheduled": true, "exclude_patterns": cfg.ExcludePatterns}
 			if provider != nil {
 				payloadMap["s3_config"] = map[string]string{"bucket": provider.Bucket, "endpoint": provider.Endpoint, "region": provider.Region, "access_key": provider.AccessKey, "secret_key": provider.SecretKey}
 			}
@@ -351,6 +364,7 @@ func (h *backupConfigHandler) run(c echo.Context) error {
 			payloadMap := map[string]any{
 				"backup_id": backup.ID, "site_id": site.ID, "domain": site.Domain,
 				"root_path": site.RootPath, "storage": storageType, "scheduled": true,
+				"exclude_patterns": cfg.ExcludePatterns,
 			}
 			if provider != nil {
 				payloadMap["s3_config"] = map[string]string{
@@ -474,4 +488,25 @@ func backupConfigToMap(cfg store.BackupConfig) map[string]any {
 		m["next_run_at"] = cfg.NextRunAt.Time
 	}
 	return m
+}
+
+// validateExcludePatterns mirrors the agent's check of backup exclude
+// patterns (glob syntax, one line each, at most 50).
+func validateExcludePatterns(in []string) error {
+	if len(in) > 50 {
+		return fmt.Errorf("too many exclude patterns (max 50)")
+	}
+	for _, p := range in {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if len(p) > 200 || strings.ContainsAny(p, "\x00\r\n") || p == "." || p == "*" || p == "/" {
+			return fmt.Errorf("invalid exclude pattern %q", p)
+		}
+		if _, err := path.Match(p, "x"); err != nil {
+			return fmt.Errorf("invalid exclude pattern %q", p)
+		}
+	}
+	return nil
 }

@@ -20,11 +20,13 @@ const healthCheckTimeout = 10 * time.Second
 
 // HealthChecker periodically pings all registered agents and updates server health status.
 type HealthChecker struct {
-	store   *store.Store
-	client  *http.Client
-	wg      sync.WaitGroup
-	stopCh  chan struct{}
-	stopped chan struct{}
+	store  *store.Store
+	client *http.Client
+	wg     sync.WaitGroup
+	// authClient verifies TLS (it carries the agent token).
+	authClient *http.Client
+	stopCh     chan struct{}
+	stopped    chan struct{}
 }
 
 // NewHealthChecker creates a new HealthChecker.
@@ -39,8 +41,11 @@ func NewHealthChecker(s *store.Store) *HealthChecker {
 			Timeout:   healthCheckTimeout,
 			Transport: transport,
 		},
-		stopCh:  make(chan struct{}),
-		stopped: make(chan struct{}),
+		// The token check sends the agent token: never over a TLS
+		// connection whose certificate was not verified.
+		authClient: &http.Client{Timeout: healthCheckTimeout},
+		stopCh:     make(chan struct{}),
+		stopped:    make(chan struct{}),
 	}
 }
 
@@ -170,7 +175,11 @@ func (hc *HealthChecker) tokenRejected(ctx context.Context, srv store.Server) bo
 		return false
 	}
 	req.Header.Set("Authorization", "Bearer "+srv.AgentToken)
-	resp, err := hc.client.Do(req)
+	client := hc.authClient
+	if client == nil {
+		client = &http.Client{Timeout: healthCheckTimeout}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}

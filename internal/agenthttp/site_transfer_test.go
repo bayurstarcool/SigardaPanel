@@ -28,7 +28,11 @@ func TestSiteTransferMovesRoot(t *testing.T) {
 	if _, err := os.Stat(oldRoot); err == nil {
 		t.Fatal("old root left behind")
 	}
-	// The target exists now: a second transfer into it is refused.
+	// A retry after the move succeeded is a success, not a conflict.
+	if rec := postJSON(t, h, "/tasks/site/transfer", body); rec.Code != http.StatusOK {
+		t.Fatalf("retried transfer = %d %s", rec.Code, rec.Body.String())
+	}
+	// The target exists and the old root too: a second transfer is refused.
 	os.MkdirAll(oldRoot, 0o755)
 	if rec := postJSON(t, h, "/tasks/site/transfer", body); rec.Code != http.StatusConflict {
 		t.Fatalf("transfer onto an existing root = %d %s", rec.Code, rec.Body.String())

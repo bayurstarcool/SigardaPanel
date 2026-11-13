@@ -172,14 +172,17 @@
     if (selectedIds.size === 0) return;
     bulkDeleting = true;
     try {
-      await apiFetch(auth.token, 'POST', `cloudflare/zones/${zoneId}/dns/bulk-delete`, {
+      const res = await apiFetch(auth.token, 'POST', `cloudflare/zones/${zoneId}/dns/bulk-delete`, {
         record_ids: Array.from(selectedIds),
       });
-      const removed = selectedIds;
+      // Records Cloudflare refused stay listed (and selected).
+      const failed = new Set<string>(res?.failed || []);
+      const removed = new Set([...selectedIds].filter((id) => !failed.has(id)));
       records = records.filter((r) => !removed.has(r.id));
-      selectedIds = new Set();
-      bulkMode = false;
-      toasts.success(`Deleted ${removed.size} record(s)`);
+      selectedIds = failed;
+      if (failed.size === 0) bulkMode = false;
+      if (failed.size > 0) toasts.warning(`Deleted ${removed.size} record(s); ${failed.size} could not be deleted`);
+      else toasts.success(`Deleted ${removed.size} record(s)`);
     } catch (e: any) { toasts.error(e.message); }
     finally { bulkDeleting = false; }
   }

@@ -16,7 +16,7 @@
     UserPlus, Mail, Code, Shield, Clock, ScrollText, Upload, Key, GitBranch, TriangleAlert, Server,
     RefreshCw,
   } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
   // Light tabs load with the page. Heavy ones (Files/Vhost pull CodeMirror,
@@ -75,27 +75,39 @@
     } finally { loading = false; }
   }
 
-  onMount(async () => {
+  // The page component is reused when navigating from one site to another
+  // (e.g. global search): reload everything whenever the id changes, so the
+  // header, tabs and actions never belong to different sites.
+  let loadedFor = 0;
+  $effect(() => {
+    const id = siteId;
+    if (id && id !== loadedFor) {
+      loadedFor = id;
+      untrack(() => { void initSite(); });
+    }
+  });
+
+  async function initSite() {
     if (!auth.user) { window.location.href = '/login'; return; }
+    site = null; loading = true; activeTab = 'info'; dockerContainer = null; dbsCount = 0;
     await loadSite();
     // Load db count for stats
     try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbsCount = (d?.databases || []).length; } catch {}
     // Load Docker container info for docker runtime sites
     if (site?.runtime === 'docker' && site?.server_id) {
       try {
-        const containerName = `site-${site.name}`;
-        const domainBase = site.domain?.split(".")[0] || "";
+        // sp-site-<id>; older sites used site-<name>. Exact names only:
+        // a partial match could show (and act on) another site's container.
+        const names = [`sp-site-${site.id}`, `site-${String(site.name).replace(/ /g, '-')}`];
         const containers = await apiFetch(auth.token, 'GET', `servers/${site.server_id}/docker/containers`);
         const containerList = containers?.containers || [];
-        // Try exact name match first, then partial match
-        let container = containerList.find((c: any) => c.name === containerName);
-        if (!container) container = containerList.find((c: any) => c.name?.includes(site.name) || c.name?.includes(domainBase) || c.name?.includes(`site-${site.name}`));
+        const container = names.map((n) => containerList.find((c: any) => String(c.name || '').replace(/^\//, '') === n)).find(Boolean);
         if (container) {
           dockerContainer = container;
         }
       } catch {}
     }
-  });
+  }
 
   async function triggerDeploy() {
     if (!confirm('Deploy this site now?')) return;
@@ -213,6 +225,7 @@
 {/snippet}
 
 <DashboardLayout active="Sites">
+{#key siteId}
   {#if loading}
     <div class="mb-6 space-y-2">
       <div class="skeleton h-4 w-16"></div>
@@ -453,4 +466,5 @@
     {:else if activeTab === 'settings'}<SettingsTab {siteId} />
     {/if}
   {/if}
+{/key}
 </DashboardLayout>

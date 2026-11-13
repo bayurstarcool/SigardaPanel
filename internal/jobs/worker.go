@@ -370,6 +370,16 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 				}
 			}
 
+			// An agent that predates server-level access rules silently
+			// ignores the allowlist and leaves PHP URLs open to blocked IPs.
+			if result != nil && !result.AccessRules && w.siteHasIPRules(ctx, siteID) {
+				msg := "The agent on this site's server is too old to enforce its IP rules (allowlist, blocks on PHP URLs). Update the agent from Servers."
+				slog.Warn("worker: agent does not apply IP rules", "site_id", siteID)
+				if s, _ := w.store.Sites.GetByID(ctx, siteID); s != nil {
+					w.store.NotifyAdmins(ctx, "agent_outdated", "Agent update needed", s.Domain+": "+msg, "warning", "site", siteID)
+				}
+			}
+
 			// Update conf_file from agent response
 			if result != nil && result.NginxConfig != "" {
 				if err := w.store.Sites.UpdateConfFile(ctx, siteID, result.NginxConfig); err != nil {
@@ -524,28 +534,9 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			}
 			sender.Send(ctx, "info", "Backup Completed", fmt.Sprintf("Backup #%d (%s) completed successfully (size: %d bytes)", payloadData.BackupID, backupTypeStr, size))
 		}
-		// Auto-retention: keep only latest 7 per site+type after successful backup
-		if job.SiteID.Valid && result != nil && (result.S3UploadError == "" || result.S3Path != "") {
-			deleted, err := w.store.Backups.DeleteOldest(ctx, job.SiteID.Int64, 7)
-			if err != nil {
-				slog.Warn("worker: cleanup old backups failed", "site_id", job.SiteID.Int64, "error", err)
-			} else if len(deleted) > 0 {
-				// Clean up S3 files and local files for the deleted backups
-				site, _ := w.store.Sites.GetByID(ctx, job.SiteID.Int64)
-				for _, b := range deleted {
-					provider := w.store.BackupProviderFor(ctx, &b, site)
-					if b.S3Path.Valid && b.S3Path.String != "" && provider != nil {
-						slog.Info("worker: deleting S3 file for expired backup", "backup_id", b.ID, "s3_path", b.S3Path.String)
-						w.deleteS3Object(ctx, provider, b.S3Path.String)
-					}
-					if b.StoragePath.Valid && b.StoragePath.String != "" && !strings.HasPrefix(b.StoragePath.String, "s3://") {
-						if err := w.store.QueueBackupFileDelete(ctx, b.ID, b.SiteID, b.StoragePath.String, false); err != nil {
-							slog.Warn("worker: queue backup.delete", "backup_id", b.ID, "error", err)
-						}
-					}
-				}
-			}
-		}
+		// Retention is the configured one (expiry per backup config, the
+		// global retention settings in the scheduler); a fixed "keep the
+		// latest 7" here used to override it, also for "keep forever".
 
 	case jobmodel.TypeBackupDelete:
 		var p struct {
@@ -656,6 +647,15 @@ func siteIsNew(site *store.Site) bool {
 		return true
 	}
 	return false
+}
+
+// siteHasIPRules reports whether the site has blocked IPs or IP restrictions.
+func (w *Worker) siteHasIPRules(ctx context.Context, siteID int64) bool {
+	if sec, _ := w.store.Security.GetBySiteID(ctx, siteID); sec != nil && len(sec.BlockedIPs) > 0 {
+		return true
+	}
+	rules, _ := w.store.IPRestrictions.List(ctx, siteID)
+	return len(rules) > 0
 }
 
 // dedupeIPs canonicalises IPs/CIDRs and drops duplicates and invalid entries.

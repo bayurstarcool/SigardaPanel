@@ -36,6 +36,8 @@ type TaskResult struct {
 	// Expires is the certificate end date reported by ssl.issue/ssl.renew,
 	// in openssl's "-enddate" format (e.g. "Jan  2 15:04:05 2027 GMT").
 	Expires string `json:"expires,omitempty"`
+	// AccessRules: site.create applied IP rules at server level (newer agents).
+	AccessRules bool `json:"access_rules,omitempty"`
 }
 
 var agentErrorSecretPattern = regexp.MustCompile(`(?i)\b(password|secret|token|access[_-]?key|authorization)\s*([:=])\s*([^\s,;]+)`)

@@ -189,9 +189,10 @@ func (h *userHandler) assignPlan(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid user id")
 	}
 
-	// Verify user exists
+	// Verify user exists and the caller manages it (super_admin: anyone;
+	// admins: regular users they created).
 	user, err := h.store.Users.GetByID(c.Request().Context(), userID)
-	if err != nil || user == nil {
+	if err != nil || user == nil || !callerManagesUser(c, h.store, user) {
 		return echo.NewHTTPError(http.StatusNotFound, "user not found")
 	}
 
@@ -258,4 +259,17 @@ func planToJSON(p store.Plan) planJSON {
 		CreatedAt:    p.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:    p.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
+}
+
+// callerManagesUser: a super_admin manages every account; anyone else only
+// regular users they created.
+func callerManagesUser(c echo.Context, s *store.Store, u *store.User) bool {
+	sess := sessionFromEcho(c)
+	if sess == nil {
+		return false
+	}
+	if isSessionSuperAdmin(c.Request().Context(), s, sess) {
+		return true
+	}
+	return u.Role == auth.RoleUser && u.CreatedBy.Valid && u.CreatedBy.Int64 == sess.UserID && sess.UserID != 0
 }

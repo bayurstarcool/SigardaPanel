@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/labstack/echo/v4"
 )
@@ -113,7 +114,13 @@ func (r *Router) syncSSHDConfig(ctx context.Context, accounts []sshAccountRef) e
 }
 
 // sshCreateTask answers POST /tasks/sshftp/create.
+// sshTaskMu serializes account changes: each rewrites fstab and the sshd
+// jail config.
+var sshTaskMu sync.Mutex
+
 func (r *Router) sshCreateTask(c echo.Context) error {
+	sshTaskMu.Lock()
+	defer sshTaskMu.Unlock()
 	ctx := c.Request().Context()
 	var p struct {
 		Username string          `json:"username"`
@@ -262,6 +269,8 @@ func (r *Router) removeSSHAccount(ctx context.Context, username, home string) er
 
 // sshDeleteTask answers POST /tasks/sshftp/delete.
 func (r *Router) sshDeleteTask(c echo.Context) error {
+	sshTaskMu.Lock()
+	defer sshTaskMu.Unlock()
 	var p struct {
 		Username string          `json:"username"`
 		Accounts []sshAccountRef `json:"accounts"`

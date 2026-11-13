@@ -8,6 +8,7 @@
   import ProviderModal from './ProviderModal.svelte';
   import ConfigModal from './ConfigModal.svelte';
   import { Cloud, Plus, Pencil, Trash2, Play, Clock, CalendarClock } from 'lucide-svelte';
+  const isSuper = $derived(hasRole(auth.user?.role, 'super_admin'));
 
   let {
     providers,
@@ -97,7 +98,7 @@
   <section class="card">
     <div class="card-header">
       <h2 class="card-title">Storage providers</h2>
-      <button onclick={newProvider} class="btn btn-secondary btn-sm"><Plus size={14} /> Add provider</button>
+      {#if isSuper}<button onclick={newProvider} class="btn btn-secondary btn-sm"><Plus size={14} /> Add provider</button>{/if}
     </div>
     {#if providers.length === 0}
       <EmptyState compact icon={Cloud as any} title="No providers configured" description="Backups are stored locally until you add an S3-compatible provider." />
@@ -123,8 +124,11 @@
               </div>
             </div>
             <div class="flex shrink-0 gap-0.5">
+              <!-- Providers are global: only a super_admin changes them (the API enforces it). -->
+              {#if isSuper}
               <button onclick={() => editProvider(p)} class="btn btn-ghost btn-icon btn-xs" title="Edit" aria-label="Edit provider {p.name}"><Pencil size={14} /></button>
               <button onclick={() => deleteProvider(p)} class="btn btn-danger-ghost btn-icon btn-xs" title="Delete" aria-label="Delete provider {p.name}"><Trash2 size={14} /></button>
+              {/if}
             </div>
           </li>
         {/each}

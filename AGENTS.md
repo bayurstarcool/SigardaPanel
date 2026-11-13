@@ -585,6 +585,31 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
   container actions match name, full id or 12-char short id only.
 - **Agent re-registration** from a known agent URL re-binds that server row.
 - **Cloudflare API tokens** are encrypted at rest (`secrets.Encrypt`).
+- **Never run SQL clients as root on site content**: dump imports run as the site's
+  Linux user (nobody without one) with one of the database's own accounts
+  (`RunAsUserInput`, dump on stdin). Dumps and archives live in user-writable trees.
+- **File manager paths go through `os.Root`** (`internal/sitefs`): checked-then-used
+  paths are a symlink race when the agent runs as root.
+- **Vhost lock**: raw vhost validate/put hold `vhostMu` exclusively; every other nginx
+  writer or reload holds it shared (`readNginxLock`).
+- **Access rules are server-level** in vhosts; the ACME location has `allow all` and
+  `auth_basic off`.
+- **SSH/FTP**: changes are serialized (API `sshMu`, agent `sshTaskMu`); usernames that
+  are panel users or site system users are refused; site delete fails if an account
+  could not be removed.
+- **Panel→agent HTTP** uses `agentClient` (dial-time address check: no link-local,
+  multicast, unspecified; loopback only when literal; private only when allowed).
+- **Global settings that act on every tenant** (backup providers, global retention,
+  order approval) are super_admin only; plans/usage/orders follow user ownership
+  (`callerManagesUser`).
+- **2FA management** codes go through `checkTOTP` (5 failures/15 min per user,
+  single use). Helpers that reject must return an `*echo.HTTPError`, never the
+  result of `c.JSON` (nil, the caller continues).
+- **Web proxy** (`/api/proxy/[...path]`) passes bytes, content types and Set-Cookie;
+  `apiFetch` retries GET only.
+- **Backup configs**: `retention_days` 0 keeps backups; `exclude_patterns` are applied
+  by the agent and recorded in the archive (`.sigarda-excludes`) so restores keep the
+  excluded paths.
 
 ## Panel Self-Update
 

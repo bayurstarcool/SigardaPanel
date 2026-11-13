@@ -72,8 +72,7 @@
     busy = true;
     try {
       const body: any = {};
-      if (form.username !== user.username) body.username = form.username;
-      if (form.email !== (user.email || '')) body.email = form.email;
+      // Username and email are not editable here (the API ignores them).
       if (form.role !== user.role) body.role = form.role;
       if (form.password) body.password = form.password;
       await apiFetch(auth.token, 'PATCH', `users/${userId}`, body);
@@ -290,11 +289,11 @@
           <div class="grid gap-4 sm:grid-cols-2">
             <div>
               <label for="ude-name" class="label">Username</label>
-              <input id="ude-name" bind:value={form.username} class="input" autocomplete="off" />
+              <input id="ude-name" value={form.username} class="input" readonly title="Usernames cannot be changed" />
             </div>
             <div>
               <label for="ude-email" class="label">Email</label>
-              <input id="ude-email" type="email" bind:value={form.email} class="input" autocomplete="off" />
+              <input id="ude-email" type="email" value={form.email} class="input" readonly title="Users change their own email in their profile" />
             </div>
             <div>
               <label for="ude-role" class="label">Role</label>

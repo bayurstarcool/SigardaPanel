@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -186,6 +187,36 @@ func (e *Executor) RunAsUser(ctx context.Context, uid, gid uint32, dir, name str
 		"LANG=C.UTF-8",
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: gid, Groups: groups}}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("%s failed: %w", name, err)
+	}
+	return string(output), nil
+}
+
+// RunAsUserInput runs name as uid:gid (when the caller is root; otherwise as
+// itself) with stdin from in and extra environment variables. Used for
+// imports that must not run with root's privileges.
+func (e *Executor) RunAsUserInput(ctx context.Context, uid, gid uint32, env []string, in io.Reader, name string, args ...string) (string, error) {
+	if !isAllowedCommand(name) {
+		return "", fmt.Errorf("command not allowed: %s", name)
+	}
+	if uid == 0 {
+		return "", fmt.Errorf("RunAsUserInput refuses uid 0")
+	}
+	timeout := e.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = "/tmp"
+	cmd.Env = append([]string{"HOME=/tmp", "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C.UTF-8"}, env...)
+	cmd.Stdin = in
+	if os.Geteuid() == 0 {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: gid, Groups: []uint32{}}}
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("%s failed: %w", name, err)

@@ -119,8 +119,9 @@ func (h *userHandler) create(c echo.Context) error {
 		PasswordHash: body.Password,
 		Role:         body.Role,
 		CreatedBy:    int64ToNullInt64(sess.UserID),
-		DiskLimit:    int64PtrToNullInt64(body.DiskLimit),
-		MaxSites:     int64PtrToNullInt64(body.MaxSites),
+		// 0 (or less) means unlimited, as on update and in the CLI.
+		DiskLimit: limitToNull(body.DiskLimit),
+		MaxSites:  limitToNull(body.MaxSites),
 		// The administrator knows this password: the user must choose their
 		// own before using the panel.
 		MustChangePassword: true,
@@ -304,9 +305,10 @@ func int64ToNullInt64(v int64) sql.NullInt64 {
 	return sql.NullInt64{Int64: v, Valid: true}
 }
 
-func int64PtrToNullInt64(v *int64) sql.NullInt64 {
-	if v == nil {
-		return sql.NullInt64{Valid: false}
+// limitToNull maps a quota to its column: nil or <= 0 is unlimited (NULL).
+func limitToNull(v *int64) sql.NullInt64 {
+	if v == nil || *v <= 0 {
+		return sql.NullInt64{}
 	}
 	return sql.NullInt64{Int64: *v, Valid: true}
 }
@@ -327,13 +329,12 @@ func (h *userHandler) usage(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
-	// Regular users can only check their own usage
-	if !auth.HasRole(caller.Role, auth.RoleAdmin) && sess.UserID != id {
-		return echo.NewHTTPError(http.StatusForbidden, "forbidden")
-	}
-
 	user, err := h.store.Users.GetByID(c.Request().Context(), id)
 	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "user not found")
+	}
+	// Own usage, or a user the caller manages (super_admin: anyone).
+	if sess.UserID != id && !callerManagesUser(c, h.store, user) {
 		return echo.NewHTTPError(http.StatusNotFound, "user not found")
 	}
 

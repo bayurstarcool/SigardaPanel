@@ -37,12 +37,28 @@ func TestTwoFactorManagementNeedsOwnInteractiveSession(t *testing.T) {
 		t.Fatalf("impersonator changing 2FA = %d", rec.Code)
 	}
 	// Replacing existing codes needs a current TOTP code.
-	if rec := f.do("POST", "/api/v1/auth/2fa/recovery-codes", nil, aliceTok); rec.Code != http.StatusBadRequest {
+	if rec := f.do("POST", "/api/v1/auth/2fa/recovery-codes", nil, aliceTok); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("replace codes without TOTP = %d %s", rec.Code, rec.Body.String())
 	}
 	code, _ := totp.GenerateCode(secret, time.Now())
 	if rec := f.do("POST", "/api/v1/auth/2fa/recovery-codes", map[string]any{"code": code}, aliceTok); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "recovery_codes") {
 		t.Fatalf("replace codes with TOTP = %d %s", rec.Code, rec.Body.String())
+	}
+	// The same code cannot be used twice, and wrong guesses are limited.
+	if rec := f.do("POST", "/api/v1/auth/2fa/recovery-codes", map[string]any{"code": code}, aliceTok); rec.Code == http.StatusOK {
+		t.Fatal("a TOTP code was accepted twice")
+	}
+	for i := 0; i < 6; i++ {
+		if r := f.do("POST", "/api/v1/auth/2fa/disable", map[string]any{"code": "000001"}, aliceTok); r.Code == http.StatusOK {
+			t.Fatal("a wrong code disabled 2FA")
+		}
+	}
+	next, _ := totp.GenerateCode(secret, time.Now().Add(30*time.Second))
+	if rec := f.do("POST", "/api/v1/auth/2fa/disable", map[string]any{"code": next}, aliceTok); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("after repeated wrong codes = %d %s", rec.Code, rec.Body.String())
+	}
+	if on, _ := f.s.TwoFactor.IsTOTPEnabled(f.ctx, alice.ID); !on {
+		t.Fatal("2FA was disabled by failed attempts")
 	}
 	// Disabling 2FA drops the recovery codes.
 	f.s.TwoFactor.DisableTOTP(f.ctx, alice.ID)

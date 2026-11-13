@@ -139,7 +139,11 @@ func (r *Router) dockerContainerCreateTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "image is required")
 	}
 
+	// "docker create" has no -d: only "run" gets it.
 	args := []string{"run", "-d"}
+	if !payload.AutoStart {
+		args = []string{"create"}
+	}
 	if payload.Name != "" {
 		args = append(args, "--name", payload.Name)
 	}
@@ -157,11 +161,6 @@ func (r *Router) dockerContainerCreateTask(c echo.Context) error {
 	}
 	for k, val := range payload.Env {
 		args = append(args, "-e", k+"="+val)
-	}
-	if !payload.AutoStart {
-		// Create without start: use --rm won't work, so create then stop
-		// Actually docker run -d always starts. For create-only, use docker create
-		args[0] = "create"
 	}
 	args = append(args, payload.Image)
 	if payload.Command != "" {

@@ -68,8 +68,13 @@ func (h *stackHandler) tenantContainerNames(c echo.Context) (allowed map[string]
 	add := func(site *store.Site) {
 		if site != nil {
 			allowed[fmt.Sprintf("sp-site-%d", site.ID)] = true
-			// Containers created before names carried the site id.
-			allowed["site-"+strings.ReplaceAll(site.Name, " ", "-")] = true
+			// Containers created before names carried the site id were named
+			// after the site; only a name no other site shares identifies one.
+			var same int
+			_ = h.store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sites WHERE name = ?`, site.Name).Scan(&same)
+			if same == 1 {
+				allowed["site-"+strings.ReplaceAll(site.Name, " ", "-")] = true
+			}
 		}
 	}
 	if owned, err := h.store.Sites.List(ctx, store.SiteListFilter{OwnerID: sess.UserID}); err == nil {
@@ -671,7 +676,7 @@ func (h *stackHandler) redisProxy(c echo.Context, action string) error {
 
 // agentRequest makes an HTTP request to the agent.
 func agentRequest(method, url, token string, body any) (*http.Response, error) {
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := agentClient(5 * time.Minute)
 
 	var reqBody io.Reader
 	if body != nil {
@@ -877,7 +882,7 @@ func (h *stackHandler) serverBenchmark(c echo.Context) error {
 	}
 
 	// Use longer timeout for benchmark (up to 60 seconds)
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := agentClient(60 * time.Second)
 
 	agentURL := strings.TrimRight(server.AgentURL.String, "/") + "/tasks/system/benchmark"
 	req, err := http.NewRequest("GET", agentURL, nil)

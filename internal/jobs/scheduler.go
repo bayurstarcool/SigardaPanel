@@ -342,6 +342,9 @@ func processSchedule(ctx context.Context, s *store.Store, sched store.BackupSche
 					slog.Error("scheduler: create db backup job", "error", err)
 				}
 			}
+			// Each database got its own record: the generic one gets no job
+			// and would sit "pending", blocking manual backups.
+			_ = s.Backups.Delete(ctx, backup.ID)
 		}
 	case "both":
 		createBackupJob(ctx, s, backup, site, provider)
@@ -400,14 +403,15 @@ func processSchedule(ctx context.Context, s *store.Store, sched store.BackupSche
 	return nil
 }
 
-func createBackupJob(ctx context.Context, s *store.Store, backup *store.Backup, site *store.Site, provider *store.BackupStorageProvider) {
+func createBackupJob(ctx context.Context, s *store.Store, backup *store.Backup, site *store.Site, provider *store.BackupStorageProvider, excludes ...string) {
 	payloadMap := map[string]any{
-		"backup_id": backup.ID,
-		"site_id":   site.ID,
-		"domain":    site.Domain,
-		"root_path": site.RootPath,
-		"storage":   backup.StorageType,
-		"scheduled": true,
+		"backup_id":        backup.ID,
+		"site_id":          site.ID,
+		"domain":           site.Domain,
+		"root_path":        site.RootPath,
+		"storage":          backup.StorageType,
+		"scheduled":        true,
+		"exclude_patterns": excludes,
 	}
 
 	if provider != nil {
@@ -433,6 +437,14 @@ func createBackupJob(ctx context.Context, s *store.Store, backup *store.Backup, 
 	}
 }
 
+// configExpiry is a backup config's expiry for new backups: none for 0 days.
+func configExpiry(days int) sql.NullTime {
+	if days <= 0 {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: time.Now().Add(time.Duration(days) * 24 * time.Hour), Valid: true}
+}
+
 func processBackupConfig(ctx context.Context, s *store.Store, cfg store.BackupConfig) error {
 	// Resolve storage provider
 	storageType := "local"
@@ -446,11 +458,8 @@ func processBackupConfig(ctx context.Context, s *store.Store, cfg store.BackupCo
 		storageType = provider.ProviderType
 	}
 
-	// Per-config retention: use config's RetentionDays, default to 30
-	retentionDays := cfg.RetentionDays
-	if retentionDays <= 0 {
-		retentionDays = 30
-	}
+	// Per-config retention: 0 keeps the backups (no expiry).
+	expires := configExpiry(cfg.RetentionDays)
 
 	siteIDs, err := s.ResolveBackupConfigSiteIDs(ctx, cfg)
 	if err != nil {
@@ -492,11 +501,11 @@ func processBackupConfig(ctx context.Context, s *store.Store, cfg store.BackupCo
 				}
 				dbPayloads = append(dbPayloads, map[string]string{"name": db.Name, "type": db.Type, "user": dbUser, "password": dbPassword})
 			}
-			backup := &store.Backup{SiteID: siteID, Status: "pending", StorageType: "full_" + storageType, BackupType: "both", ExpiresAt: sql.NullTime{Time: time.Now().Add(time.Duration(retentionDays) * 24 * time.Hour), Valid: true}}
+			backup := &store.Backup{SiteID: siteID, Status: "pending", StorageType: "full_" + storageType, BackupType: "both", ExpiresAt: expires}
 			if err := s.Backups.Create(ctx, backup); err != nil {
 				continue
 			}
-			payloadMap := map[string]any{"backup_id": backup.ID, "site_id": site.ID, "domain": site.Domain, "root_path": site.RootPath, "storage": storageType, "backup_type": "both", "databases": dbPayloads, "scheduled": true}
+			payloadMap := map[string]any{"backup_id": backup.ID, "site_id": site.ID, "domain": site.Domain, "root_path": site.RootPath, "storage": storageType, "backup_type": "both", "databases": dbPayloads, "scheduled": true, "exclude_patterns": cfg.ExcludePatterns}
 			if provider != nil {
 				payloadMap["s3_config"] = map[string]string{"bucket": provider.Bucket, "endpoint": provider.Endpoint, "region": provider.Region, "access_key": provider.AccessKey, "secret_key": provider.SecretKey}
 			}
@@ -511,12 +520,12 @@ func processBackupConfig(ctx context.Context, s *store.Store, cfg store.BackupCo
 
 		// Files backup
 		if cfg.ScopeType == "files" {
-			backup := &store.Backup{SiteID: siteID, Status: "pending", StorageType: storageType, BackupType: "files", ExpiresAt: sql.NullTime{Time: time.Now().Add(time.Duration(retentionDays) * 24 * time.Hour), Valid: true}}
+			backup := &store.Backup{SiteID: siteID, Status: "pending", StorageType: storageType, BackupType: "files", ExpiresAt: expires}
 			if err := s.Backups.Create(ctx, backup); err != nil {
 				slog.Error("scheduler: create backup config backup record", "config_id", cfg.ID, "site_id", siteID, "error", err)
 				continue
 			}
-			createBackupJob(ctx, s, backup, site, provider)
+			createBackupJob(ctx, s, backup, site, provider, cfg.ExcludePatterns...)
 			slog.Info("scheduler: created backup job from config", "config_id", cfg.ID, "backup_id", backup.ID, "site_id", siteID)
 		}
 
@@ -541,7 +550,7 @@ func processBackupConfig(ctx context.Context, s *store.Store, cfg store.BackupCo
 					continue
 				}
 				dbStorageType := "database_" + storageType
-				backup := &store.Backup{SiteID: siteID, Status: "pending", StorageType: dbStorageType, BackupType: "database", ExpiresAt: sql.NullTime{Time: time.Now().Add(time.Duration(retentionDays) * 24 * time.Hour), Valid: true}}
+				backup := &store.Backup{SiteID: siteID, Status: "pending", StorageType: dbStorageType, BackupType: "database", ExpiresAt: expires}
 				if err := s.Backups.Create(ctx, backup); err != nil {
 					continue
 				}
@@ -646,6 +655,25 @@ func enqueueLocalBackupDeletes(ctx context.Context, s *store.Store, keepLast int
 }
 
 func runCleanup(ctx context.Context, s *store.Store) {
+	// These run whatever the retention settings are (they used to be
+	// skipped when no retention was configured).
+	if local, err := s.Backups.ListLocalAfterS3(ctx); err == nil {
+		for _, b := range local {
+			if err := s.QueueBackupFileDelete(ctx, b.ID, b.SiteID, b.StoragePath, true); err != nil {
+				slog.Warn("scheduler: queue removal of local backup already on S3", "backup_id", b.ID, "error", err)
+			}
+		}
+	}
+	if n, err := s.Backups.CleanupOrphanedPending(ctx, 1*time.Hour); err != nil {
+		slog.Warn("scheduler: cleanup orphaned pending backups failed", "error", err)
+	} else if n > 0 {
+		slog.Info("scheduler: cleaned up orphaned pending backups", "count", n)
+	}
+	runRetention(ctx, s)
+}
+
+// runRetention applies the global retention settings.
+func runRetention(ctx context.Context, s *store.Store) {
 	// Apply retention: set expires_at on backups that don't have it yet
 	// based on global retention_days setting
 	retentionStr, err := store.GetSetting(ctx, s.DB(), "retention_days")
@@ -676,7 +704,8 @@ func runCleanup(ctx context.Context, s *store.Store) {
 	cutoff := time.Now().AddDate(0, 0, -retentionDays)
 	_, err = s.DB().ExecContext(ctx,
 		`UPDATE backups SET expires_at = ? WHERE status = 'completed' AND expires_at IS NULL AND created_at < ?`,
-		cutoff, cutoff,
+		// created_at is UTC text: a time.Time would bind in the local zone.
+		cutoff.UTC().Format("2006-01-02 15:04:05"), cutoff.UTC().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		slog.Warn("scheduler: set expires_at failed", "error", err)
@@ -690,21 +719,6 @@ func runCleanup(ctx context.Context, s *store.Store) {
 		slog.Info("scheduler: cleaned up expired backups", "count", n)
 	}
 
-	// Local copies of backups already on S3 are removed by the site's agent.
-	if local, err := s.Backups.ListLocalAfterS3(ctx); err == nil {
-		for _, b := range local {
-			if err := s.QueueBackupFileDelete(ctx, b.ID, b.SiteID, b.StoragePath, true); err != nil {
-				slog.Warn("scheduler: queue removal of local backup already on S3", "backup_id", b.ID, "error", err)
-			}
-		}
-	}
-
-	// Clean up orphaned pending backups (no job created for them)
-	if n, err := s.Backups.CleanupOrphanedPending(ctx, 1*time.Hour); err != nil {
-		slog.Warn("scheduler: cleanup orphaned pending backups failed", "error", err)
-	} else if n > 0 {
-		slog.Info("scheduler: cleaned up orphaned pending backups", "count", n)
-	}
 }
 
 // metricsRetention is how long server metrics are kept (UI max range is 7d).

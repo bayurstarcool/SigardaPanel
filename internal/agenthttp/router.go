@@ -516,6 +516,7 @@ func capabilitiesHandler(c echo.Context) error {
 }
 
 func (r *Router) siteCreateTask(c echo.Context) error {
+	defer readNginxLock()()
 	ctx := c.Request().Context()
 	var payload struct {
 		SiteID         int64  `json:"site_id"`
@@ -835,6 +836,10 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		"nginx_config":      nginxConfigPath,
 		"proxy_pass_url":    payload.ProxyPassURL,
 		"nginx_test_output": strings.TrimSpace(output),
+		// access_rules: this agent renders blocked/allowed IPs at server
+		// level (all locations). Older agents only knew "location /" denies
+		// and no allowlist; the panel warns when this flag is missing.
+		"access_rules": true,
 	})
 }
 
@@ -1088,6 +1093,7 @@ func dockerDefaultCmd(lang string) string {
 func siteContainerName(siteID int64) string { return fmt.Sprintf("sp-site-%d", siteID) }
 
 func (r *Router) siteDeleteTask(c echo.Context) error {
+	defer readNginxLock()()
 	ctx := c.Request().Context()
 	var payload struct {
 		SiteID   int64  `json:"site_id"`
@@ -1345,6 +1351,7 @@ func (r *Router) siteDeployTask(c echo.Context) error {
 }
 
 func (r *Router) nginxReloadTask(c echo.Context) error {
+	defer readNginxLock()()
 	ctx := c.Request().Context()
 	slog.Info("agent: nginx.reload requested")
 	output, err := r.executor.RunShell(ctx, "systemctl", "reload", "nginx")
@@ -1388,6 +1395,7 @@ func acmeContactUsable(email string) bool {
 }
 
 func (r *Router) sslIssueTask(c echo.Context) error {
+	defer readNginxLock()()
 	var payload struct {
 		SiteID int64  `json:"site_id"`
 		Domain string `json:"domain"`
@@ -1466,6 +1474,7 @@ func (r *Router) sslIssueTask(c echo.Context) error {
 }
 
 func (r *Router) sslRenewTask(c echo.Context) error {
+	defer readNginxLock()()
 	var payload struct {
 		SiteID int64  `json:"site_id"`
 		Domain string `json:"domain"`
@@ -1593,7 +1602,10 @@ func (r *Router) backupCreateTask(c echo.Context) error {
 		RootPath   string `json:"root_path"`
 		Storage    string `json:"storage"`
 		BackupType string `json:"backup_type"`
-		Databases  []struct {
+		// ExcludePatterns are the backup config's glob patterns (tar
+		// --exclude, matched against any part of a path).
+		ExcludePatterns []string `json:"exclude_patterns"`
+		Databases       []struct {
 			Name     string `json:"name"`
 			Type     string `json:"type"`
 			User     string `json:"user"`
@@ -1613,6 +1625,11 @@ func (r *Router) backupCreateTask(c echo.Context) error {
 
 	if !r.isAllowedSitePath(payload.RootPath) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid root_path")
+	}
+
+	patterns, perr := cleanExcludePatterns(payload.ExcludePatterns)
+	if perr != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, perr.Error())
 	}
 
 	// Use site-root backups/ dir (outside site root to avoid tar snowball)
@@ -1654,12 +1671,31 @@ func (r *Router) backupCreateTask(c echo.Context) error {
 			}
 		}
 		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args = append(args, userExcludeArgs(patterns)...)
 		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath),
 			"-C", bundleDir, "database_dumps")
+		if len(patterns) > 0 {
+			if err := os.WriteFile(filepath.Join(bundleDir, excludeManifest), []byte(strings.Join(patterns, "\n")+"\n"), 0o600); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "write exclude list failed: "+err.Error())
+			}
+			args = append(args, excludeManifest)
+		}
 		output, err = r.executor.RunShell(ctx, "tar", args...)
 	} else {
 		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args = append(args, userExcludeArgs(patterns)...)
 		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath))
+		if len(patterns) > 0 {
+			manifestDir, merr := os.MkdirTemp(globalBackupDir, "excl-*")
+			if merr != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "create temp dir failed: "+merr.Error())
+			}
+			defer os.RemoveAll(manifestDir)
+			if err := os.WriteFile(filepath.Join(manifestDir, excludeManifest), []byte(strings.Join(patterns, "\n")+"\n"), 0o600); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "write exclude list failed: "+err.Error())
+			}
+			args = append(args, "-C", manifestDir, excludeManifest)
+		}
 		output, err = r.executor.RunShell(ctx, "tar", args...)
 	}
 	if err != nil {
@@ -1791,6 +1827,7 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 		BackupPath string            `json:"backup_path"`
 		RootPath   string            `json:"root_path"`
 		Databases  []restoreDatabase `json:"databases"`
+		SystemUser string            `json:"system_user"`
 		S3Config   *struct {
 			Bucket    string `json:"bucket"`
 			Endpoint  string `json:"endpoint"`
@@ -1860,7 +1897,8 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 		if !ok {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "none of the site's databases matches this dump; recreate the database first")
 		}
-		if out, err := r.importDatabaseDump(ctx, db, backupPath); err != nil {
+		uid, gid := restoreRunAs(payload.SystemUser)
+		if out, err := r.importDatabaseDump(ctx, db, backupPath, uid, gid); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "database import failed: "+strings.TrimSpace(out+" "+err.Error()))
 		}
 		slog.Info("agent: backup.restore (database)", "backup_id", payload.BackupID, "db", db.Name)
@@ -1886,7 +1924,8 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 
 	// A full backup carries database dumps: import them before the files are
 	// swapped, so a failed import leaves the site's files untouched.
-	dbsRestored, dbsSkipped, err := r.importBundleDumps(ctx, filepath.Join(tmpDir, "database_dumps"), payload.Databases)
+	runUID, runGID := restoreRunAs(payload.SystemUser)
+	dbsRestored, dbsSkipped, err := r.importBundleDumps(ctx, filepath.Join(tmpDir, "database_dumps"), payload.Databases, runUID, runGID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "database "+err.Error()+" (site files left unchanged)")
 	}
@@ -1949,6 +1988,16 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 			}
 			if err := movePath(from, to); err != nil {
 				slog.Warn("agent: backup.restore could not keep "+name, "backup_id", payload.BackupID, "error", err)
+			}
+		}
+	}
+
+	// Paths the backup config excluded are not in the archive: keep them
+	// from the previous root instead of losing them.
+	if oldRoot != "" {
+		if raw, err := os.ReadFile(filepath.Join(tmpDir, excludeManifest)); err == nil {
+			if pats, err := cleanExcludePatterns(strings.Split(strings.TrimSpace(string(raw)), "\n")); err == nil && len(pats) > 0 {
+				carryExcluded(oldRoot, payload.RootPath, pats)
 			}
 		}
 	}
@@ -2223,8 +2272,12 @@ func (r *Router) dbUserCreateTask(c echo.Context) error {
 	switch payload.Type {
 	case "mysql":
 		sql := fmt.Sprintf(
-			"CREATE USER IF NOT EXISTS %s@%s IDENTIFIED BY %s; GRANT %s ON `%s`.* TO %s@%s; FLUSH PRIVILEGES;\n",
-			sqlQuote(payload.Username), sqlQuote(payload.HostPattern), sqlQuote(payload.Password), payload.Privileges, payload.DatabaseName, sqlQuote(payload.Username), sqlQuote(payload.HostPattern),
+			// ALTER after CREATE: an existing account (password rotation, re-run
+			// job) gets the new password too; CREATE IF NOT EXISTS alone keeps the old.
+			"CREATE USER IF NOT EXISTS %s@%s IDENTIFIED BY %s; ALTER USER %s@%s IDENTIFIED BY %s; GRANT %s ON `%s`.* TO %s@%s; FLUSH PRIVILEGES;\n",
+			sqlQuote(payload.Username), sqlQuote(payload.HostPattern), sqlQuote(payload.Password),
+			sqlQuote(payload.Username), sqlQuote(payload.HostPattern), sqlQuote(payload.Password),
+			payload.Privileges, payload.DatabaseName, sqlQuote(payload.Username), sqlQuote(payload.HostPattern),
 		)
 		if output, err := r.executor.RunWithInput(ctx, sql, "mysql"); err != nil {
 			return echo.NewHTTPError(http.StatusFailedDependency, "mysql create user failed: "+strings.TrimSpace(output))

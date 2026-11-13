@@ -71,7 +71,7 @@ func stackAgentRequest(ctx context.Context, method, url, token string, body any,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := agentClient(0).Do(req)
 	if err != nil {
 		return 0, nil, err
 	}

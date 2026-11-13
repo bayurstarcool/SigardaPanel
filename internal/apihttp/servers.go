@@ -56,6 +56,9 @@ func normalizeAgentURL(raw string, allowLoopback bool) (string, error) {
 		ips = []net.IP{net.ParseIP("127.0.0.1")}
 	} else if resolved, err := lookupAgentHost(host); err == nil {
 		ips = resolved
+	} else {
+		// An unresolvable name could later point anywhere.
+		return "", fmt.Errorf("agent_url host %s does not resolve", host)
 	}
 	for _, ip := range ips {
 		switch {

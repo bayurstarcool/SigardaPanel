@@ -67,6 +67,7 @@ func (r *Router) siteResumeTask(c echo.Context) error {
 }
 
 func (r *Router) toggleSite(c echo.Context, suspend bool) error {
+	defer readNginxLock()()
 	ctx := c.Request().Context()
 	var payload siteToggleRequest
 	if err := c.Bind(&payload); err != nil {

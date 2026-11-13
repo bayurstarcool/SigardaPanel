@@ -57,9 +57,9 @@ type Entry struct {
 	ModTime string `json:"mod_time"`
 }
 
-// Resolve turns a path relative to the root into an absolute one, refusing
-// anything that leaves the root, also through symlinks.
-func (f *FS) Resolve(rel string) (string, error) {
+// clean validates a path relative to the root and returns it cleaned
+// ("." for the root itself).
+func (f *FS) clean(rel string) (string, error) {
 	if f.Root == "" {
 		return "", fail(http.StatusBadRequest, "site root path not configured")
 	}
@@ -68,79 +68,104 @@ func (f *FS) Resolve(rel string) (string, error) {
 		rel = "."
 	}
 	rel = filepath.Clean(rel)
-	if rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, "/") {
+	if rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, "/") || strings.ContainsRune(rel, 0) {
 		return "", fail(http.StatusBadRequest, "invalid path")
 	}
-	root := filepath.Clean(f.Root)
-	full := filepath.Join(root, rel)
-	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
-		return "", fail(http.StatusBadRequest, "path traversal not allowed")
+	return rel, nil
+}
+
+// open opens the site root. Every operation goes through the returned
+// os.Root, which resolves each path component beneath the root at the
+// moment of use: a directory swapped for a symlink to /etc between a check
+// and the operation cannot redirect it outside the site.
+func (f *FS) open() (*os.Root, error) {
+	if f.Root == "" {
+		return nil, fail(http.StatusBadRequest, "site root path not configured")
 	}
-	realRoot, err := filepath.EvalSymlinks(root)
+	r, err := os.OpenRoot(filepath.Clean(f.Root))
 	if err != nil {
-		return "", fail(http.StatusNotFound, "site root not found on this server")
+		return nil, fail(http.StatusNotFound, "site root not found on this server")
 	}
-	probe := full
-	for {
-		resolved, err := filepath.EvalSymlinks(probe)
-		if err == nil {
-			if resolved != realRoot && !strings.HasPrefix(resolved, realRoot+string(filepath.Separator)) {
-				return "", fail(http.StatusBadRequest, "path traversal not allowed")
-			}
-			return full, nil
-		}
-		if !os.IsNotExist(err) {
-			return "", fail(http.StatusBadRequest, "invalid path")
-		}
-		parent := filepath.Dir(probe)
-		if parent == probe {
-			return "", fail(http.StatusBadRequest, "invalid path")
-		}
-		probe = parent
-	}
+	return r, nil
 }
 
-func (f *FS) isRoot(full string) bool { return full == filepath.Clean(f.Root) }
+// Resolve turns a path relative to the root into an absolute one, refusing
+// anything that leaves the root, also through symlinks. Operations do not
+// use the result (they go through os.Root); it reports whether a path is
+// acceptable.
+func (f *FS) Resolve(rel string) (string, error) {
+	rel, err := f.clean(rel)
+	if err != nil {
+		return "", err
+	}
+	r, err := f.open()
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	// The deepest existing ancestor must be reachable beneath the root.
+	for probe := rel; ; probe = filepath.Dir(probe) {
+		if _, err := r.Stat(probe); err == nil {
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return "", fail(http.StatusBadRequest, "path traversal not allowed")
+		}
+		if probe == "." {
+			break
+		}
+	}
+	return filepath.Join(filepath.Clean(f.Root), rel), nil
+}
 
-// own hands path to the site owner.
-func (f *FS) own(path string) {
+// own hands path (relative to the root) to the site owner.
+func (f *FS) own(r *os.Root, rel string) {
 	if f.UID > 0 {
-		_ = os.Lchown(path, f.UID, f.GID)
+		_ = r.Lchown(rel, f.UID, f.GID)
 	}
 }
 
-// mkdirAll creates dir and its missing parents, owned by the site owner.
-func (f *FS) mkdirAll(dir string) error {
+// mkdirAll creates dir and its missing parents beneath the root, owned by
+// the site owner.
+func (f *FS) mkdirAll(r *os.Root, dir string) error {
 	var missing []string
-	for p := dir; ; p = filepath.Dir(p) {
-		if _, err := os.Lstat(p); err == nil {
+	for p := dir; p != "."; p = filepath.Dir(p) {
+		if _, err := r.Lstat(p); err == nil {
 			break
 		}
 		missing = append(missing, p)
-		if filepath.Dir(p) == p {
-			break
-		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := r.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	for _, p := range missing {
-		f.own(p)
+		f.own(r, p)
 	}
 	return nil
 }
 
 // List lists a directory.
 func (f *FS) List(rel string) ([]Entry, error) {
-	full, err := f.Resolve(rel)
+	clean, err := f.clean(rel)
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(full)
-	if err != nil || !info.IsDir() {
+	r, err := f.open()
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	dir, err := r.Open(clean)
+	if err != nil {
+		if strings.Contains(err.Error(), "escapes") {
+			return nil, fail(http.StatusBadRequest, "path traversal not allowed")
+		}
 		return nil, fail(http.StatusNotFound, "directory not found")
 	}
-	entries, err := os.ReadDir(full)
+	defer dir.Close()
+	if info, err := dir.Stat(); err != nil || !info.IsDir() {
+		return nil, fail(http.StatusNotFound, "directory not found")
+	}
+	entries, err := dir.ReadDir(-1)
 	if err != nil {
 		return nil, fail(http.StatusInternalServerError, "failed to read directory")
 	}
@@ -161,15 +186,28 @@ func (f *FS) List(rel string) ([]Entry, error) {
 	return out, nil
 }
 
+// pathErr maps an os.Root error: leaving the root is a client error.
+func pathErr(err error, status int, msg string) error {
+	if err != nil && strings.Contains(err.Error(), "escapes") {
+		return fail(http.StatusBadRequest, "path traversal not allowed")
+	}
+	return fail(status, msg)
+}
+
 // Read returns a text file (at most MaxReadSize).
 func (f *FS) Read(rel string) ([]byte, os.FileInfo, error) {
-	full, err := f.Resolve(rel)
+	clean, err := f.clean(rel)
 	if err != nil {
 		return nil, nil, err
 	}
-	fh, err := os.OpenFile(full, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	r, err := f.open()
 	if err != nil {
-		return nil, nil, fail(http.StatusNotFound, "file not found")
+		return nil, nil, err
+	}
+	defer r.Close()
+	fh, err := r.OpenFile(clean, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, nil, pathErr(err, http.StatusNotFound, "file not found")
 	}
 	defer fh.Close()
 	info, err := fh.Stat()
@@ -192,19 +230,24 @@ func (f *FS) Read(rel string) ([]byte, os.FileInfo, error) {
 // Write replaces (or creates) a file. Existing files keep their mode and
 // owner; new ones belong to the site owner.
 func (f *FS) Write(rel string, content []byte) error {
-	full, err := f.Resolve(rel)
+	clean, err := f.clean(rel)
 	if err != nil {
 		return err
 	}
-	if f.isRoot(full) {
+	if clean == "." {
 		return fail(http.StatusBadRequest, "invalid path")
 	}
-	if err := f.mkdirAll(filepath.Dir(full)); err != nil {
-		return fail(http.StatusInternalServerError, "failed to create directory")
+	r, err := f.open()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	if err := f.mkdirAll(r, filepath.Dir(clean)); err != nil {
+		return pathErr(err, http.StatusInternalServerError, "failed to create directory")
 	}
 	mode := os.FileMode(0o644)
 	existed := false
-	if info, err := os.Lstat(full); err == nil {
+	if info, err := r.Lstat(clean); err == nil {
 		if info.IsDir() {
 			return fail(http.StatusBadRequest, "is a directory")
 		}
@@ -213,9 +256,9 @@ func (f *FS) Write(rel string, content []byte) error {
 		}
 		mode, existed = info.Mode().Perm(), true
 	}
-	fh, err := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
+	fh, err := r.OpenFile(clean, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
 	if err != nil {
-		return fail(http.StatusInternalServerError, "failed to write")
+		return pathErr(err, http.StatusInternalServerError, "failed to write")
 	}
 	if _, err := fh.Write(content); err != nil {
 		fh.Close()
@@ -225,57 +268,67 @@ func (f *FS) Write(rel string, content []byte) error {
 		return fail(http.StatusInternalServerError, "failed to write")
 	}
 	if !existed {
-		f.own(full)
+		f.own(r, clean)
 	}
 	return nil
 }
 
 // Create makes an empty file (never truncating an existing one) or a directory.
 func (f *FS) Create(rel string, isDir bool) error {
-	full, err := f.Resolve(rel)
+	clean, err := f.clean(rel)
 	if err != nil {
 		return err
 	}
-	if f.isRoot(full) {
+	if clean == "." {
 		return fail(http.StatusBadRequest, "invalid path")
 	}
+	r, err := f.open()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
 	if isDir {
-		if err := f.mkdirAll(full); err != nil {
-			return fail(http.StatusInternalServerError, "failed to create directory")
+		if err := f.mkdirAll(r, clean); err != nil {
+			return pathErr(err, http.StatusInternalServerError, "failed to create directory")
 		}
 		return nil
 	}
-	if err := f.mkdirAll(filepath.Dir(full)); err != nil {
-		return fail(http.StatusInternalServerError, "failed to create directory")
+	if err := f.mkdirAll(r, filepath.Dir(clean)); err != nil {
+		return pathErr(err, http.StatusInternalServerError, "failed to create directory")
 	}
-	fh, err := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	fh, err := r.OpenFile(clean, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return fail(http.StatusConflict, "already exists")
 		}
-		return fail(http.StatusInternalServerError, "failed to create file")
+		return pathErr(err, http.StatusInternalServerError, "failed to create file")
 	}
 	fh.Close()
-	f.own(full)
+	f.own(r, clean)
 	return nil
 }
 
 // Delete removes a file or directory tree (never the root). It reports
 // whether the entry was a directory.
 func (f *FS) Delete(rel string) (bool, error) {
-	full, err := f.Resolve(rel)
+	clean, err := f.clean(rel)
 	if err != nil {
 		return false, err
 	}
-	if f.isRoot(full) {
+	if clean == "." {
 		return false, fail(http.StatusBadRequest, "cannot delete site root")
 	}
-	info, err := os.Lstat(full)
+	r, err := f.open()
 	if err != nil {
-		return false, fail(http.StatusNotFound, "not found")
+		return false, err
 	}
-	if err := os.RemoveAll(full); err != nil {
-		return false, fail(http.StatusInternalServerError, "failed to delete")
+	defer r.Close()
+	info, err := r.Lstat(clean)
+	if err != nil {
+		return false, pathErr(err, http.StatusNotFound, "not found")
+	}
+	if err := r.RemoveAll(clean); err != nil {
+		return false, pathErr(err, http.StatusInternalServerError, "failed to delete")
 	}
 	return info.IsDir(), nil
 }
@@ -286,27 +339,28 @@ func (f *FS) Rename(oldRel, newName string) (bool, error) {
 	if newName == "" || newName == "." || newName == ".." || strings.ContainsAny(newName, "/\x00") {
 		return false, fail(http.StatusBadRequest, "invalid name")
 	}
-	oldFull, err := f.Resolve(oldRel)
+	oldClean, err := f.clean(oldRel)
 	if err != nil {
 		return false, err
 	}
-	if f.isRoot(oldFull) {
+	if oldClean == "." {
 		return false, fail(http.StatusBadRequest, "cannot rename site root")
 	}
-	newFull := filepath.Join(filepath.Dir(oldFull), newName)
-	rel, _ := filepath.Rel(filepath.Clean(f.Root), newFull)
-	if _, err := f.Resolve(rel); err != nil {
+	newClean := filepath.Join(filepath.Dir(oldClean), newName)
+	r, err := f.open()
+	if err != nil {
 		return false, err
 	}
-	info, err := os.Lstat(oldFull)
+	defer r.Close()
+	info, err := r.Lstat(oldClean)
 	if err != nil {
-		return false, fail(http.StatusNotFound, "not found")
+		return false, pathErr(err, http.StatusNotFound, "not found")
 	}
-	if _, err := os.Lstat(newFull); err == nil {
+	if _, err := r.Lstat(newClean); err == nil {
 		return false, fail(http.StatusConflict, "already exists: "+newName)
 	}
-	if err := os.Rename(oldFull, newFull); err != nil {
-		return false, fail(http.StatusInternalServerError, "failed to rename")
+	if err := r.Rename(oldClean, newClean); err != nil {
+		return false, pathErr(err, http.StatusInternalServerError, "failed to rename")
 	}
 	return info.IsDir(), nil
 }
@@ -316,35 +370,40 @@ func (f *FS) Move(paths []string, dest string) ([]string, error) {
 	if len(paths) == 0 {
 		return nil, fail(http.StatusBadRequest, "paths required")
 	}
-	destFull, err := f.Resolve(dest)
+	destClean, err := f.clean(dest)
 	if err != nil {
 		return nil, err
 	}
-	if info, err := os.Stat(destFull); err != nil || !info.IsDir() {
-		return nil, fail(http.StatusBadRequest, "destination is not a directory")
+	r, err := f.open()
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	if info, err := r.Stat(destClean); err != nil || !info.IsDir() {
+		return nil, pathErr(err, http.StatusBadRequest, "destination is not a directory")
 	}
 	moved := make([]string, 0, len(paths))
 	for _, rel := range paths {
-		src, err := f.Resolve(rel)
+		src, err := f.clean(rel)
 		if err != nil {
 			return moved, err
 		}
-		if f.isRoot(src) {
+		if src == "." {
 			return moved, fail(http.StatusBadRequest, "cannot move site root")
 		}
 		base := filepath.Base(src)
-		dst := filepath.Join(destFull, base)
-		if src == destFull || strings.HasPrefix(destFull+string(filepath.Separator), src+string(filepath.Separator)) {
+		dst := filepath.Join(destClean, base)
+		if src == destClean || strings.HasPrefix(destClean+"/", src+"/") {
 			return moved, fail(http.StatusBadRequest, "cannot move a folder into itself")
 		}
 		if dst == src {
 			continue
 		}
-		if _, err := os.Lstat(dst); err == nil {
+		if _, err := r.Lstat(dst); err == nil {
 			return moved, fail(http.StatusConflict, "already exists at destination: "+base)
 		}
-		if err := os.Rename(src, dst); err != nil {
-			return moved, fail(http.StatusInternalServerError, "failed to move: "+base)
+		if err := r.Rename(src, dst); err != nil {
+			return moved, pathErr(err, http.StatusInternalServerError, "failed to move: "+base)
 		}
 		moved = append(moved, base)
 	}
@@ -364,54 +423,109 @@ func (f *FS) Compress(paths []string, name, dest string) (string, int64, error) 
 	if !strings.HasSuffix(strings.ToLower(name), ".zip") {
 		name += ".zip"
 	}
-	destFull, err := f.Resolve(dest)
+	destClean, err := f.clean(dest)
 	if err != nil {
 		return "", 0, err
 	}
-	if info, err := os.Stat(destFull); err != nil || !info.IsDir() {
-		return "", 0, fail(http.StatusBadRequest, "destination is not a directory")
+	r, err := f.open()
+	if err != nil {
+		return "", 0, err
 	}
-	archive := filepath.Join(destFull, name)
-	if _, err := os.Lstat(archive); err == nil {
+	defer r.Close()
+	if info, err := r.Stat(destClean); err != nil || !info.IsDir() {
+		return "", 0, pathErr(err, http.StatusBadRequest, "destination is not a directory")
+	}
+	archive := filepath.Join(destClean, name)
+	if _, err := r.Lstat(archive); err == nil {
 		return "", 0, fail(http.StatusConflict, "archive already exists: "+name)
 	}
-	type item struct{ full, base string }
-	var items []item
+	var items []string
 	for _, rel := range paths {
-		full, err := f.Resolve(rel)
+		clean, err := f.clean(rel)
 		if err != nil {
 			return "", 0, err
 		}
-		if _, err := os.Lstat(full); err != nil {
-			return "", 0, fail(http.StatusNotFound, "not found: "+rel)
+		if _, err := r.Lstat(clean); err != nil {
+			return "", 0, pathErr(err, http.StatusNotFound, "not found: "+rel)
 		}
-		items = append(items, item{full, filepath.Base(full)})
+		items = append(items, clean)
 	}
-	out, err := os.OpenFile(archive, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	out, err := r.OpenFile(archive, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
-		return "", 0, fail(http.StatusInternalServerError, "failed to create archive")
+		return "", 0, pathErr(err, http.StatusInternalServerError, "failed to create archive")
 	}
 	zw := zip.NewWriter(out)
 	for _, it := range items {
-		if err := AddToZip(zw, it.full, it.base); err != nil {
+		if err := addRootToZip(zw, r, it, filepath.Base(it), archive); err != nil {
 			zw.Close()
 			out.Close()
-			os.Remove(archive)
-			return "", 0, fail(http.StatusInternalServerError, "failed to compress: "+it.base)
+			r.Remove(archive)
+			return "", 0, fail(http.StatusInternalServerError, "failed to compress: "+filepath.Base(it))
 		}
 	}
 	if err := zw.Close(); err != nil {
 		out.Close()
-		os.Remove(archive)
+		r.Remove(archive)
 		return "", 0, fail(http.StatusInternalServerError, "failed to finalize archive")
 	}
 	out.Close()
-	f.own(archive)
+	f.own(r, archive)
 	var size int64
-	if info, err := os.Stat(archive); err == nil {
+	if info, err := r.Stat(archive); err == nil {
 		size = info.Size()
 	}
 	return name, size, nil
+}
+
+// addRootToZip adds src (relative to r) under baseName, skipping symlinks,
+// special files and the archive being written.
+func addRootToZip(zw *zip.Writer, r *os.Root, src, baseName, skip string) error {
+	return fs.WalkDir(r.FS(), src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == skip {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		zipName := baseName
+		if rel != "." {
+			zipName = filepath.ToSlash(filepath.Join(baseName, rel))
+		}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			return nil
+		case info.IsDir():
+			if rel == "." && path == src {
+				return nil
+			}
+			_, err := zw.Create(zipName + "/")
+			return err
+		case !info.Mode().IsRegular():
+			return nil
+		}
+		hdr, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		hdr.Name = zipName
+		hdr.Method = zip.Deflate
+		w, err := zw.CreateHeader(hdr)
+		if err != nil {
+			return err
+		}
+		fh, err := r.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return err
+		}
+		defer fh.Close()
+		_, err = io.Copy(w, fh)
+		return err
+	})
 }
 
 // AddToZip walks src (file or dir) into the zip under baseName, skipping
@@ -475,60 +589,64 @@ func writeZipFile(zw *zip.Writer, path, zipName string, fi os.FileInfo) error {
 
 // SaveUpload stores r as relDir/filename (the client-chosen filename is
 // reduced to its base name) and returns the relative path and size.
-func (f *FS) SaveUpload(relDir, filename string, r io.Reader, maxBytes int64) (string, int64, error) {
-	if relDir == "" {
-		relDir = "."
-	}
-	if _, err := f.Resolve(relDir); err != nil {
+func (f *FS) SaveUpload(relDir, filename string, in io.Reader, maxBytes int64) (string, int64, error) {
+	dir, err := f.clean(relDir)
+	if err != nil {
 		return "", 0, err
 	}
 	name := filepath.Base(filepath.ToSlash(filename))
 	if name == "" || name == "." || name == ".." || name == "/" || strings.ContainsRune(name, 0) {
 		return "", 0, fail(http.StatusBadRequest, "invalid filename")
 	}
-	rel := filepath.Join(relDir, name)
-	full, err := f.Resolve(rel)
+	rel := filepath.Join(dir, name)
+	r, err := f.open()
 	if err != nil {
 		return "", 0, err
 	}
-	if err := f.mkdirAll(filepath.Dir(full)); err != nil {
-		return "", 0, fail(http.StatusInternalServerError, "failed to create directory")
+	defer r.Close()
+	if err := f.mkdirAll(r, dir); err != nil {
+		return "", 0, pathErr(err, http.StatusInternalServerError, "failed to create directory")
 	}
-	if info, err := os.Lstat(full); err == nil && (info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+	if info, err := r.Lstat(rel); err == nil && (info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
 		return "", 0, fail(http.StatusConflict, "a folder or link with this name exists")
 	}
-	tmp := full + ".sigarda-upload"
-	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o644)
+	tmp := rel + ".sigarda-upload"
+	out, err := r.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
-		return "", 0, fail(http.StatusInternalServerError, "failed to create file")
+		return "", 0, pathErr(err, http.StatusInternalServerError, "failed to create file")
 	}
-	n, err := io.Copy(out, io.LimitReader(r, maxBytes+1))
+	n, err := io.Copy(out, io.LimitReader(in, maxBytes+1))
 	out.Close()
 	if err != nil {
-		os.Remove(tmp)
+		r.Remove(tmp)
 		return "", 0, fail(http.StatusInternalServerError, "failed to save file")
 	}
 	if n > maxBytes {
-		os.Remove(tmp)
+		r.Remove(tmp)
 		return "", 0, fail(http.StatusRequestEntityTooLarge, "file too large")
 	}
-	if err := os.Rename(tmp, full); err != nil {
-		os.Remove(tmp)
-		return "", 0, fail(http.StatusInternalServerError, "failed to save file")
+	if err := r.Rename(tmp, rel); err != nil {
+		r.Remove(tmp)
+		return "", 0, pathErr(err, http.StatusInternalServerError, "failed to save file")
 	}
-	f.own(full)
+	f.own(r, rel)
 	return rel, n, nil
 }
 
 // OpenDownload opens a regular file for download.
 func (f *FS) OpenDownload(rel string) (*os.File, os.FileInfo, error) {
-	full, err := f.Resolve(rel)
+	clean, err := f.clean(rel)
 	if err != nil {
 		return nil, nil, err
 	}
-	fh, err := os.OpenFile(full, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	r, err := f.open()
 	if err != nil {
-		return nil, nil, fail(http.StatusNotFound, "file not found")
+		return nil, nil, err
+	}
+	defer r.Close() // an open file stays usable after its Root is closed
+	fh, err := r.OpenFile(clean, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, nil, pathErr(err, http.StatusNotFound, "file not found")
 	}
 	info, err := fh.Stat()
 	if err != nil || !info.Mode().IsRegular() {

@@ -25,7 +25,9 @@ func (h *orderHandler) listOrders(c echo.Context) error {
 
 	var filter store.OrderListFilter
 
-	// Non-admin users can only see their own orders
+	// A super_admin sees every order; admins their own and their users';
+	// everyone else only their own.
+	superAdmin := isSessionSuperAdmin(c.Request().Context(), h.store, sess)
 	if !hasAdminRole(c, h.store) {
 		filter.UserID = sess.UserID
 	}
@@ -45,6 +47,9 @@ func (h *orderHandler) listOrders(c echo.Context) error {
 	planCache := make(map[int64]string)
 	out := []orderJSON{} // never null: the page treats null as "no data"
 	for _, o := range orders {
+		if !superAdmin && !h.orderVisible(c, o.UserID) {
+			continue
+		}
 		username := userCache[o.UserID]
 		if username == "" {
 			if u, err := h.store.Users.GetByID(c.Request().Context(), o.UserID); err == nil && u != nil {
@@ -135,8 +140,8 @@ func (h *orderHandler) getOrder(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "order not found")
 	}
 
-	// Regular users can only view their own orders
-	if !hasAdminRole(c, h.store) && order.UserID != sess.UserID {
+	// Own orders, or orders of users the caller manages.
+	if order.UserID != sess.UserID && !isSessionSuperAdmin(c.Request().Context(), h.store, sess) && !h.orderVisible(c, order.UserID) {
 		return echo.NewHTTPError(http.StatusNotFound, "order not found")
 	}
 
@@ -246,4 +251,14 @@ func orderToJSON(o store.LicenseOrder, username, planName string) orderJSON {
 		CreatedAt:     o.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:     o.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
+}
+
+// orderVisible: the caller's own order or one of a user the caller manages.
+func (h *orderHandler) orderVisible(c echo.Context, ownerID int64) bool {
+	sess := sessionFromEcho(c)
+	if sess != nil && ownerID == sess.UserID {
+		return true
+	}
+	u, err := h.store.Users.GetByID(c.Request().Context(), ownerID)
+	return err == nil && u != nil && callerManagesUser(c, h.store, u)
 }

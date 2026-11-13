@@ -109,7 +109,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	}
 
 	e.GET("/api/v1/auth/me", ah.me, RequireAuth(s))
-	e.PUT("/api/v1/auth/profile", ah.updateProfile, RequireAuth(s))
+	// Email/password changes: the account holder's own interactive session
+	// only (not an API key, not an impersonating admin).
+	e.PUT("/api/v1/auth/profile", ah.updateProfile, RequireAuth(s), RequireUserSession, rejectImpersonation)
 	// Logout revokes the session row by ID, so service tokens and API keys
 	// (which carry no session row of their own) are rejected.
 	e.POST("/api/v1/auth/logout", ah.logout, RequireAuth(s), RequireUserSession)
@@ -243,11 +245,13 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/sites/:id/files/download", fmH.downloadFile, RequireAuth(s))
 
 	// ─── Backup Storage Providers ─────────────────────────
+	// Providers are global (the default one receives every tenant's
+	// backups): only a super_admin may change them.
 	bpH := newBackupProviderHandler(s, auditRec)
 	e.GET("/api/v1/backup-providers", bpH.list, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/backup-providers", bpH.create, RequireAuth(s), RequireAdmin(s))
-	e.PATCH("/api/v1/backup-providers/:id", bpH.update, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/backup-providers/:id", bpH.delete, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/backup-providers", bpH.create, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.PATCH("/api/v1/backup-providers/:id", bpH.update, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.DELETE("/api/v1/backup-providers/:id", bpH.delete, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 	e.GET("/api/v1/backup-providers/:id/usage", bpH.usage, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/backup-providers/:id/test", bpH.testConnection, RequireAuth(s), RequireAdmin(s))
 
@@ -297,7 +301,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.PUT("/api/v1/system/panel-update/settings", puH.settings, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	e.GET("/api/v1/settings/retention", getRetention(db), RequireAuth(s), RequireAdmin(s))
-	e.PUT("/api/v1/settings/retention", setRetention(db), RequireAuth(s), RequireAdmin(s))
+	// Global retention deletes every tenant's backups: super_admin only.
+	e.PUT("/api/v1/settings/retention", setRetention(db), RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	metricH := newMetricHandler(s)
 	// POST metrics — admins and admin-scoped service tokens only
@@ -507,7 +512,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/orders", orderH.listOrders, RequireAuth(s))
 	e.POST("/api/v1/orders", orderH.createOrder, RequireAuth(s))
 	e.GET("/api/v1/orders/:id", orderH.getOrder, RequireAuth(s))
-	e.PATCH("/api/v1/orders/:id", orderH.updateOrderStatus, RequireAuth(s), RequireAdmin(s))
+	// Approving or rejecting orders (plans are global): super_admin only.
+	e.PATCH("/api/v1/orders/:id", orderH.updateOrderStatus, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// ─── Assign Plan to User ──────────────────────────────────
 	e.POST("/api/v1/users/:id/assign-plan", uh.assignPlan, RequireAuth(s), RequireUserSession, RequireAdmin(s))
