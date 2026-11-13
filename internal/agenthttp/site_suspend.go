@@ -185,6 +185,18 @@ func (r *Router) toggleSite(c echo.Context, suspend bool) error {
 		r.toggleAppService(ctx, verb, payload.SiteID)
 	}
 
+	// Its cron jobs pause with it: cron skips cron.d files with a dot in the name.
+	if payload.SiteID > 0 {
+		live := filepath.Join(r.cronDir, cronFileName(payload.SiteID))
+		from, to := live, live+".suspended"
+		if !suspend {
+			from, to = to, from
+		}
+		if _, err := moveIfPresent(from, to); err != nil {
+			slog.Warn("agent: site."+action+": cron file", "site_id", payload.SiteID, "error", err)
+		}
+	}
+
 	msg := fmt.Sprintf("site %s %sed", payload.Domain, strings.TrimSuffix(action, "e"))
 	if len(done) == 0 && (suspend || placeholderBefore == nil) {
 		msg += " (nothing to move — already in that state)"

@@ -602,6 +602,28 @@ func (h *siteHandler) getSSHPrivateKey(c echo.Context) error {
 	}, RequestID: rid})
 }
 
+// syncSiteCron installs the site's complete cron job list on its server
+// (/etc/cron.d, run as the site's Linux user from the site root).
+func (h *siteHandler) syncSiteCron(ctx context.Context, site *store.Site, jobs []store.SiteCronJob) error {
+	if len(jobs) > 0 && (!site.SystemUser.Valid || site.SystemUser.String == "") {
+		return echo.NewHTTPError(http.StatusConflict, "this site has no Linux user to run cron jobs as")
+	}
+	list := make([]map[string]string, 0, len(jobs))
+	for _, j := range jobs {
+		list = append(list, map[string]string{"schedule": j.Schedule, "command": j.Command})
+	}
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/cron/sync", map[string]any{
+		"site_id": site.ID, "system_user": site.SystemUser.String, "root_path": site.RootPath, "jobs": list,
+	}, 30*time.Second)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, "could not reach the site's server: "+err.Error())
+	}
+	if code >= 400 {
+		return agentHTTPError(code, out)
+	}
+	return nil
+}
+
 func (h *siteHandler) listCron(c echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
@@ -659,15 +681,30 @@ func (h *siteHandler) createCron(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
-	if body.Command == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "command required")
-	}
 	if body.Schedule == "" {
 		body.Schedule = "* * * * *"
 	}
+	body.Schedule = strings.Join(strings.Fields(body.Schedule), " ")
+	body.Command = strings.TrimSpace(body.Command)
+	if err := validateSiteCron(body.Schedule, body.Command); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if site.Status == "suspended" {
+		return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+	}
 
+	ctx := c.Request().Context()
+	existing, err := h.store.Cron.ListBySiteID(ctx, id)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
 	job := &store.SiteCronJob{SiteID: id, Schedule: body.Schedule, Command: body.Command}
-	if err := h.store.Cron.Create(c.Request().Context(), job); err != nil {
+	// Installed on the server first: a job the server refused is not recorded.
+	if err := h.syncSiteCron(ctx, site, append(existing, *job)); err != nil {
+		return err
+	}
+	if err := h.store.Cron.Create(ctx, job); err != nil {
+		_ = h.syncSiteCron(ctx, site, existing)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -708,8 +745,28 @@ func (h *siteHandler) deleteCron(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
+	ctx := c.Request().Context()
+	existing, err := h.store.Cron.ListBySiteID(ctx, siteID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
+	remaining := make([]store.SiteCronJob, 0, len(existing))
+	found := false
+	for _, j := range existing {
+		if j.ID == cronID {
+			found = true
+			continue
+		}
+		remaining = append(remaining, j)
+	}
+	if !found {
+		return echo.NewHTTPError(http.StatusNotFound, "cron job not found")
+	}
+	if err := h.syncSiteCron(ctx, site, remaining); err != nil {
+		return err
+	}
 	// Scoped to the site in the URL: a cron job of another site is not found.
-	if err := h.store.Cron.Delete(c.Request().Context(), siteID, cronID); err != nil {
+	if err := h.store.Cron.Delete(ctx, siteID, cronID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "cron job not found")
 		}

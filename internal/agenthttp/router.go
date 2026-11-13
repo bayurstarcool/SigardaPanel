@@ -60,10 +60,16 @@ type Router struct {
 	sshHomeBase    string
 	fstabPath      string
 	sshdConfigPath string
+	cronDir        string
+	cronUserOK     func(name string) bool
 }
 
 // RouterOptions allows overriding router defaults for testing.
 type RouterOptions struct {
+	// CronDir overrides /etc/cron.d; CronUserOK replaces the check that
+	// cron jobs run as a regular (UID >= 1000) user.
+	CronDir        string
+	CronUserOK     func(name string) bool
 	NginxConfDir   string
 	LetsEncryptDir string
 	LogDir         string
@@ -139,6 +145,8 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		sshHomeBase:    "/home",
 		fstabPath:      "/etc/fstab",
 		sshdConfigPath: "/etc/ssh/sshd_config.d/sigardapanel-ssh.conf",
+		cronDir:        "/etc/cron.d",
+		cronUserOK:     cronUserAllowed,
 	}
 	if opts != nil {
 		// RouterOptions is test/dependency-injection surface. Keep production
@@ -195,6 +203,13 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		if opts.SSHDConfigPath != "" {
 			r.sshdConfigPath = opts.SSHDConfigPath
 		}
+		r.cronDir = filepath.Join(tmp, "cron.d")
+		if opts.CronDir != "" {
+			r.cronDir = opts.CronDir
+		}
+		if opts.CronUserOK != nil {
+			r.cronUserOK = opts.CronUserOK
+		}
 		var sys stackSystem = denyStackSystem{}
 		if opts.StackSystem != nil {
 			sys = opts.StackSystem
@@ -231,6 +246,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/site/suspend", r.siteSuspendTask)
 	tasks.POST("/site/resume", r.siteResumeTask)
 	tasks.POST("/site/transfer", r.siteTransferTask)
+	tasks.POST("/cron/sync", r.cronSyncTask)
 	tasks.POST("/nginx/reload", r.nginxReloadTask)
 	tasks.POST("/ssl/issue", r.sslIssueTask)
 	tasks.POST("/ssl/renew", r.sslRenewTask)

@@ -103,3 +103,30 @@ func parseCronFieldStrict(field string, lo, hi int) ([]int, error) {
 	sort.Ints(out)
 	return out, nil
 }
+
+// validateSiteCron checks a site cron job: a strict 5-field schedule and a
+// one-line command of reasonable length.
+func validateSiteCron(schedule, command string) error {
+	fields := strings.Fields(schedule)
+	if len(fields) != 5 {
+		return fmt.Errorf("schedule must have 5 fields (minute hour day month weekday)")
+	}
+	bounds := [5][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 7}}
+	names := [5]string{"minute", "hour", "day-of-month", "month", "day-of-week"}
+	for i, f := range fields {
+		if _, err := parseCronFieldStrict(f, bounds[i][0], bounds[i][1]); err != nil {
+			return fmt.Errorf("invalid %s field %q: %v", names[i], f, err)
+		}
+	}
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return fmt.Errorf("command required")
+	}
+	if len(command) > 2000 {
+		return fmt.Errorf("command is too long (max 2000 characters)")
+	}
+	if strings.ContainsAny(command, "\r\n\x00") {
+		return fmt.Errorf("command must be a single line")
+	}
+	return nil
+}

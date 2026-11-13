@@ -57,6 +57,7 @@
         <button onclick={() => (showCreateCron = false)} class="btn btn-ghost">Cancel</button>
       </div>
     </div>
+    <p class="hint border-b border-line px-5 py-2">Jobs run on the site's server as the site's Linux user, from the site root. They pause while the site is suspended.</p>
   {/if}
   {#if cronLoading}
     <div class="space-y-3 p-4">{#each Array(3) as _, i (i)}<div class="skeleton h-9"></div>{/each}</div>

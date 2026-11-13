@@ -503,6 +503,12 @@ func (h *siteHandler) delete(c echo.Context) error {
 	// first (their rows used to vanish with the site while the Linux users,
 	// mounts and keys stayed, and lost their chroot on the next sshd sync).
 	h.removeSiteSSHAccounts(c.Request().Context(), site)
+	// Its cron jobs would otherwise keep running from a deleted root.
+	if jobs, _ := h.store.Cron.ListBySiteID(c.Request().Context(), id); len(jobs) > 0 {
+		if err := h.syncSiteCron(c.Request().Context(), site, nil); err != nil {
+			slog.Warn("api: remove cron jobs of deleted site", "site_id", id, "error", err)
+		}
+	}
 
 	// Clean up databases before deleting site. Mirror the dedicated
 	// delete-database endpoint: drop the real MySQL database (not just its
@@ -960,6 +966,10 @@ func (h *siteHandler) transfer(c echo.Context) error {
 	// SSH/FTP jails bind-mount the current root path.
 	if accts, _ := h.store.SSH.ListBySiteID(c.Request().Context(), id); len(accts) > 0 {
 		return echo.NewHTTPError(http.StatusConflict, "remove the site's SSH/FTP accounts before transferring it")
+	}
+	// Cron jobs run as the current owner's Linux user from the current root.
+	if jobs, _ := h.store.Cron.ListBySiteID(c.Request().Context(), id); len(jobs) > 0 {
+		return echo.NewHTTPError(http.StatusConflict, "remove the site's cron jobs before transferring it")
 	}
 	// The files move on the site's server first (site.transfer job); owner,
 	// root path and system user change only when that succeeded, then the
