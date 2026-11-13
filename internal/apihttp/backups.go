@@ -683,6 +683,12 @@ func (h *backupHandler) delete(c echo.Context) error {
 	if err := h.requireBackupAdmin(c.Request().Context(), sess, site); err != nil {
 		return err
 	}
+	// A backup still being written would finish into a deleted record and
+	// leave its archive (and S3 copy) outside any retention.
+	switch backup.Status {
+	case "pending", "running", "archiving":
+		return echo.NewHTTPError(http.StatusConflict, "this backup is still in progress; delete it when it has finished")
+	}
 
 	// Clean up S3 object if the backup was stored on S3. Use the aws CLI to
 	// stay consistent with the upload/list paths (previously rclone was used

@@ -524,28 +524,9 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			}
 			sender.Send(ctx, "info", "Backup Completed", fmt.Sprintf("Backup #%d (%s) completed successfully (size: %d bytes)", payloadData.BackupID, backupTypeStr, size))
 		}
-		// Auto-retention: keep only latest 7 per site+type after successful backup
-		if job.SiteID.Valid && result != nil && (result.S3UploadError == "" || result.S3Path != "") {
-			deleted, err := w.store.Backups.DeleteOldest(ctx, job.SiteID.Int64, 7)
-			if err != nil {
-				slog.Warn("worker: cleanup old backups failed", "site_id", job.SiteID.Int64, "error", err)
-			} else if len(deleted) > 0 {
-				// Clean up S3 files and local files for the deleted backups
-				site, _ := w.store.Sites.GetByID(ctx, job.SiteID.Int64)
-				for _, b := range deleted {
-					provider := w.store.BackupProviderFor(ctx, &b, site)
-					if b.S3Path.Valid && b.S3Path.String != "" && provider != nil {
-						slog.Info("worker: deleting S3 file for expired backup", "backup_id", b.ID, "s3_path", b.S3Path.String)
-						w.deleteS3Object(ctx, provider, b.S3Path.String)
-					}
-					if b.StoragePath.Valid && b.StoragePath.String != "" && !strings.HasPrefix(b.StoragePath.String, "s3://") {
-						if err := w.store.QueueBackupFileDelete(ctx, b.ID, b.SiteID, b.StoragePath.String, false); err != nil {
-							slog.Warn("worker: queue backup.delete", "backup_id", b.ID, "error", err)
-						}
-					}
-				}
-			}
-		}
+		// Retention is the configured one (expiry per backup config, the
+		// global retention settings in the scheduler); a fixed "keep the
+		// latest 7" here used to override it, also for "keep forever".
 
 	case jobmodel.TypeBackupDelete:
 		var p struct {

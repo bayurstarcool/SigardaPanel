@@ -1598,7 +1598,10 @@ func (r *Router) backupCreateTask(c echo.Context) error {
 		RootPath   string `json:"root_path"`
 		Storage    string `json:"storage"`
 		BackupType string `json:"backup_type"`
-		Databases  []struct {
+		// ExcludePatterns are the backup config's glob patterns (tar
+		// --exclude, matched against any part of a path).
+		ExcludePatterns []string `json:"exclude_patterns"`
+		Databases       []struct {
 			Name     string `json:"name"`
 			Type     string `json:"type"`
 			User     string `json:"user"`
@@ -1618,6 +1621,11 @@ func (r *Router) backupCreateTask(c echo.Context) error {
 
 	if !r.isAllowedSitePath(payload.RootPath) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid root_path")
+	}
+
+	patterns, perr := cleanExcludePatterns(payload.ExcludePatterns)
+	if perr != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, perr.Error())
 	}
 
 	// Use site-root backups/ dir (outside site root to avoid tar snowball)
@@ -1659,12 +1667,31 @@ func (r *Router) backupCreateTask(c echo.Context) error {
 			}
 		}
 		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args = append(args, userExcludeArgs(patterns)...)
 		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath),
 			"-C", bundleDir, "database_dumps")
+		if len(patterns) > 0 {
+			if err := os.WriteFile(filepath.Join(bundleDir, excludeManifest), []byte(strings.Join(patterns, "\n")+"\n"), 0o600); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "write exclude list failed: "+err.Error())
+			}
+			args = append(args, excludeManifest)
+		}
 		output, err = r.executor.RunShell(ctx, "tar", args...)
 	} else {
 		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args = append(args, userExcludeArgs(patterns)...)
 		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath))
+		if len(patterns) > 0 {
+			manifestDir, merr := os.MkdirTemp(globalBackupDir, "excl-*")
+			if merr != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "create temp dir failed: "+merr.Error())
+			}
+			defer os.RemoveAll(manifestDir)
+			if err := os.WriteFile(filepath.Join(manifestDir, excludeManifest), []byte(strings.Join(patterns, "\n")+"\n"), 0o600); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "write exclude list failed: "+err.Error())
+			}
+			args = append(args, "-C", manifestDir, excludeManifest)
+		}
 		output, err = r.executor.RunShell(ctx, "tar", args...)
 	}
 	if err != nil {
@@ -1957,6 +1984,16 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 			}
 			if err := movePath(from, to); err != nil {
 				slog.Warn("agent: backup.restore could not keep "+name, "backup_id", payload.BackupID, "error", err)
+			}
+		}
+	}
+
+	// Paths the backup config excluded are not in the archive: keep them
+	// from the previous root instead of losing them.
+	if oldRoot != "" {
+		if raw, err := os.ReadFile(filepath.Join(tmpDir, excludeManifest)); err == nil {
+			if pats, err := cleanExcludePatterns(strings.Split(strings.TrimSpace(string(raw)), "\n")); err == nil && len(pats) > 0 {
+				carryExcluded(oldRoot, payload.RootPath, pats)
 			}
 		}
 	}

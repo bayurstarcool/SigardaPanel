@@ -58,8 +58,9 @@ func (s *SQLiteBackupScheduleStore) Create(ctx context.Context, sched *BackupSch
 		enabled = 1
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO backup_schedules (site_id, provider_id, cron_expr, backup_type, enabled) VALUES (?, ?, ?, ?, ?)`,
-		sched.SiteID, sched.ProviderID, sched.CronExpr, sched.BackupType, enabled,
+		// next_run_at follows the cron (NULL used to make it due at once).
+		`INSERT INTO backup_schedules (site_id, provider_id, cron_expr, backup_type, enabled, next_run_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		sched.SiteID, sched.ProviderID, sched.CronExpr, sched.BackupType, enabled, sqliteUTC(NextCronRun(sched.CronExpr, time.Now())),
 	)
 	if err != nil {
 		return fmt.Errorf("insert backup schedule: %w", err)
@@ -104,8 +105,8 @@ func (s *SQLiteBackupScheduleStore) Update(ctx context.Context, sched *BackupSch
 		enabled = 1
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE backup_schedules SET provider_id = ?, cron_expr = ?, backup_type = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		sched.ProviderID, sched.CronExpr, sched.BackupType, enabled, sched.ID,
+		`UPDATE backup_schedules SET provider_id = ?, cron_expr = ?, backup_type = ?, enabled = ?, next_run_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		sched.ProviderID, sched.CronExpr, sched.BackupType, enabled, sqliteUTC(NextCronRun(sched.CronExpr, time.Now())), sched.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update backup schedule: %w", err)
