@@ -396,6 +396,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/servers/:id/stack", stackH.stackInfo, RequireAuth(s))
 	e.POST("/api/v1/servers/:id/stack/action", stackH.stackAction, RequireAuth(s), RequireAdmin(s))
 	e.POST("/api/v1/servers/:id/stack/restart", stackH.stackRestart, RequireAuth(s), RequireAdmin(s))
+	e.GET("/api/v1/servers/:id/stack/ops/:op", stackH.stackOp, RequireAuth(s), RequireAdmin(s))
+	e.GET("/api/v1/servers/:id/php-versions", stackH.phpVersions, RequireAuth(s))
 	e.POST("/api/v1/servers/:id/command", stackH.commandExec, RequireAuth(s), RequireAdmin(s))
 
 	// ─── Docker Container Management ──

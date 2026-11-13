@@ -515,7 +515,8 @@ web UI or direct API calls (see [API.md](API.md)):
   scripting).
 - **Fail2ban, security monitor, PM2/email/bot-blocker managers, stack actions, raw
   `servers/:id/command`** — the raw command endpoint is used internally by
-  `site setup-logrotate` and `system updates` only.
+  `site setup-logrotate` and `system updates` only (on the panel's own server
+  these need a super_admin account).
 - **Agent registration/install script, metrics ingest, job log append, deploy webhook**
   — called by agents and Git hosts, not by people.
 - **Site users/permissions (`/users/:id/sites`), site transfer, DB grant/phpMyAdmin,

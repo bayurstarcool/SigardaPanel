@@ -76,7 +76,7 @@ Service tokens (machine-to-machine) use the same header with scoped permissions.
 | GET | `/servers/:id/health` | user | One server health |
 | POST | `/servers/:id/token` | admin | **Regenerate agent token** (sync DB + env) |
 | GET | `/servers/:id/specs` | user | CPU, RAM, disk specs |
-| GET | `/servers/:id/stack` | user | Installed software (nginx, PHP, etc.) |
+| GET | `/servers/:id/stack` | user | Installed software, PHP versions, distro, running stack operation |
 | GET | `/servers/:id/benchmark` | user | Run benchmark |
 | GET | `/servers/:id/metrics` | user | Time-series metrics |
 
@@ -84,12 +84,35 @@ Service tokens (machine-to-machine) use the same header with scoped permissions.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/servers/:id/stack/action` | user | Install/restart/stop/update package, or manage versions (`list-versions`, `list-available`) |
-| POST | `/servers/:id/stack/restart` | user | Restart stack component |
+| POST | `/servers/:id/stack/action` | admin | `{package, action, version?, extension?}` — see below |
+| GET | `/servers/:id/stack/ops/:op` | admin | Progress/result of a background package operation |
+| POST | `/servers/:id/stack/restart` | admin | `{package, version?}` — same as action `restart` |
+| GET | `/servers/:id/php-versions` | user | PHP-FPM versions installed on the server (`versions`, `details`) — used by the site forms |
+| POST | `/servers/:id/command` | admin | `{command, timeout?}` (1–300 s, default 60); super_admin on the panel's own server |
 
-Supported packages: `nginx`, `php` (with `version` field), `node`, `python`, `go`, `docker`, `certbot`, `mariadb`/`mysql`, `redis`, `memcached`, `supervisor`
+Packages: `nginx`, `php`, `node`, `python`, `go`, `docker`, `certbot`, `mariadb` (alias `mysql`), `redis`, `memcached`, `supervisor`.
 
-Actions: `install`, `update`, `uninstall`, `restart`, `start`, `stop`, `switch-version`, `list-versions`, `list-available`
+Actions:
+
+- `install`, `uninstall`, `update`, `install-extension`, `uninstall-extension` run in the background
+  on the agent: the answer is **202** with `{op_id, status: "running", …}`; poll
+  `GET /servers/:id/stack/ops/:op_id` until `done` is true. `ok`/`status` (`succeeded` | `failed`)
+  is set only after the agent verified the result (binary present, service running, PHP-FPM socket);
+  `message` explains, `output` is the log tail (apt/systemd errors), `info` the component's detected state.
+  One package operation per server at a time (409 otherwise). `version`: PHP `7.4`–`8.5` (required),
+  Node.js major (`24`, `22`, `20`), Go release (e.g. `1.25.4`; default latest stable); other packages take
+  no version. `extension` (PHP only): the suffix of `php<version>-<ext>`, e.g. `redis`.
+- `start`, `stop`, `restart`, `reload` (synchronous, verified; PHP without `version` = every FPM, `stop`
+  needs a version; nginx is config-tested first and a failing `nginx -t` is a 409), `set-default` (PHP CLI
+  default via update-alternatives).
+- `list-versions`, `list-available`, `list-extensions` (PHP, with `version`) — read-only.
+
+Refusals (409, nothing changed): PHP version used by sites or by an nginx vhost; nginx while the server has
+sites; node/docker while sites of that runtime exist; docker with running containers; certbot while sites
+have certificates; mariadb while the panel manages databases there; any removal that would also remove
+dependent packages. On the panel's own server (loopback agent URL) nginx cannot be stopped/removed and
+certbot cannot be removed, and `uninstall`/`stop` need super_admin (403). Every mutating action is audited
+(`stack_<action>`, refusals `stack_<action>_refused`, background results `stack_<action>_result`).
 
 ## Sites
 
