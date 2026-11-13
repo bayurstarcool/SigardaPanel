@@ -782,7 +782,7 @@ Signing key: `RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM` since v1
 v1.7.0 trust only that one and must run the current `install.sh update` once by hand.
 
 Binary releases: https://github.com/bayurstarcool/SigardaPanel/releases
-Latest: v1.7.0 (always check the releases page; install/update with `install.sh`, see docs/INSTALL.md)
+Latest: v1.7.1 (always check the releases page; install/update with `install.sh`, see docs/INSTALL.md)
 
 Recent security/stability releases: v1.1.1 file-manager upload traversal fix;
 v1.1.2 worker panic recovery + rate-limiter/error hygiene; v1.1.3 site deletion
@@ -808,3 +808,7 @@ level); backups remember their provider, apply exclude patterns and restore data
 two audits (restore/file-manager/symlink escapes, SSRF via agent URLs, 2FA brute force,
 tenant-admin access to global settings, login lock DoS, MySQL account takeover, CSRF);
 Go 1.26.11. Update agents after upgrading the panel.
+v1.7.1 fixes v1.7.0's owner-only web bundle (built under the workflow's umask 077; the
+update failed its health check and rolled back): release.sh normalizes and checks the
+bundle modes, the workflow keeps the umask to the key file, the installer makes the web
+directory readable.

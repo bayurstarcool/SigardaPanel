@@ -46,12 +46,17 @@ touch "$T/healthy"
 echo "--- update 1.6.0 -> 1.8.0"
 case "$(uname -m)" in aarch64|arm64) A=arm64;; *) A=amd64;; esac
 mkbin 1.8.0 "" "$T/assets/sigardapanel-linux-$A"; echo v18 > "$T/assets/web/index.js"
+# Owner-only modes in the archive (as v1.7.0 shipped) must still install readable.
+mkdir -p "$T/assets/web/client"; echo js > "$T/assets/web/client/app.js"
+chmod -R go-rwx "$T/assets/web"
 tar -czf "$T/assets/sigardapanel-web.tar.gz" -C "$T/assets/web" .
 ( cd "$T/assets" && sha256sum "sigardapanel-linux-$A" sigardapanel-web.tar.gz > SHA256SUMS && echo sig > SHA256SUMS.minisig )
 SIGARDA_VERSION=v1.8.0 SIGARDA_ASSET_BASE=file:///x bash "$T/install.sh" update >/dev/null 2>"$T/err"; rc=$?
 check "update exits 0" test "$rc" = 0; [ "$rc" = 0 ] || cat "$T/err"
 check "binary is 1.8.0" test "$(ver)" = 1.8.0
 check "web is 1.8.0" grep -q v18 "$T/opt/web/index.js"
+check "web files are world-readable, directories traversable" \
+  sh -c "[ -z \"\$(find '$T/opt/web' \\( -type f ! -perm -o=r \\) -o \\( -type d ! -perm -o=rx \\))\" ]"
 upbk="$(ls "$T/backups" | head -1)"
 check "update backup records VERSION/TARGET/KIND" sh -c "grep -q 1.6.0 '$T/backups/$upbk/VERSION' && grep -q v1.8.0 '$T/backups/$upbk/TARGET' && grep -q '^update$' '$T/backups/$upbk/KIND'"
 echo db-1.8.0 > "$T/data/sigardapanel.db"; touch "$T/data/sigardapanel.db-wal"
