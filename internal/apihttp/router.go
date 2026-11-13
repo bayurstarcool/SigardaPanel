@@ -269,11 +269,11 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// ─── Backup Configs ────────────────────────────────────
 	bcfgH := newBackupConfigHandler(s, auditRec)
-	e.GET("/api/v1/backup-configs", bcfgH.list, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/backup-configs", bcfgH.create, RequireAuth(s), RequireAdmin(s))
-	e.PATCH("/api/v1/backup-configs/:id", bcfgH.update, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/backup-configs/:id", bcfgH.delete, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/backup-configs/:id/run", bcfgH.run, RequireAuth(s), RequireAdmin(s))
+	e.GET("/api/v1/backup-configs", bcfgH.list, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/backup-configs", bcfgH.create, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.PATCH("/api/v1/backup-configs/:id", bcfgH.update, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.DELETE("/api/v1/backup-configs/:id", bcfgH.delete, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/backup-configs/:id/run", bcfgH.run, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// ─── Retention Settings ─────────────────────────────────
 	// Panel self-update (super_admin, interactive session)
@@ -344,10 +344,10 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// phpMyAdmin credentials (internal only — localhost calls for auto-login)
 	e.GET("/api/v1/databases/:id/pma-credentials", dbH.pmaCredentials, RequireAuth(s))
-	e.POST("/api/v1/databases/exec-sql", dbH.execSQL, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/databases/exec-sql", dbH.execSQL, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// Reset passwords for imported users (admin only)
-	e.POST("/api/v1/databases/phpmyadmin-reset-passwords", dbH.phpMyAdminResetPasswords, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/databases/phpmyadmin-reset-passwords", dbH.phpMyAdminResetPasswords, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// Database server management
 	dbServerH := newDBServerHandler(s, auditRec)

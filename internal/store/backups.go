@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -248,56 +250,75 @@ func (s *SQLiteBackupStore) MarkFailed(ctx context.Context, id int64, errMsg str
 // DeleteOldest removes older backups, keeping only the latest `keep` per site+type.
 // Returns the deleted backups (with S3 paths) so callers can clean up cloud storage.
 func (s *SQLiteBackupStore) DeleteOldest(ctx context.Context, siteID int64, keep int) ([]Backup, error) {
-	// First, query which backups will be deleted
+	// Only completed backups count and only they are removed: pending and
+	// running ones (other databases of the same run) must not be deleted
+	// under their jobs, and failed attempts must not push the last good
+	// backup out. Database backups are kept per database.
+	if keep < 1 {
+		keep = 1
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT b.id, b.site_id, b.status, b.storage_type, b.storage_path, COALESCE(b.backup_type,'files'), b.s3_path, COALESCE(b.progress,''), b.size_bytes, b.file_count, b.error, b.created_at, b.completed_at, b.expires_at, COALESCE(s.name,''), COALESCE(s.domain,'')
 		FROM backups b
 		LEFT JOIN sites s ON s.id = b.site_id
-		WHERE b.id IN (
-			SELECT id FROM (
-			SELECT id, ROW_NUMBER() OVER (
-				PARTITION BY site_id, COALESCE(backup_type,'files')
-				ORDER BY id DESC
-			) as rn FROM backups WHERE site_id = ?
-			) WHERE rn > ?
-		)`,
-		siteID, keep,
-	)
+		WHERE b.site_id = ? AND b.status = 'completed'
+		ORDER BY b.id DESC`, siteID)
 	if err != nil {
 		return nil, fmt.Errorf("query oldest backups: %w", err)
 	}
 	defer rows.Close()
 
+	seen := map[string]int{}
 	var deleted []Backup
 	for rows.Next() {
 		var b Backup
 		if err := rows.Scan(&b.ID, &b.SiteID, &b.Status, &b.StorageType, &b.StoragePath, &b.BackupType, &b.S3Path, &b.Progress, &b.SizeBytes, &b.FileCount, &b.Error, &b.CreatedAt, &b.CompletedAt, &b.ExpiresAt, &b.SiteName, &b.SiteDomain); err != nil {
 			continue
 		}
-		deleted = append(deleted, b)
+		key := retentionGroup(b)
+		seen[key]++
+		if seen[key] > keep {
+			deleted = append(deleted, b)
+		}
 	}
 	rows.Close()
-
 	if len(deleted) == 0 {
 		return nil, nil
 	}
 
-	// Collect IDs to delete
 	ids := make([]any, len(deleted))
 	placeholders := make([]string, len(deleted))
 	for i, b := range deleted {
 		ids[i] = b.ID
 		placeholders[i] = "?"
 	}
-
-	// Use parameterized query
-	_, err = s.db.ExecContext(ctx, `DELETE FROM backups WHERE id IN (`+strings.Join(placeholders, ",")+`)`, ids...)
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM backups WHERE id IN (`+strings.Join(placeholders, ",")+`)`, ids...); err != nil {
 		return nil, fmt.Errorf("delete oldest backups: %w", err)
 	}
-
 	slog.Info("store: cleaned up old backups", "site_id", siteID, "kept", keep, "deleted", len(deleted))
 	return deleted, nil
+}
+
+// backupTimestampRe matches the "_<date>-<time>..." tail of a backup file name.
+var backupTimestampRe = regexp.MustCompile(`[_-]?\d{8}[-_T]?\d{6}.*$`)
+
+// retentionGroup is the retention bucket of a backup: its type, and for
+// database backups also the database (taken from the file name, e.g.
+// shop_20261101-020000.sql.gz → shop).
+func retentionGroup(b Backup) string {
+	if b.BackupType != "database" {
+		return b.BackupType
+	}
+	name := b.StoragePath.String
+	if name == "" {
+		name = b.S3Path.String
+	}
+	name = filepath.Base(name)
+	if i := strings.Index(name, "."); i > 0 {
+		name = name[:i]
+	}
+	name = backupTimestampRe.ReplaceAllString(name, "")
+	return "database:" + name
 }
 
 // Delete removes a backup record.

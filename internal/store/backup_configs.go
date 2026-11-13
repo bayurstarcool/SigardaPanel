@@ -163,8 +163,11 @@ func (s *SQLiteBackupConfigStore) MarkRun(ctx context.Context, id int64) error {
 	if err != nil {
 		return fmt.Errorf("get cron expr: %w", err)
 	}
+	// Cron fields are server local time everywhere (as in crontab and in
+	// Create/Update); computing from a UTC clock here moved every run after
+	// the first by the server's UTC offset.
 	now := time.Now().UTC()
-	nextRun := NextCronRun(cronExpr, now).UTC()
+	nextRun := NextCronRun(cronExpr, time.Now()).UTC()
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE backup_configs SET last_run_at = ?, next_run_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		now.Format("2006-01-02 15:04:05"), nextRun.Format("2006-01-02 15:04:05"), id,

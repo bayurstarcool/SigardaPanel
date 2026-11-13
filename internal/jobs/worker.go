@@ -505,7 +505,18 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 						w.deleteS3Object(ctx, provider, b.S3Path.String)
 					}
 					if b.StoragePath.Valid && b.StoragePath.String != "" && !strings.HasPrefix(b.StoragePath.String, "s3://") {
-						_ = os.Remove(b.StoragePath.String)
+						// The archive is root-owned on the site's server: the
+						// agent deletes it (os.Remove here never could).
+						payload, _ := json.Marshal(map[string]any{"backup_id": b.ID, "storage_path": b.StoragePath.String})
+						if err := w.store.Jobs.Create(ctx, &jobmodel.Job{
+							ServerID: job.ServerID,
+							SiteID:   sql.NullInt64{Int64: b.SiteID, Valid: true},
+							Type:     jobmodel.TypeBackupDelete,
+							Status:   jobmodel.StatusQueued,
+							Payload:  string(payload),
+						}); err != nil {
+							slog.Warn("worker: queue backup.delete", "backup_id", b.ID, "error", err)
+						}
 					}
 				}
 			}

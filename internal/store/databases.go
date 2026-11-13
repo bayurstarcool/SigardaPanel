@@ -48,6 +48,8 @@ type DBUserRepository interface {
 	GetByID(ctx context.Context, id int64) (*DBUser, error)
 	ListByDatabase(ctx context.Context, dbID int64) ([]DBUser, error)
 	GetByUsernameAndDatabase(ctx context.Context, username string, dbID int64) (*DBUser, error)
+	// ListByUsername returns every assignment of a MySQL account name.
+	ListByUsername(ctx context.Context, username string) ([]DBUser, error)
 	UpdatePassword(ctx context.Context, id int64, hash string) error
 	UpdateEncryptedPassword(ctx context.Context, id int64, encryptedPassword string) error
 	UpdateHostAndPrivileges(ctx context.Context, id int64, host, privileges string) error
@@ -228,6 +230,25 @@ func (s *SQLiteDBUserStore) ListByDatabase(ctx context.Context, dbID int64) ([]D
 		return nil, fmt.Errorf("rows: %w", err)
 	}
 	return out, nil
+}
+
+// ListByUsername returns every db_users row for a MySQL account name.
+func (s *SQLiteDBUserStore) ListByUsername(ctx context.Context, username string) ([]DBUser, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, database_id, username, password_hash, encrypted_password, host_pattern, privileges, created_at FROM db_users WHERE username = ? ORDER BY id ASC`, username)
+	if err != nil {
+		return nil, fmt.Errorf("query db users: %w", err)
+	}
+	defer rows.Close()
+	var out []DBUser
+	for rows.Next() {
+		var u DBUser
+		if err := rows.Scan(&u.ID, &u.DatabaseID, &u.Username, &u.PasswordHash, &u.EncryptedPassword, &u.HostPattern, &u.Privileges, &u.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan db user: %w", err)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // UpdatePassword updates the password_hash for a db user.

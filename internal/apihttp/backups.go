@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/labstack/echo/v4"
 	"sigardapanel/internal/audit"
@@ -625,15 +627,18 @@ func (h *backupHandler) download(c echo.Context) error {
 		})
 	}
 
-	// Local path — serve file
-	f, err := os.Open(path)
+	// Local path — serve file. The backup directory sits in the site root,
+	// which the site's Linux user owns: the file (or a directory on the way)
+	// may have been replaced by a symlink to the panel's own database or key.
+	f, err := openBackupFile(path, site)
 	if err != nil {
+		slog.Warn("backup download refused", "backup_id", backup.ID, "path", path, "error", err)
 		return echo.NewHTTPError(http.StatusNotFound, "backup file not found on disk")
 	}
 	defer f.Close()
 
 	finfo, err := f.Stat()
-	if err != nil || finfo.IsDir() {
+	if err != nil || !finfo.Mode().IsRegular() {
 		return echo.NewHTTPError(http.StatusNotFound, "backup file not found on disk")
 	}
 
@@ -991,4 +996,41 @@ func setRetention(db *sql.DB) echo.HandlerFunc {
 			RequestID: rid,
 		})
 	}
+}
+
+// openBackupFile opens a local backup archive for download, refusing
+// anything but a regular file inside the site's backup directories or the
+// panel backup directory, reached without symlinks.
+func openBackupFile(path string, site *store.Site) (*os.File, error) {
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) || clean != path {
+		return nil, fmt.Errorf("not a clean absolute path")
+	}
+	allowed := []string{"/var/backups/sigardapanel/"}
+	if site != nil && site.RootPath != "" {
+		root := filepath.Clean(site.RootPath)
+		allowed = append(allowed, root+"/backups/", root+"/backup/")
+	}
+	inside := false
+	for _, dir := range allowed {
+		if strings.HasPrefix(clean, dir) {
+			inside = true
+		}
+	}
+	if !inside {
+		return nil, fmt.Errorf("outside the backup directories")
+	}
+	dir := filepath.Dir(clean)
+	if real, err := filepath.EvalSymlinks(dir); err != nil || real != dir {
+		return nil, fmt.Errorf("the backup directory is a symlink")
+	}
+	f, err := os.OpenFile(clean, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("not a regular file")
+	}
+	return f, nil
 }

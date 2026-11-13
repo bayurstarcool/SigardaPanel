@@ -1552,16 +1552,14 @@ func (r *Router) backupCreateTask(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, "database dump failed: "+strings.TrimSpace(output))
 			}
 		}
-		output, err = r.executor.RunShell(ctx, "tar", "-czf", backupFile,
-			"--exclude=backups", "--exclude=node_modules", "--exclude=vendor",
-			"--exclude=.git", "--exclude=.env", "--exclude=cache",
-			"-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath),
+		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath),
 			"-C", bundleDir, "database_dumps")
+		output, err = r.executor.RunShell(ctx, "tar", args...)
 	} else {
-		output, err = r.executor.RunShell(ctx, "tar", "-czf", backupFile,
-			"--exclude=backups", "--exclude=node_modules", "--exclude=vendor",
-			"--exclude=.git", "--exclude=.env", "--exclude=cache",
-			"-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath))
+		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath))
+		output, err = r.executor.RunShell(ctx, "tar", args...)
 	}
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "tar failed: "+strings.TrimSpace(output))
@@ -1808,6 +1806,25 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 			}
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "move restored root failed: "+err.Error())
+	}
+
+	// Archives leave out the top-level paths in siteBackupExcludedTop
+	// (secrets, dependencies, the site's own backups): carry them over from
+	// the previous root, so a restore neither breaks the app (.env, vendor)
+	// nor deletes the site's local backups.
+	if oldRoot != "" {
+		for _, name := range siteBackupExcludedTop {
+			from, to := filepath.Join(oldRoot, name), filepath.Join(payload.RootPath, name)
+			if _, err := os.Lstat(from); err != nil {
+				continue
+			}
+			if _, err := os.Lstat(to); err == nil {
+				continue // the archive has its own copy
+			}
+			if err := movePath(from, to); err != nil {
+				slog.Warn("agent: backup.restore could not keep "+name, "backup_id", payload.BackupID, "error", err)
+			}
+		}
 	}
 
 	// Restore succeeded — discard the staged old copy (best effort).
@@ -2444,4 +2461,19 @@ func (r *Router) serveLetsEncryptCert(ctx context.Context, domain string) error 
 		return fmt.Errorf("nginx reload failed: %s", strings.TrimSpace(out))
 	}
 	return nil
+}
+
+// siteBackupExcludedTop are the site root entries file backups leave out.
+var siteBackupExcludedTop = []string{"backups", "backup", "node_modules", "vendor", ".git", ".env"}
+
+// siteBackupExcludes returns tar arguments excluding those entries at the
+// top of the site root only (the old unanchored --exclude=cache/backups
+// also dropped e.g. storage/framework/cache and any nested "backups" dir).
+func siteBackupExcludes(rootPath string) []string {
+	base := filepath.Base(rootPath)
+	args := []string{"--anchored"}
+	for _, name := range siteBackupExcludedTop {
+		args = append(args, "--exclude="+base+"/"+name)
+	}
+	return args
 }

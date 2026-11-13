@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/labstack/echo/v4"
 	"log/slog"
@@ -579,6 +580,9 @@ func (h *backupHandler) createWithProvider(c echo.Context) error {
 		StorageType: storageType,
 	}
 	if err := h.store.Backups.Create(c.Request().Context(), backup); err != nil {
+		if errors.Is(err, store.ErrDuplicateBackup) {
+			return echo.NewHTTPError(http.StatusConflict, "a backup for this site is already in progress")
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 

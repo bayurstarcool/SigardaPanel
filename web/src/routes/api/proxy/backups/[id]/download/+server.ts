@@ -1,15 +1,14 @@
 import type { RequestHandler } from "./$types";
-import { env } from "$env/dynamic/private";
-
-const API_URL = env.SIGARDAPANEL_API_URL || "http://localhost:7700";
+import { API_URL, authHeaders, clientIpHeaders } from "$lib/server/upstream";
 
 // Binary-safe passthrough for backup downloads.
 // The generic /api/proxy/[...path] handler does res.json() on every response,
 // which corrupts binary payloads (zip archives) into 502s.
 export const GET: RequestHandler = async ({ params, request }) => {
-  const auth = request.headers.get("Authorization");
-  const headers: Record<string, string> = {};
-  if (auth) headers["Authorization"] = auth;
+  // Normal sessions are cookie-only (the page links here with a plain
+  // <a href>): derive the API token from the sp_session cookie.
+  if (!/^\d+$/.test(params.id)) return new Response("invalid backup id", { status: 400 });
+  const headers: Record<string, string> = { ...authHeaders(request), ...clientIpHeaders(request) };
 
   const upstream = await fetch(
     `${API_URL}/api/v1/backups/${params.id}/download`,
