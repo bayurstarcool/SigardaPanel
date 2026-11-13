@@ -2,7 +2,8 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import EmptyState from '$components/EmptyState.svelte';
-  import { Database, Globe, Plus, Trash2, Pencil, Check, Search, LoaderCircle, Users, UserPlus, Key, TriangleAlert, Copy, ArrowRight, ArrowLeft } from 'lucide-svelte';
+  import { Database, Globe, Plus, Trash2, Pencil, Check, Search, LoaderCircle, Users, UserPlus, Key, TriangleAlert, Copy, ArrowRight, ArrowLeft, Table2 } from 'lucide-svelte';
+  import { openPma } from '../../routes/databases/pma';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
@@ -67,11 +68,13 @@
   }
   async function createDB() {
     if (!newDb.name) return; dbBusy = true;
-    try { await apiFetch(auth.token, 'POST', `sites/${siteId}/databases`, newDb); showCreateDb = false; newDb = { name: '', type: 'mysql', charset: 'utf8mb4', collation: 'utf8mb4_unicode_ci' }; await loadDBs(); }
+    // Charset/collation are MySQL settings.
+    const body = newDb.type === 'mysql' ? newDb : { name: newDb.name, type: newDb.type };
+    try { await apiFetch(auth.token, 'POST', `sites/${siteId}/databases`, body); showCreateDb = false; newDb = { name: '', type: 'mysql', charset: 'utf8mb4', collation: 'utf8mb4_unicode_ci' }; await loadDBs(); }
     catch (e: any) { toasts.error(e.message); } finally { dbBusy = false; }
   }
   async function deleteDB(db: any) {
-    if (!confirm(`Delete database "${db.name}"?`)) return;
+    if (!confirm(`Delete database "${db.name}"? This drops it from ${db.type === 'postgres' ? 'PostgreSQL' : 'MySQL'} with all its data.`)) return;
     try { await apiFetch(auth.token, 'DELETE', `databases/${db.id}`); dbs = dbs.filter(d => d.id !== db.id); }
     catch (e: any) { toasts.error(e.message); }
   }
@@ -98,11 +101,19 @@
       dbUsersAll = allUsers;
     } catch (e: any) { toasts.error(e.message); } finally { dbUsersLoading = false; }
   }
+  function generatePassword(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    const buf = new Uint32Array(24);
+    crypto.getRandomValues(buf);
+    return Array.from(buf, (n) => chars[n % chars.length]).join('');
+  }
   async function createDbUser() {
     if (!newDbUser.database_id || !newDbUser.username) return; dbUserBusy = 0;
+    // "Auto": generate a strong password here (the API requires one) and show it once.
+    const password = newDbUser.password || generatePassword();
     try {
-      const res = await apiFetch(auth.token, 'POST', `databases/${newDbUser.database_id}/users`, { username: newDbUser.username, password: newDbUser.password || undefined, host_pattern: newDbUser.host_pattern, privileges: newDbUser.privileges });
-      dbUserNewPwd = res?.password || ''; showCreateDbUser = false;
+      const res = await apiFetch(auth.token, 'POST', `databases/${newDbUser.database_id}/users`, { username: newDbUser.username, password, host_pattern: newDbUser.host_pattern, privileges: newDbUser.privileges });
+      dbUserNewPwd = res?.password || (newDbUser.password ? '' : password); showCreateDbUser = false;
       newDbUser = { database_id: 0, username: '', password: '', host_pattern: '%', privileges: 'ALL' };
       toasts.success('User created'); dbUsersAll = []; await loadDbUsers();
     } catch (e: any) { toasts.error(e.message); } finally { dbUserBusy = null; }
@@ -214,7 +225,11 @@
                   {#if db.size_bytes}<span class="font-mono text-xs text-subtle tabular-nums">{fmtBytes(db.size_bytes)}</span>{/if}
                 </div>
                 <div class="flex shrink-0 items-center gap-0.5">
-                  <button onclick={() => startEditDb(db)} class="btn btn-ghost btn-icon btn-xs" aria-label="Edit charset and collation of {db.name}" title="Edit charset/collation"><Pencil size={13} /></button>
+                  <a href="/databases/{db.id}" class="btn btn-ghost btn-xs text-accent" title="Browse tables and run read-only queries"><Table2 size={13} /> Browse</a>
+                  {#if db.type !== 'postgres'}
+                    <button onclick={() => openPma(db.id)} class="btn btn-ghost btn-xs max-sm:hidden" title="Open phpMyAdmin"><Database size={13} /> phpMyAdmin</button>
+                    <button onclick={() => startEditDb(db)} class="btn btn-ghost btn-icon btn-xs" aria-label="Edit charset and collation of {db.name}" title="Edit charset/collation"><Pencil size={13} /></button>
+                  {/if}
                   <button onclick={() => deleteDB(db)} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Delete database {db.name}" title="Delete database"><Trash2 size={13} /></button>
                 </div>
               </div>

@@ -130,7 +130,7 @@ func (h *dbHandler) createDatabase(c echo.Context) error {
 
 	// Try direct MySQL first
 	mysqlOK := false
-	if body.Type == "mysql" {
+	if body.Type == "mysql" && h.panelMySQL(c.Request().Context(), site) {
 		if err := h.execMySQL(func(conn *dbserver.MySQLConn) error {
 			return conn.CreateDatabase(c.Request().Context(), body.Name, body.Charset, body.Collation)
 		}); err == nil {
@@ -322,8 +322,9 @@ func (h *dbHandler) rotateDBUserPassword(c echo.Context) error {
 	// Generate new random password
 	newPassword := generateDBPassword()
 
-	// Update password in MySQL directly first
-	if database.Type == "mysql" {
+	// Update password in MySQL directly first (panel host only; the job
+	// below applies it on the site's server either way)
+	if database.Type == "mysql" && h.panelMySQL(c.Request().Context(), site) {
 		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
 			if err := conn.ChangePassword(c.Request().Context(), dbUser.Username, dbUser.HostPattern, newPassword); err != nil {
 				slog.Warn("dbuser: mysql rotate password failed", "error", err)
@@ -450,8 +451,9 @@ func (h *dbHandler) deleteDatabase(c echo.Context) error {
 		return h.denyDB(c.Request().Context(), sess, site, "database not found")
 	}
 
-	// Drop from MySQL directly first
-	if database.Type == "mysql" {
+	// Drop from MySQL directly first (panel host only; the job below runs on
+	// the site's server either way)
+	if database.Type == "mysql" && h.panelMySQL(c.Request().Context(), site) {
 		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
 			if err := conn.DropDatabase(c.Request().Context(), database.Name); err != nil {
 				slog.Warn("database: mysql drop failed", "name", database.Name, "error", err)
@@ -558,7 +560,7 @@ func (h *dbHandler) createDBUser(c echo.Context) error {
 
 	// Create user in MySQL directly first
 	mysqlOK := false
-	if database.Type == "mysql" {
+	if database.Type == "mysql" && h.panelMySQL(c.Request().Context(), site) {
 		slog.Info("dbuser: attempting MySQL create", "user", body.Username, "db", database.Name, "host", body.HostPattern)
 		if err := h.execMySQL(func(conn *dbserver.MySQLConn) error {
 			slog.Info("dbuser: calling CreateUser", "user", body.Username)
@@ -706,6 +708,9 @@ func (h *dbHandler) deleteDBUser(c echo.Context) error {
 		shared = true
 	}
 	if database.Type == "mysql" && shared {
+		if !h.panelMySQL(c.Request().Context(), site) {
+			return errRemoteMySQL("Removing an account shared by several databases")
+		}
 		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
 			return conn.RevokeAll(c.Request().Context(), dbUser.Username, dbUser.HostPattern, database.Name)
 		})
@@ -716,8 +721,8 @@ func (h *dbHandler) deleteDBUser(c echo.Context) error {
 		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"user_id": dbUser.ID, "revoked": true}, RequestID: rid})
 	}
 
-	// Delete from MySQL directly first
-	if database.Type == "mysql" {
+	// Delete from MySQL directly first (panel host only)
+	if database.Type == "mysql" && h.panelMySQL(c.Request().Context(), site) {
 		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
 			if err := conn.DeleteUser(c.Request().Context(), dbUser.Username, dbUser.HostPattern); err != nil {
 				slog.Warn("dbuser: mysql delete failed", "error", err)
@@ -778,6 +783,25 @@ func (h *dbHandler) denyDB(ctx context.Context, sess *store.Session, site *store
 
 // execMySQL connects to the default database server and runs a function.
 // Returns nil if no database server configured (graceful skip).
+// panelMySQL reports whether site's databases live in the panel host's MySQL,
+// the only server the API's direct connection (execMySQL) reaches. Sites on
+// other servers keep their databases there: they are managed through the
+// site's agent (jobs), never through the direct connection, which would act
+// on the wrong server.
+func (h *dbHandler) panelMySQL(ctx context.Context, site *store.Site) bool {
+	if site == nil {
+		return false
+	}
+	server, err := h.store.Servers.GetByID(ctx, site.ServerID)
+	return err == nil && server != nil && isLocalServer(*server)
+}
+
+// errRemoteMySQL answers an operation that has no agent path yet for a
+// database on another server.
+func errRemoteMySQL(what string) error {
+	return echo.NewHTTPError(http.StatusConflict, what+" is not available yet for MySQL databases on servers other than the panel host")
+}
+
 func (h *dbHandler) execMySQL(fn func(conn *dbserver.MySQLConn) error) error {
 	return execMySQLConn(h.store, fn)
 }
@@ -984,6 +1008,7 @@ func (h *dbHandler) listAllDBUsers(c echo.Context) error {
 				"id":            u.ID,
 				"database_id":   u.DatabaseID,
 				"database_name": database.Name,
+				"database_type": database.Type,
 				"site_id":       database.SiteID,
 				"domain":        domain,
 				"username":      u.Username,
@@ -1027,6 +1052,9 @@ func (h *dbHandler) updateDBUser(c echo.Context) error {
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "user not found")
+	}
+	if database.Type == "mysql" && !h.panelMySQL(c.Request().Context(), site) {
+		return errRemoteMySQL("Changing a user's host or privileges")
 	}
 
 	var body struct {
@@ -1156,6 +1184,9 @@ func (h *dbHandler) updateDatabase(c echo.Context) error {
 
 	// Alter in MySQL if charset/collation changed
 	if (body.Charset != nil || body.Collation != nil) && database.Type == "mysql" {
+		if !h.panelMySQL(c.Request().Context(), site) {
+			return errRemoteMySQL("Changing the character set")
+		}
 		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
 			alterSQL := fmt.Sprintf("ALTER DATABASE `%s` CHARACTER SET %s COLLATE %s",
 				database.Name, newCharset, newCollation)
@@ -1237,6 +1268,9 @@ func (h *dbHandler) grantExistingUser(c echo.Context) error {
 	// tenants' users). Super admins may add any non-system account.
 	if !isSessionSuperAdmin(c.Request().Context(), h.store, sess) && !h.ownsMySQLUser(c.Request().Context(), sess, body.Username) {
 		return echo.NewHTTPError(http.StatusForbidden, "you can only add database users that belong to your own sites")
+	}
+	if database.Type == "mysql" && !h.panelMySQL(c.Request().Context(), site) {
+		return errRemoteMySQL("Granting an existing account")
 	}
 
 	// Check if this exact user@host is already assigned to this database.
@@ -1342,7 +1376,7 @@ func (h *dbHandler) listAvailableMySQLUsers(c echo.Context) error {
 
 	// Get MySQL users
 	var mysqlUsers []dbserver.DBUserInfo
-	if database.Type == "mysql" {
+	if database.Type == "mysql" && h.panelMySQL(c.Request().Context(), site) {
 		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
 			var err error
 			mysqlUsers, err = conn.ListUsers(c.Request().Context())
@@ -1400,6 +1434,9 @@ func (h *dbHandler) pmaCredentials(c echo.Context) error {
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "database not found")
+	}
+	if database.Type == "mysql" && !h.panelMySQL(c.Request().Context(), site) {
+		return errRemoteMySQL("phpMyAdmin")
 	}
 
 	// Find the MySQL user for this database from db_users
