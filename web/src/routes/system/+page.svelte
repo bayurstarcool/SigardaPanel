@@ -75,6 +75,7 @@
     updates = '';
     apiFetch(auth.token, 'POST', `servers/${selectedServer}/command`, {
       command: "bash -c 'apt-get update -qq 2>/dev/null && apt list --upgradable 2>/dev/null | head -30'",
+      timeout: 180,
     })
       .then((d: any) => { updates = d?.output || 'No updates available'; })
       .catch(() => { updates = 'Failed to check updates'; })

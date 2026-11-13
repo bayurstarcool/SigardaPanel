@@ -171,6 +171,25 @@
   $effect(() => { page; pageSize; runtimeFilter; statusFilter; untrack(fetchSites); });
   $effect(() => { if (servers.length === 1 && form.server_id === 0) form.server_id = servers[0].id; });
 
+  // PHP-FPM versions actually installed on the chosen server (null = unknown).
+  let serverPhp = $state<string[] | null>(null);
+  let serverPhpFor = 0;
+  $effect(() => {
+    const sid = form.server_id;
+    if (form.runtime !== 'php' || sid <= 0 || sid === serverPhpFor) return;
+    serverPhpFor = sid;
+    serverPhp = null;
+    apiFetch(auth.token, 'GET', `servers/${sid}/php-versions`)
+      .then((d: any) => {
+        if (form.server_id !== sid) return;
+        const list: string[] = (d?.versions ?? []).slice().sort((a: string, b: string) => b.localeCompare(a, undefined, { numeric: true }));
+        serverPhp = list;
+        if (list.length && !list.includes(form.php_version)) form.php_version = list.includes('8.3') ? '8.3' : list[0];
+      })
+      .catch(() => { if (form.server_id === sid) serverPhp = null; });
+  });
+  const phpChoices = $derived(serverPhp && serverPhp.length ? serverPhp : phpVersions);
+
   const sortedSites = $derived((() => {
     const arr = [...sites];
     arr.sort((a: any, b: any) => {
@@ -268,8 +287,11 @@
             <div>
               <label for="site-php" class="label">PHP version</label>
               <select id="site-php" bind:value={form.php_version} class="input font-mono">
-                {#each phpVersions as v (v)}<option value={v}>PHP {v}</option>{/each}
+                {#each phpChoices as v (v)}<option value={v}>PHP {v}</option>{/each}
               </select>
+              {#if serverPhp && serverPhp.length === 0}
+                <p class="mt-1 text-xs text-warning">No PHP-FPM is installed on this server. Install a version first (Stack → PHP).</p>
+              {/if}
             </div>
           {/if}
           <div>

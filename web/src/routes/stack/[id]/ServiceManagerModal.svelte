@@ -1,125 +1,85 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import {
-    CheckCircle2, XCircle, Loader2, Download, Check, Plus, Box, Play, Square,
-    RotateCw, Trash2, RefreshCw, ArrowUpCircle, X
-  } from 'lucide-svelte';
+  import { Loader2, Download, Check, Box, Trash2, RefreshCw, X } from 'lucide-svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
+  import OpProgress from './OpProgress.svelte';
+  import { statusBadge, type StackActionBody, type StackOp } from './stackOps';
 
+  // Version manager for single-install runtimes chosen by version: Node.js
+  // (NodeSource major line) and Go (official tarball). Installing another
+  // version replaces the current one.
   let {
     open,
     pkg,
+    info = null,
     serverId = '',
+    busy = false,
+    op = null,
+    run,
     onClose,
-    onChanged
   }: {
     open: boolean;
-    pkg: { name: string; label: string; desc: string; icon: any; color?: string; multiVersion?: boolean; versionSupport?: boolean; availableVersions?: string[] } | null;
+    pkg: { name: string; label: string; desc: string; icon: any; uninstallNote?: string } | null;
+    info?: any;
     serverId: string;
+    busy?: boolean;
+    op?: StackOp | null;
+    run: (body: StackActionBody) => Promise<StackOp | null>;
     onClose: () => void;
-    onChanged: () => void;
   } = $props();
 
-  let installedVersions = $state<any[]>([]);
-  let availableVersions = $state<any[]>([]);
+  let available = $state<any[]>([]);
   let customVersion = $state('');
-  let loading = $state(true);
-  let actionPending = $state('');
-  let actionResult = $state<{ type: 'success' | 'error'; message: string } | null>(null);
+  let loading = $state(false);
+  let loadError = $state('');
+  let confirmUninstall = $state(false);
+
+  const installed = $derived(info && info.status !== 'missing' ? info : null);
+  const mine = $derived(op && pkg && op.package === pkg.name ? op : null);
 
   $effect(() => {
-    if (open && pkg) {
-      loadVersions();
-    }
+    if (open && pkg) loadAvailable();
   });
 
-  function loadVersions() {
+  async function loadAvailable() {
     if (!auth.user || !pkg) return;
     loading = true;
-    actionResult = null;
-
-    apiFetch(auth.token, 'POST', `servers/${serverId}/stack/action`, {
-      package: pkg.name,
-      action: 'list-versions'
-    }).then((d: any) => {
-      installedVersions = d?.data?.versions ?? d?.versions ?? [];
-    }).catch(() => {
-      installedVersions = [];
-    });
-
-    apiFetch(auth.token, 'POST', `servers/${serverId}/stack/action`, {
-      package: pkg.name,
-      action: 'list-available'
-    }).then((d: any) => {
-      let av = d?.data?.versions ?? d?.versions ?? [];
-      if (av.length === 0 && pkg?.availableVersions) {
-        av = pkg.availableVersions.map(v => ({
-          version: v,
-          installed: installedVersions.some(iv => iv.version === v)
-        }));
-      }
-      availableVersions = av;
-    }).catch(() => {
-      if (pkg?.availableVersions) {
-        availableVersions = pkg.availableVersions.map(v => ({
-          version: v,
-          installed: installedVersions.some(iv => iv.version === v)
-        }));
-      } else {
-        availableVersions = [];
-      }
-    }).finally(() => {
-      loading = false;
-    });
-  }
-
-  async function doAction(version: string, action: string) {
-    if (!auth.user || !pkg) return;
-    actionPending = `${version}:${action}`;
-    actionResult = null;
+    loadError = '';
     try {
-      const result = await apiFetch(auth.token, 'POST', `servers/${serverId}/stack/action`, {
-        package: pkg.name,
-        action,
-        version
-      });
-      if (result?.ok) {
-        actionResult = { type: 'success', message: result?.message || `${action} ${pkg.label} ${version} completed` };
-        onChanged();
-      } else {
-        actionResult = { type: 'error', message: result?.message || `${action} ${pkg.label} ${version} failed` };
-      }
-      setTimeout(loadVersions, 1500);
+      const d: any = await apiFetch(auth.token, 'POST', `servers/${serverId}/stack/action`, { package: pkg.name, action: 'list-available' });
+      available = d?.versions ?? d?.data?.versions ?? [];
     } catch (e: any) {
-      actionResult = { type: 'error', message: e.message };
+      loadError = e.message;
+      available = [];
     } finally {
-      actionPending = '';
+      loading = false;
     }
   }
 
-  function statusColor(status: string) {
-    switch (status) {
-      case 'running': return { label: 'Running', badge: 'badge-success' };
-      case 'stopped': return { label: 'Stopped', badge: 'badge-warning' };
-      default: return { label: 'Installed', badge: 'badge-info' };
-    }
+  async function act(action: string, version?: string) {
+    if (!pkg) return;
+    const res = await run({ package: pkg.name, action, version });
+    if (res?.done) loadAvailable();
   }
 
-  let uninstallVersion = $state('');
-  let confirmUninstall = $state(false);
+  function isCurrent(v: string) {
+    if (!installed?.version) return false;
+    return pkg?.name === 'node' ? installed.version.startsWith(v + '.') : installed.version === v;
+  }
 </script>
 
 {#if open && pkg}
   {@const Icon = pkg.icon || Box}
+  {@const sc = statusBadge(installed?.status ?? 'missing')}
   <div class="overlay animate-fade-in flex items-end justify-center overflow-auto sm:items-start sm:px-4 sm:py-10" onclick={onClose} role="presentation">
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
-      class="popover animate-pop-in flex max-h-[90dvh] w-full max-w-3xl flex-col max-sm:rounded-b-none sm:max-h-none"
+      class="popover animate-pop-in flex max-h-[90dvh] w-full max-w-2xl flex-col max-sm:rounded-b-none sm:max-h-none"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
-      aria-label="{pkg.label} version manager"
+      aria-label="{pkg.label} versions"
       tabindex="-1"
     >
       <div class="flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 py-3.5">
@@ -128,141 +88,95 @@
             <Icon size={16} />
           </div>
           <div class="min-w-0">
-            <h2 class="truncate text-[15px] font-semibold text-fg">{pkg.label} versions & service</h2>
-            <p class="truncate text-xs text-subtle">{pkg.desc} — install, switch or manage versions</p>
+            <h2 class="truncate text-[15px] font-semibold text-fg">{pkg.label} versions</h2>
+            <p class="truncate text-xs text-subtle">{pkg.desc} — one version at a time; installing another replaces it</p>
           </div>
         </div>
         <div class="flex items-center gap-1">
-          <button onclick={() => loadVersions()} disabled={loading} class="btn btn-ghost btn-icon btn-sm" aria-label="Refresh versions">
+          <button onclick={() => loadAvailable()} disabled={loading} class="btn btn-ghost btn-icon btn-sm" aria-label="Refresh versions">
             <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
           </button>
-          <button onclick={onClose} class="btn btn-ghost btn-icon btn-sm" aria-label="Close">
-            <X size={16} />
-          </button>
+          <button onclick={onClose} class="btn btn-ghost btn-icon btn-sm" aria-label="Close"><X size={16} /></button>
         </div>
       </div>
 
       <div class="overflow-y-auto px-5 py-4">
-        {#if actionResult}
-          <div class="mb-4 flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] {actionResult.type === 'success' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}">
-            {#if actionResult.type === 'success'}<CheckCircle2 size={14} class="shrink-0" />{:else}<XCircle size={14} class="shrink-0" />{/if}
-            {actionResult.message}
+        <OpProgress op={mine} />
+
+        <h3 class="mb-2 text-sm font-semibold text-fg">Installed</h3>
+        {#if installed}
+          <div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2.5">
+            <div class="flex min-w-0 items-center gap-2.5">
+              <span class="font-mono text-[13px] font-semibold text-fg">{installed.version}</span>
+              <span class="badge {sc.badge}"><span class="dot"></span>{sc.label}</span>
+              {#if installed.detail}<span class="text-xs text-subtle">{installed.detail}</span>{/if}
+              {#if installed.path}<span class="truncate font-mono text-xs text-subtle max-sm:hidden">{installed.path}</span>{/if}
+            </div>
+            <div class="flex shrink-0 items-center gap-1">
+              {#if pkg.name === 'node'}
+                <button onclick={() => act('update')} disabled={busy} class="btn btn-ghost btn-xs" title="Upgrade within the installed major line">Update</button>
+              {/if}
+              <button
+                onclick={() => (confirmUninstall = true)}
+                disabled={busy}
+                class="btn btn-danger-ghost btn-icon btn-xs"
+                aria-label="Uninstall {pkg.label}"
+                title="Uninstall"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </div>
+        {:else}
+          <div class="mb-6 rounded-lg border border-dashed border-line px-4 py-5 text-center text-[13px] text-muted">
+            {pkg.label} is not installed
           </div>
         {/if}
 
+        <h3 class="mb-2 text-sm font-semibold text-fg">{installed ? 'Switch to another version' : 'Install'}</h3>
+        {#if loadError}<p class="mb-2 text-xs text-danger">{loadError}</p>{/if}
         {#if loading}
-          <div class="space-y-2">
-            {#each Array(3) as _, i (i)}<div class="skeleton h-12"></div>{/each}
-          </div>
+          <div class="grid grid-cols-3 gap-2">{#each Array(3) as _, i (i)}<div class="skeleton h-14"></div>{/each}</div>
         {:else}
-          <h3 class="mb-2 flex items-center gap-2 text-sm font-semibold text-fg">
-            <Check size={14} class="text-success" />
-            Installed versions <span class="font-normal text-subtle tabular-nums">({installedVersions.length})</span>
-          </h3>
-
-          {#if installedVersions.length > 0}
-            <div class="mb-6 divide-y divide-line rounded-lg border border-line">
-              {#each installedVersions as ver, i (i)}
-                {@const sc = statusColor(ver.status)}
-                {@const isPending = actionPending.startsWith(ver.version + ':')}
-                <div class="flex items-center justify-between gap-3 px-3 py-2.5">
-                  <div class="flex min-w-0 items-center gap-2.5">
-                    <span class="font-mono text-[13px] font-semibold text-fg">v{ver.version}</span>
-                    <span class="badge {sc.badge}"><span class="dot"></span>{sc.label}</span>
-                    {#if ver.path}
-                      <span class="truncate font-mono text-xs text-subtle max-sm:hidden">{ver.path}</span>
-                    {/if}
-                  </div>
-                  <div class="flex shrink-0 items-center gap-0.5">
-                    {#if ver.status === 'stopped'}
-                      <button onclick={() => doAction(ver.version, 'start')} disabled={isPending} title="Start" aria-label="Start" class="btn btn-ghost btn-icon btn-xs text-success">
-                        {#if isPending}<Loader2 size={12} class="animate-spin" />{:else}<Play size={12} />{/if}
-                      </button>
-                    {/if}
-                    {#if ver.status === 'running'}
-                      <button onclick={() => doAction(ver.version, 'stop')} disabled={isPending} title="Stop" aria-label="Stop" class="btn btn-ghost btn-icon btn-xs text-warning">
-                        {#if isPending}<Loader2 size={12} class="animate-spin" />{:else}<Square size={12} />{/if}
-                      </button>
-                    {/if}
-                    <button onclick={() => doAction(ver.version, 'restart')} disabled={isPending} title="Restart" aria-label="Restart" class="btn btn-ghost btn-icon btn-xs">
-                      <RotateCw size={12} />
-                    </button>
-                    <button onclick={() => doAction(ver.version, 'update')} disabled={isPending} title="Update/Rebuild" aria-label="Update" class="btn btn-ghost btn-icon btn-xs">
-                      <ArrowUpCircle size={12} />
-                    </button>
-                    <button
-                      onclick={() => { uninstallVersion = ver.version; confirmUninstall = true; }}
-                      disabled={isPending}
-                      title="Uninstall"
-                      aria-label="Uninstall"
-                      class="btn btn-danger-ghost btn-icon btn-xs"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <div class="mb-6 rounded-lg border border-dashed border-line px-4 py-6 text-center">
-              <Box size={18} class="mx-auto mb-2 text-subtle" />
-              <p class="text-[13px] text-muted">No {pkg.label} versions currently installed</p>
-            </div>
-          {/if}
-
-          <h3 class="mb-2 flex items-center gap-2 text-sm font-semibold text-fg">
-            <Plus size={14} class="text-accent" />
-            Install other versions
-          </h3>
-
-          {#if availableVersions.length > 0}
-            <div class="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
-              {#each availableVersions as ver, i (i)}
-                {@const installed = ver.installed || installedVersions.some(iv => iv.version === ver.version)}
-                {@const isPending = actionPending.startsWith(ver.version + ':install')}
-                <button
-                  onclick={() => { if (!installed) doAction(ver.version, 'install'); }}
-                  disabled={installed || isPending}
-                  class="rounded-lg border px-3 py-2.5 text-center transition-colors duration-150 disabled:cursor-not-allowed {installed
-                    ? 'border-success/20 bg-success/5'
-                    : 'cursor-pointer border-line bg-surface hover:border-accent/40 hover:bg-accent/5'} {isPending ? 'opacity-60' : ''}"
-                >
-                  <div class="mb-0.5 font-mono text-[13px] font-semibold text-fg">v{ver.version}</div>
-                  {#if installed}
-                    <span class="inline-flex items-center gap-1 text-[11px] font-medium text-success"><Check size={10} /> Installed</span>
-                  {:else if isPending}
-                    <span class="inline-flex items-center gap-1 text-[11px] font-medium text-accent"><Loader2 size={10} class="animate-spin" /> Installing…</span>
-                  {:else}
-                    <span class="inline-flex items-center gap-1 text-[11px] font-medium text-subtle"><Download size={10} /> Install</span>
-                  {/if}
-                </button>
-              {/each}
-            </div>
-          {/if}
-
-          <div class="mt-4 rounded-lg border border-line bg-surface-2/50 p-3">
-            <label for="custom-ver-input" class="label">Install a specific version (or custom tag)</label>
-            <div class="flex items-center gap-2">
-              <input
-                id="custom-ver-input"
-                type="text"
-                placeholder={pkg.name === 'go' ? 'e.g. 1.24.0' : pkg.name === 'node' ? 'e.g. 20' : 'e.g. 8.4'}
-                bind:value={customVersion}
-                class="input flex-1 font-mono text-[13px]"
-              />
+          <div class="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {#each available as ver (ver.version)}
+              {@const current = isCurrent(ver.version)}
+              {@const pending = busy && mine?.version === ver.version}
               <button
-                onclick={() => {
-                  if (customVersion.trim()) {
-                    doAction(customVersion.trim(), 'install');
-                    customVersion = '';
-                  }
-                }}
-                disabled={!customVersion.trim() || actionPending !== ''}
+                onclick={() => { if (!current) act('install', ver.version); }}
+                disabled={current || busy}
+                data-testid="stack-version-{pkg.name}-{ver.version}"
+                class="rounded-lg border px-3 py-2.5 text-center transition-colors duration-150 disabled:cursor-not-allowed {current
+                  ? 'border-success/20 bg-success/5'
+                  : 'cursor-pointer border-line bg-surface hover:border-accent/40 hover:bg-accent/5'} {busy && !current ? 'opacity-60' : ''}"
+              >
+                <div class="mb-0.5 font-mono text-[13px] font-semibold text-fg">{pkg.name === 'node' ? `${ver.version}.x` : ver.version}</div>
+                {#if current}
+                  <span class="inline-flex items-center gap-1 text-[11px] font-medium text-success"><Check size={10} /> Installed</span>
+                {:else if pending}
+                  <span class="inline-flex items-center gap-1 text-[11px] font-medium text-accent"><Loader2 size={10} class="animate-spin" /> Installing…</span>
+                {:else}
+                  <span class="inline-flex items-center gap-1 text-[11px] font-medium text-subtle"><Download size={10} /> {installed ? 'Switch' : 'Install'}</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+
+        {#if pkg.name === 'go'}
+          <div class="mt-4 rounded-lg border border-line bg-surface-2/50 p-3">
+            <label for="custom-ver-input" class="label">Install a specific Go release</label>
+            <div class="flex items-center gap-2">
+              <input id="custom-ver-input" type="text" placeholder="e.g. 1.24.10" bind:value={customVersion} class="input flex-1 font-mono text-[13px]" />
+              <button
+                onclick={() => { const v = customVersion.trim(); if (v) { act('install', v); customVersion = ''; } }}
+                disabled={!/^\d+\.\d+(\.\d+)?$/.test(customVersion.trim()) || busy}
                 class="btn btn-primary"
               >
                 <Download size={14} /> Install
               </button>
             </div>
+            <p class="mt-1.5 text-xs text-subtle">Downloaded from go.dev and checked against its published SHA-256.</p>
           </div>
         {/if}
       </div>
@@ -271,10 +185,10 @@
 
   <ConfirmDialog
     bind:open={confirmUninstall}
-    title="Uninstall {pkg.label} {uninstallVersion}?"
-    message="This version will be removed from the server."
+    title="Uninstall {pkg.label}?"
+    message={pkg.uninstallNote ?? 'It will be removed from the server.'}
     confirmLabel="Uninstall"
     destructive
-    onconfirm={() => { if (uninstallVersion) doAction(uninstallVersion, 'uninstall'); }}
+    onconfirm={() => act('uninstall')}
   />
 {/if}
