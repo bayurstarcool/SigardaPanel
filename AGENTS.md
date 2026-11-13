@@ -465,6 +465,9 @@ shows would take other packages with it.
 - `GET /api/v1/agents/install` — Agent install script
 - `POST /api/v1/agents/tokens` — Create registration token
 - `GET/PUT /api/v1/settings/retention` — Retention settings
+- `GET /api/v1/system/panel-update` — Installed/latest release, update status (`?refresh=1` re-checks GitHub; super_admin)
+- `POST /api/v1/system/panel-update` — Install the latest release (202; super_admin, interactive session)
+- `PUT /api/v1/system/panel-update/settings` — `{auto_update}` (super_admin)
 - `POST /api/v1/databases/phpmyadmin-credentials` — phpMyAdmin login
 - `POST /api/v1/databases/phpmyadmin-reset-passwords` — Reset passwords
 - `GET /api/v1/database-server` — DB server info
@@ -508,6 +511,24 @@ location /api/ws/ {
     proxy_send_timeout 3600s;
 }
 ```
+
+## Panel Self-Update
+
+Settings → **Panel update** (super_admin). `internal/selfupdate` looks up the latest
+GitHub release (cached; tags must be `vX.Y.Z`) and compares versions. The API
+(`internal/apihttp/panel_update.go`) asks the panel host's own agent
+(`SIGARDAPANEL_AGENT_URL`, must be loopback) to install it; the agent
+(`internal/agenthttp/panel_update.go`, `GET|POST /tasks/panel/update`) writes the
+installer embedded in the binary (`installer/embed.go` → `installer/install.sh`) to
+`/var/lib/sigardapanel-update/` and runs `install.sh update` with
+`SIGARDA_VERSION=<tag>` in the transient unit `sigardapanel-update.service`
+(`systemd-run --collect`), so it survives the agent/API/web restarts. Signature
+check, backup and rollback are the installer's. The agent refuses dev builds,
+hosts without `/etc/sigardapanel/panel.env`, non-newer tags and a second run.
+`StartPanelUpdateChecker` (hourly) notifies super admins once per new release and,
+with `app_settings.panel_auto_update=true`, starts one update per release
+(`panel_update_auto_tag`). Injected agent routers get a runner that executes
+nothing (`RouterOptions.PanelUpdate*`). `build.sh` must copy `installer/`.
 
 ## Fail2ban Management
 

@@ -8,6 +8,7 @@
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
+  import PanelUpdateCard from '$components/PanelUpdateCard.svelte';
 
   let version = $state('—');
   let serverInfo = $state<any>(null);
@@ -67,6 +68,10 @@
   <PageHeader title="Settings" description="System configuration and management" />
 
   <div class="grid gap-4 md:grid-cols-2">
+    {#if isSuperAdmin}
+      <PanelUpdateCard />
+    {/if}
+
     <!-- Shortcuts -->
     <div class="card divide-y divide-line">
       <a href="/backups" class="group flex items-center gap-3 p-5 transition-colors duration-150 hover:bg-surface-2">

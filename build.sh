@@ -13,6 +13,7 @@ trap "rm -rf $BUILD_DIR" EXIT
 echo "[1/3] Copying enterprise source..."
 cp -r "$SCRIPT_DIR"/internal "$BUILD_DIR/"
 cp -r "$SCRIPT_DIR"/cmd "$BUILD_DIR/"
+cp -r "$SCRIPT_DIR"/installer "$BUILD_DIR/"   # embedded by the panel self-update
 cp -r "$SCRIPT_DIR"/deploy "$BUILD_DIR/" 2>/dev/null || true
 cp -r "$SCRIPT_DIR"/docs "$BUILD_DIR/" 2>/dev/null || true
 cp "$SCRIPT_DIR"/go.mod "$BUILD_DIR/"

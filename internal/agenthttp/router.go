@@ -53,6 +53,7 @@ type Router struct {
 	phpRunDir    string // PHP-FPM sockets (php<version>-fpm.sock)
 	useraddCmd   string // creates site owners' Linux accounts
 	stack        *stackManager
+	panelUpdate  *panelUpdater
 }
 
 // RouterOptions allows overriding router defaults for testing.
@@ -83,6 +84,12 @@ type RouterOptions struct {
 	// version detection.
 	StackBinDir  string
 	StackSbinDir string
+	// PanelUpdate* replace the host access of the panel self-update. Injected
+	// routers default to a runner that executes nothing.
+	PanelUpdateRun      panelUpdateRunFunc
+	PanelUpdateStateDir string
+	PanelUpdateEnvFile  string
+	PanelUpdateVersion  string
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -174,6 +181,8 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 			[]string{r.nginxConfDir, "/etc/nginx/conf.d", "/etc/nginx/sites-available"})
 	}
 
+	r.panelUpdate = newPanelUpdater(opts)
+
 	e.GET("/health", healthHandler)
 	// /metrics forks several processes per call, so it requires the agent token.
 	e.GET("/metrics", r.metricsHandler, r.requireAgentAuth)
@@ -215,6 +224,10 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.GET("/stack/info", r.stackInfoTask)
 	tasks.POST("/stack/install", r.stackInstallTask)
 	tasks.GET("/stack/ops/:id", r.stackOpTask)
+
+	// Panel self-update (panel host only; runs the embedded, signature-verifying installer)
+	tasks.GET("/panel/update", r.panelUpdateStatusTask)
+	tasks.POST("/panel/update", r.panelUpdateStartTask)
 
 	// Application templates (WordPress, Laravel, etc.)
 	tasks.POST("/templates/wordpress", r.installWordPress)

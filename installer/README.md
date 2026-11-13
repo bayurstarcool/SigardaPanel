@@ -19,6 +19,10 @@ Notes for maintainers:
 - The minisign public key in `install.sh` (`PUBKEY`) must match the key used by
   `scripts/release.sh` and the key printed in the README. Never change it
   without a key-rotation plan: existing users verify updates with it.
+- `install.sh` is also embedded in the binary (`installer/embed.go`): the
+  panel's one-click/automatic update (Settings → Panel update) runs that copy
+  as `install.sh update`, so `update` must keep working non-interactively with
+  only `SIGARDA_VERSION` set, and must exit non-zero on failure.
 - CI runs `bash -n` and `shellcheck -S error` on `installer/install.sh`.
 - Changes are tested end-to-end in a throwaway systemd container (Ubuntu 24.04):
   install, `verify`, `update` (including a forced failure to exercise the rollback).
