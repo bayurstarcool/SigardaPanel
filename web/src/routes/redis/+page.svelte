@@ -45,7 +45,7 @@
     loading = true;
     loadError = '';
     apiFetch(auth.token, 'GET', `servers/${selectedServer}/redis/stats`)
-      .then((d: any) => { stats = d?.stats ?? d; })
+      .then((d: any) => { stats = d; })
       .catch((e: any) => {
         stats = null;
         if (e?.message !== 'session expired') loadError = e?.message || 'Failed to load Redis stats';

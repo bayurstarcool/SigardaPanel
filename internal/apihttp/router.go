@@ -303,9 +303,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/servers/:id/gpu", metricH.gpu, RequireAuth(s))
 	// Service Tokens (admin only)
 	stH := newServiceTokenHandler(s)
-	e.GET("/api/v1/service-tokens", stH.list, RequireAuth(s), RequireAdmin(s), RequireUserSession)
-	e.POST("/api/v1/service-tokens", stH.create, RequireAuth(s), RequireAdmin(s), RequireUserSession)
-	e.DELETE("/api/v1/service-tokens/:id", stH.revoke, RequireAuth(s), RequireAdmin(s), RequireUserSession)
+	e.GET("/api/v1/service-tokens", stH.list, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/service-tokens", stH.create, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.DELETE("/api/v1/service-tokens/:id", stH.revoke, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// Alert endpoints (admin only)
 	alertH := newAlertHandler(s, auditRec)
@@ -356,7 +356,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/database-server/import", dbServerH.importDatabases, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
 
 	// Audit log endpoint (admin only)
-	auditH := audit.NewHandler(s.AuditLogs, RequireAdmin(s))
+	auditH := audit.NewHandler(s.AuditLogs, scopeAuditLogs(s))
 	auditGroup := e.Group("/api/v1", RequireAuth(s))
 	auditH.Register(auditGroup)
 	// Purging old audit entries is global and destructive: super_admin with

@@ -29,6 +29,12 @@ func (h *userHandler) listUserSites(c echo.Context) error {
 		if sess == nil || sess.UserID != userID {
 			return echo.NewHTTPError(http.StatusForbidden, "access denied")
 		}
+	} else if role != auth.RoleSuperAdmin && sess != nil && sess.UserID != userID {
+		// Admins see the mappings of users they created, not other tenants'.
+		target, err := h.store.Users.GetByID(c.Request().Context(), userID)
+		if err != nil || target == nil || !target.CreatedBy.Valid || target.CreatedBy.Int64 != sess.UserID {
+			return echo.NewHTTPError(http.StatusNotFound, "user not found")
+		}
 	}
 
 	// Get assigned sites from user_sites table

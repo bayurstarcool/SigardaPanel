@@ -547,6 +547,11 @@ func (ah *authHandler) updateProfile(c echo.Context) error {
 		if err := ah.store.Users.UpdatePassword(ctx, sess.UserID, hash); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}
+		// Sessions opened with the old password (a stolen cookie, another
+		// device) end now; this one stays signed in.
+		if err := ah.store.Sessions.RevokeAllForUser(ctx, sess.UserID, sess.ID); err != nil {
+			slog.Warn("api: revoke other sessions after password change", "error", err)
+		}
 		details["password_changed"] = true
 	}
 

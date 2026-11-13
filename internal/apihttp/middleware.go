@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sigardapanel/internal/audit"
 	"strings"
 	"time"
 
@@ -336,5 +337,24 @@ func featureMinTier(feature string) string {
 		return "enterprise"
 	default:
 		return "free"
+	}
+}
+
+// scopeAuditLogs admits admins to the audit log; a non-super admin only
+// sees their own entries (the log holds every tenant's actions, including
+// super_admin command lines).
+func scopeAuditLogs(s *store.Store) echo.MiddlewareFunc {
+	admin := RequireAdmin(s)
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return admin(func(c echo.Context) error {
+			if role, _ := c.Get(roleKey).(string); role != auth.RoleSuperAdmin {
+				sess := sessionFromEcho(c)
+				if sess == nil {
+					return echo.NewHTTPError(http.StatusForbidden, "access denied")
+				}
+				c.Set(audit.ForceUserIDKey, sess.UserID)
+			}
+			return next(c)
+		})
 	}
 }

@@ -1128,7 +1128,7 @@ func (h *siteHandler) gitBranches(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // gitLog proxies to agent GET /tasks/git/log.
@@ -1151,7 +1151,7 @@ func (h *siteHandler) gitLog(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // gitRollback proxies to agent POST /tasks/git/rollback.
@@ -1174,7 +1174,7 @@ func (h *siteHandler) gitRollback(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // gitCheckout proxies to agent POST /tasks/git/checkout.
@@ -1197,7 +1197,7 @@ func (h *siteHandler) gitCheckout(c echo.Context) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
-	return c.JSON(resp.StatusCode, httpjson.Success{Data: result, RequestID: rid})
+	return agentProxyResponse(c, rid, resp.StatusCode, result)
 }
 
 // resolveSiteAndServer resolves site and its server from URL params.

@@ -45,6 +45,9 @@ type UserRepository interface {
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
 	UpdatePassword(ctx context.Context, userID int64, newHash string) error
+	// SetTemporaryPassword sets a password chosen by someone else (an
+	// admin reset): the user must replace it at the next login.
+	SetTemporaryPassword(ctx context.Context, userID int64, newHash string) error
 	List(ctx context.Context, filter UserListFilter) ([]User, error)
 	UpdateRole(ctx context.Context, userID int64, role string) error
 	UpdateEmail(ctx context.Context, userID int64, email string) error
@@ -130,6 +133,19 @@ func (s *SQLiteUserStore) UpdatePassword(ctx context.Context, userID int64, newH
 	)
 	if err != nil {
 		return fmt.Errorf("update password: %w", err)
+	}
+	return nil
+}
+
+// SetTemporaryPassword stores a password chosen by an admin and clears
+// password_changed_at, so the API demands a password change (see AGENTS.md).
+func (s *SQLiteUserStore) SetTemporaryPassword(ctx context.Context, userID int64, newHash string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = ?, password_changed_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		newHash, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("set temporary password: %w", err)
 	}
 	return nil
 }

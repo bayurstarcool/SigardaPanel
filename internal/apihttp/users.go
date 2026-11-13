@@ -178,6 +178,10 @@ func (h *userHandler) delete(c echo.Context) error {
 		if err != nil || u == nil || !u.CreatedBy.Valid || u.CreatedBy.Int64 != sess.UserID {
 			return echo.NewHTTPError(http.StatusNotFound, "user not found")
 		}
+		// A user the admin created may have been promoted since.
+		if u.Role != auth.RoleUser {
+			return echo.NewHTTPError(http.StatusForbidden, "only a super admin can delete admin accounts")
+		}
 	}
 
 	// Record audit log before nullifying FKs (actor is the admin, not the deleted user)
@@ -230,6 +234,11 @@ func (h *userHandler) update(c echo.Context) error {
 		if err != nil || u == nil || !u.CreatedBy.Valid || u.CreatedBy.Int64 != sess.UserID {
 			return echo.NewHTTPError(http.StatusNotFound, "user not found")
 		}
+		// A user the admin created may have been promoted since: resetting
+		// their password would hand the admin that role.
+		if u.Role != auth.RoleUser {
+			return echo.NewHTTPError(http.StatusForbidden, "only a super admin can change admin accounts")
+		}
 	}
 
 	// Permission: only super_admin can promote to admin/super_admin
@@ -248,8 +257,20 @@ func (h *userHandler) update(c echo.Context) error {
 			slog.Error("api: request failed", "route", c.Path(), "error", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 		}
-		if err := h.store.Users.UpdatePassword(c.Request().Context(), id, hash); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		ctx := c.Request().Context()
+		if id == sess.UserID {
+			// Your own password, chosen by you.
+			if err := h.store.Users.UpdatePassword(ctx, id, hash); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+			}
+			_ = h.store.Sessions.RevokeAllForUser(ctx, id, sess.ID)
+		} else {
+			// Chosen by an admin: the user must replace it at the next
+			// login, and nobody keeps a session opened with the old one.
+			if err := h.store.Users.SetTemporaryPassword(ctx, id, hash); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+			}
+			_ = h.store.Sessions.RevokeAllForUser(ctx, id, 0)
 		}
 	}
 	if body.DiskLimit != nil {

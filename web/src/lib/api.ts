@@ -204,7 +204,11 @@ export async function apiFetch(
         throw new Error("server unavailable");
       }
 
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
+      if (json === null) {
+        if (!res.ok) throw new Error(`Request failed (HTTP ${res.status})`);
+        throw new Error("Invalid response from the server");
+      }
       if (res.status === 403 && json.error?.code === PASSWORD_CHANGE_REQUIRED) {
         // The API refuses everything but the password change until the user
         // replaces a password someone else chose. Send them to Profile (the
@@ -220,7 +224,14 @@ export async function apiFetch(
         // request_id lets support correlate a user-visible failure with the
         // server log line for the same request.
         const ref = json.request_id ? ` · ref ${json.request_id.slice(0, 15)}` : "";
-        throw new Error((json.error.message || json.error.code) + ref);
+        throw new Error((typeof json.error === "string" ? json.error : json.error.message || json.error.code) + ref);
+      }
+
+      if (!res.ok) {
+        // An error answer without the {error:{...}} envelope (e.g. a
+        // handler that wraps an upstream failure): never report success.
+        const msg = json?.data?.message || json?.message || (typeof json?.error === "string" ? json.error : "");
+        throw new Error(msg || `Request failed (HTTP ${res.status})`);
       }
 
       // Mark as validated on successful request

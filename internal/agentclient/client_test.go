@@ -141,3 +141,20 @@ func TestExecute_EndpointMapping(t *testing.T) {
 		ts.Close()
 	}
 }
+
+func TestExecute_OKFalseIsAFailure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ok":false,"message":"app failed to start","app_status":"errored"}`))
+	}))
+	defer ts.Close()
+	if _, err := New(ts.URL, "t").Execute(context.Background(), "app.start", "{}"); err == nil {
+		t.Fatal("ok:false with HTTP 200 was treated as success")
+	}
+	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"message":"done"}`))
+	}))
+	defer ts2.Close()
+	if _, err := New(ts2.URL, "t").Execute(context.Background(), "app.start", "{}"); err != nil {
+		t.Fatalf("a 200 without an ok field must stay a success: %v", err)
+	}
+}
