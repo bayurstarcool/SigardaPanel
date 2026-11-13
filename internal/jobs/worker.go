@@ -245,6 +245,20 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	} else {
 		slog.Warn("worker: decrypt job payload failed", "job_id", job.ID, "error", derr)
 	}
+	// site.create is also how a site's vhost is regenerated (PHP, app port,
+	// security changes): the site's stored settings complete the payload,
+	// and the site's status before the job decides what success means.
+	var siteBefore *store.Site
+	if job.Type == jobmodel.TypeSiteCreate && job.SiteID.Valid {
+		siteBefore, _ = w.store.Sites.GetByID(ctx, job.SiteID.Int64)
+		enriched, err := w.siteCreatePayload(ctx, siteBefore, dispatchPayload)
+		if err != nil {
+			_ = w.store.Jobs.MarkCompleted(ctx, job.ID, false, "", err.Error())
+			slog.Warn("worker: site.create refused", "id", job.ID, "error", err)
+			return
+		}
+		dispatchPayload = enriched
+	}
 	result, execErr := agent.Execute(ctx, job.Type, dispatchPayload)
 
 	if execErr != nil {
@@ -272,7 +286,7 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 
 		// A site whose creation failed must not stay "pending" forever: show
 		// it as failed so the operator sees it and can delete/recreate it.
-		if job.Type == jobmodel.TypeSiteCreate && job.SiteID.Valid {
+		if job.Type == jobmodel.TypeSiteCreate && job.SiteID.Valid && siteIsNew(siteBefore) {
 			if err := w.store.Sites.UpdateStatus(ctx, job.SiteID.Int64, "failed"); err != nil {
 				slog.Error("worker: mark site failed", "id", job.SiteID.Int64, "error", err)
 			}
@@ -345,9 +359,13 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	case jobmodel.TypeSiteCreate:
 		if job.SiteID.Valid {
 			siteID := job.SiteID.Int64
-			// Update site status to active
-			if err := w.store.Sites.UpdateStatus(ctx, siteID, "active"); err != nil {
-				slog.Error("worker: update site status", "id", siteID, "error", err)
+			isNew := siteIsNew(siteBefore)
+			// Only the initial creation activates a site: a vhost
+			// regeneration must never change its status.
+			if isNew {
+				if err := w.store.Sites.UpdateStatus(ctx, siteID, "active"); err != nil {
+					slog.Error("worker: update site status", "id", siteID, "error", err)
+				}
 			}
 
 			// Update conf_file from agent response
@@ -363,9 +381,10 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 				}
 			}
 
-			// Auto-enqueue SSL issuance for new sites
+			// Auto-enqueue SSL issuance for new sites only (not on every
+			// vhost regeneration).
 			site, err := w.store.Sites.GetByID(ctx, siteID)
-			if err == nil && site != nil && site.Domain != "" {
+			if isNew && err == nil && site != nil && site.Domain != "" && site.SSLStatus.String != "active" {
 				// Get owner email for Let's Encrypt
 				// No owner e-mail: the agent registers without a contact
 				// address (it used to register every install's Let's
@@ -573,4 +592,62 @@ func parseCertEndDate(s string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t.UTC(), true
+}
+
+// siteIsNew reports whether a site.create job creates the site (rather
+// than regenerating the vhost of an existing one).
+func siteIsNew(site *store.Site) bool {
+	if site == nil {
+		return true
+	}
+	switch site.Status {
+	case "", "pending", "creating", "failed":
+		return true
+	}
+	return false
+}
+
+// siteCreatePayload completes a site.create payload from the stored site:
+// fields the caller did not send (app port, proxy URL, PHP settings) and the
+// site's security settings, so a regeneration never drops them. Jobs for a
+// suspended site are refused: the agent would replace the suspension
+// placeholder with the live vhost.
+func (w *Worker) siteCreatePayload(ctx context.Context, site *store.Site, raw string) (string, error) {
+	if site == nil {
+		return raw, nil
+	}
+	if site.Status == "suspended" {
+		return "", fmt.Errorf("site %s is suspended; resume it before changing its configuration", site.Domain)
+	}
+	var p map[string]any
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return raw, nil
+	}
+	setIfMissing := func(key string, v any, ok bool) {
+		if _, has := p[key]; !has && ok {
+			p[key] = v
+		}
+	}
+	setIfMissing("port", site.AppPort.Int64, site.AppPort.Valid && site.AppPort.Int64 > 0)
+	setIfMissing("proxy_pass_url", site.ProxyPassURL.String, site.ProxyPassURL.Valid && site.ProxyPassURL.String != "")
+	setIfMissing("php_version", site.PHPVersion.String, site.PHPVersion.Valid && site.PHPVersion.String != "")
+	setIfMissing("php_ini", site.PHPIni.String, site.PHPIni.Valid && site.PHPIni.String != "")
+	if !siteIsNew(site) {
+		// An existing site: regenerate the vhost only (no starter files, no
+		// container re-creation).
+		p["vhost_regen"] = true
+	}
+	if sec, err := w.store.Security.GetBySiteID(ctx, site.ID); err == nil && sec != nil {
+		p["security"] = map[string]any{
+			"basic_auth_enabled":  sec.BasicAuthEnabled,
+			"basic_auth_username": sec.BasicAuthUsername,
+			"basic_auth_hash":     sec.BasicAuthPassword,
+			"blocked_ips":         sec.BlockedIPs,
+		}
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return raw, nil
+	}
+	return string(b), nil
 }

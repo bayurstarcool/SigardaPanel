@@ -199,6 +199,18 @@ func (h *siteHandler) appUpdateConfig(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
 	port := site.AppPort.Int64
+	if body.Port > 0 && body.Port != site.AppPort.Int64 {
+		// Only app runtimes proxy to app_port. For docker/proxy sites a port
+		// change used to regenerate the site without its image/proxy URL.
+		switch site.Runtime {
+		case "node", "go", "python":
+		default:
+			return echo.NewHTTPError(http.StatusBadRequest, "the app port can only be changed for node, go and python sites")
+		}
+		if site.Status == "suspended" {
+			return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+		}
+	}
 	// Validate port: check if it's available
 	if body.Port > 0 {
 		avail, reason, err := h.store.Sites.CheckPortAvailable(c.Request().Context(), site.ID, body.Port)

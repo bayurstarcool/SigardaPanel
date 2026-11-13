@@ -480,6 +480,17 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		// SystemUser owns the site files (sent on the initial site.create
 		// only; vhost regenerations leave ownership alone).
 		SystemUser string `json:"system_user,omitempty"`
+		// VhostRegen: an existing site, only its vhost is regenerated (no
+		// starter files, no container re-creation).
+		VhostRegen bool `json:"vhost_regen,omitempty"`
+		// Security: the site's basic auth and blocked IPs (validated again
+		// by nginx.GenerateVhost before anything is written).
+		Security *struct {
+			BasicAuthEnabled  bool     `json:"basic_auth_enabled"`
+			BasicAuthUsername string   `json:"basic_auth_username"`
+			BasicAuthHash     string   `json:"basic_auth_hash"`
+			BlockedIPs        []string `json:"blocked_ips"`
+		} `json:"security,omitempty"`
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
@@ -521,7 +532,9 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 	}
 
 	// 2. Write runtime starter template (skip if site already has content — don't overwrite user code)
-	if templates := nginx.TemplateForRuntime(payload.Runtime, payload.Domain, payload.Port); templates != nil {
+	if payload.VhostRegen {
+		// existing site: leave its files alone
+	} else if templates := nginx.TemplateForRuntime(payload.Runtime, payload.Domain, payload.Port); templates != nil {
 		for fname, content := range templates {
 			fpath := filepath.Join(payload.RootPath, fname)
 			if _, err := r.executor.RunShell(ctx, "test", "-f", fpath); err != nil {
@@ -537,7 +550,7 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 	}
 
 	// ─── Docker runtime: pull image + create container ───
-	if payload.Runtime == "docker" {
+	if payload.Runtime == "docker" && !payload.VhostRegen {
 		// Default image if not specified
 		if payload.DockerImage == "" {
 			payload.DockerImage = "nginx:alpine"
@@ -699,9 +712,22 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 		PHPVersion:   sql.NullString{String: payload.PHPVersion, Valid: payload.PHPVersion != ""},
 		PHPIni:       sql.NullString{String: payload.PHPIni, Valid: payload.PHPIni != ""},
 	}
-	config, err := nginx.GenerateVhost(site, payload.Port, nil)
+	var security *store.SiteSecurity
+	if payload.Security != nil {
+		security = &store.SiteSecurity{
+			BasicAuthEnabled:  payload.Security.BasicAuthEnabled,
+			BasicAuthUsername: payload.Security.BasicAuthUsername,
+			BasicAuthPassword: payload.Security.BasicAuthHash,
+			BlockedIPs:        payload.Security.BlockedIPs,
+		}
+	}
+	certPath, keyPath := r.letsEncryptCert(payload.Domain)
+	config, err := nginx.GenerateVhostWithCert(site, payload.Port, security, certPath, keyPath)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "config gen failed: "+err.Error())
+	}
+	if security == nil || !security.BasicAuthEnabled {
+		_ = nginx.RemoveHtpasswd(payload.Domain)
 	}
 
 	// Every generated vhost listens on 443 with the placeholder certificate
@@ -1327,8 +1353,11 @@ func (r *Router) sslIssueTask(c echo.Context) error {
 		}
 	}
 
-	// Update nginx config to include SSL
-	slog.Info("agent: ssl.issue success, updating nginx config", "domain", payload.Domain)
+	// Serve the new certificate (the vhost was created with the placeholder).
+	if err := r.serveLetsEncryptCert(ctx, payload.Domain); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "certificate issued but not installed in nginx: "+err.Error())
+	}
+	slog.Info("agent: ssl.issue success, certificate installed in nginx", "domain", payload.Domain)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"ok":        true,
@@ -1374,7 +1403,11 @@ func (r *Router) sslRenewTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "certbot renew failed: "+output)
 	}
 
-	// Reload nginx so renewed cert takes effect
+	// Make sure the vhost serves the Let's Encrypt certificate (vhosts
+	// written before this fix still point at the placeholder), then reload.
+	if err := r.serveLetsEncryptCert(ctx, payload.Domain); err != nil {
+		slog.Warn("agent: ssl.renew could not install the certificate in nginx", "domain", payload.Domain, "error", err)
+	}
 	_, _ = r.executor.RunShell(ctx, "nginx", "-s", "reload")
 	slog.Info("agent: nginx reloaded after ssl.renew", "domain", payload.Domain)
 
@@ -2365,4 +2398,50 @@ func readGPU() *gpuInfo {
 	gpu.PowerDraw = powerSum / float64(validCount)
 	gpu.FanSpeed = fanSum / float64(validCount)
 	return gpu
+}
+
+// letsEncryptCert returns the site's Let's Encrypt certificate and key when
+// certbot has issued them on this server ("" "" = use the placeholder).
+func (r *Router) letsEncryptCert(domain string) (string, string) {
+	live := filepath.Join(r.leDir, "live", domain)
+	cert, key := filepath.Join(live, "fullchain.pem"), filepath.Join(live, "privkey.pem")
+	if _, err := os.Stat(cert); err != nil {
+		return "", ""
+	}
+	if _, err := os.Stat(key); err != nil {
+		return "", ""
+	}
+	return cert, key
+}
+
+// serveLetsEncryptCert switches the site's vhost from the placeholder
+// certificate to the Let's Encrypt one after certbot issued or renewed it.
+// The previous vhost is restored when nginx -t fails.
+func (r *Router) serveLetsEncryptCert(ctx context.Context, domain string) error {
+	cert, key := r.letsEncryptCert(domain)
+	if cert == "" {
+		return fmt.Errorf("no Let's Encrypt certificate for %s on this server", domain)
+	}
+	path := filepath.Join(r.nginxConfDir, domain+".conf")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil // no vhost (yet): the next site.create picks the certificate up
+	}
+	old := string(raw)
+	updated := strings.ReplaceAll(old, "ssl_certificate "+nginx.DefaultSSLCertificate+";", "ssl_certificate "+cert+";")
+	updated = strings.ReplaceAll(updated, "ssl_certificate_key "+nginx.DefaultSSLCertificateKey+";", "ssl_certificate_key "+key+";")
+	if updated == old {
+		return nil // already served (or a custom vhost)
+	}
+	if err := r.executor.WriteFile(ctx, path, updated, 0644); err != nil {
+		return err
+	}
+	if out, err := r.executor.RunShell(ctx, "nginx", "-t"); err != nil {
+		_ = r.executor.WriteFile(ctx, path, old, 0644)
+		return fmt.Errorf("nginx -t failed with the new certificate: %s", strings.TrimSpace(out))
+	}
+	if out, err := r.executor.RunShell(ctx, "nginx", "-s", "reload"); err != nil {
+		return fmt.Errorf("nginx reload failed: %s", strings.TrimSpace(out))
+	}
+	return nil
 }

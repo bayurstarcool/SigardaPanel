@@ -2,7 +2,9 @@ package apihttp
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sigardapanel/internal/jobmodel"
 	"strconv"
 	"strings"
 
@@ -615,8 +618,32 @@ func (h *siteHandler) updateSecurity(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body")
 	}
-	if body.BlockedIPs == nil {
-		body.BlockedIPs = []string{}
+	ctx := c.Request().Context()
+	if site.Status == "suspended" {
+		return echo.NewHTTPError(http.StatusConflict, "the site is suspended; resume it first")
+	}
+	// Every value ends up in the nginx vhost: only plain IPs/CIDRs and a
+	// simple username are accepted.
+	blocked, err := nginx.NormalizeBlockedIPs(body.BlockedIPs)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	body.BasicAuthUsername = strings.TrimSpace(body.BasicAuthUsername)
+	if body.BasicAuthEnabled {
+		if !nginx.ValidBasicAuthUsername(body.BasicAuthUsername) {
+			return echo.NewHTTPError(http.StatusBadRequest, "basic auth username must be 1-64 characters of A-Z a-z 0-9 . _ -")
+		}
+		if len(body.BasicAuthPassword) > 72 {
+			return echo.NewHTTPError(http.StatusBadRequest, "basic auth password must be at most 72 characters")
+		}
+		if body.BasicAuthPassword == "" {
+			existing, _ := h.store.Security.GetBySiteID(ctx, id)
+			if existing == nil || existing.BasicAuthPassword == "" {
+				return echo.NewHTTPError(http.StatusBadRequest, "set a basic auth password")
+			}
+		} else if len(body.BasicAuthPassword) < 6 {
+			return echo.NewHTTPError(http.StatusBadRequest, "basic auth password must be at least 6 characters")
+		}
 	}
 
 	sec := &store.SiteSecurity{
@@ -624,55 +651,28 @@ func (h *siteHandler) updateSecurity(c echo.Context) error {
 		BasicAuthEnabled:  body.BasicAuthEnabled,
 		BasicAuthUsername: body.BasicAuthUsername,
 		BasicAuthPassword: body.BasicAuthPassword,
-		BlockedIPs:        body.BlockedIPs,
+		BlockedIPs:        blocked,
 	}
-	if err := h.store.Security.Upsert(c.Request().Context(), sec); err != nil {
+	if err := h.store.Security.Upsert(ctx, sec); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
-	h.store.NotifySiteUsers(c.Request().Context(), id, "security_changed", "Security Updated", "Site security settings were changed", "warning", "site", id)
-
-	// Write or remove htpasswd file based on basic auth state
-	if body.BasicAuthEnabled && body.BasicAuthUsername != "" && body.BasicAuthPassword != "" {
-		// Re-read to get the hashed password
-		stored, err := h.store.Security.GetBySiteID(c.Request().Context(), id)
-		if err == nil && stored.BasicAuthPassword != "" {
-			nginx.WriteHtpasswd(site.Domain, stored.BasicAuthUsername, stored.BasicAuthPassword)
-		}
-	} else {
-		nginx.RemoveHtpasswd(site.Domain)
+	// The site's own agent regenerates the vhost (with these settings, which
+	// the worker adds to every site.create payload) on the server that hosts
+	// the site, tests it with nginx -t and keeps the old vhost on failure.
+	job, err := h.enqueueVhostRegen(ctx, site, "Apply security settings for "+site.Domain)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to enqueue the vhost update")
 	}
 
-	// Regenerate nginx vhost with security settings
-	if nginxPath, err := exec.LookPath("nginx"); err == nil {
-		var port int
-		if site.AppPort.Valid {
-			port = int(site.AppPort.Int64)
-		}
-		sec, _ := h.store.Security.GetBySiteID(c.Request().Context(), id)
-		if vhostCfg, err := nginx.GenerateVhost(site, port, sec); err == nil {
-			nginxConfDir := "/etc/nginx/sites-enabled"
-			nginxAvailableDir := "/etc/nginx/sites-available"
-			os.MkdirAll(nginxConfDir, 0755)
-			os.MkdirAll(nginxAvailableDir, 0755)
-			enabledPath := filepath.Join(nginxConfDir, site.Domain+".conf")
-			availablePath := filepath.Join(nginxAvailableDir, site.Domain+".conf")
-			os.WriteFile(enabledPath, []byte(vhostCfg), 0644)
-			os.WriteFile(availablePath, []byte(vhostCfg), 0644)
-			// Validate and reload
-			cmd := exec.Command(nginxPath, "-t")
-			if err := cmd.Run(); err == nil {
-				exec.Command("systemctl", "reload", "nginx").Run()
-			}
-		}
-	}
+	h.store.NotifySiteUsers(ctx, id, "security_changed", "Security Updated", "Site security settings were changed", "warning", "site", id)
 
 	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteUpdate, audit.ResourceSite, id, map[string]any{
 		"domain":  site.Domain,
 		"section": "security",
 	})
 
-	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Security updated"}, RequestID: rid})
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "queued", "message": "Security settings saved; applying them to the site", "job_id": job.ID}, RequestID: rid})
 }
 
 func (h *siteHandler) getSshFtp(c echo.Context) error {
@@ -1003,4 +1003,29 @@ func (h *siteHandler) deleteCron(c echo.Context) error {
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Cron job deleted"}, RequestID: rid})
+}
+
+// enqueueVhostRegen queues a site.create job that only regenerates the
+// site's vhost on its server. The worker fills the payload with the site's
+// stored settings (runtime, PHP, app port, proxy URL, security).
+func (h *siteHandler) enqueueVhostRegen(ctx context.Context, site *store.Site, desc string) (*jobmodel.Job, error) {
+	payload, _ := json.Marshal(map[string]any{
+		"site_id":     site.ID,
+		"name":        site.Name,
+		"domain":      site.Domain,
+		"runtime":     site.Runtime,
+		"root_path":   site.RootPath,
+		"vhost_regen": true,
+	})
+	job := &jobmodel.Job{
+		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
+		SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
+		Type:        jobmodel.TypeSiteCreate,
+		Description: desc,
+		Payload:     string(payload),
+	}
+	if err := h.store.Jobs.Create(ctx, job); err != nil {
+		return nil, err
+	}
+	return job, nil
 }
