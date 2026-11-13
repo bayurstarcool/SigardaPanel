@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sigardapanel/internal/audit"
 	"strconv"
 	"strings"
@@ -407,5 +408,59 @@ func auditServerAction(rec *audit.Recorder) echo.MiddlewareFunc {
 			rec.RecordAction(c.Request().Context(), uid, action, audit.ResourceServer, id, map[string]any{"method": c.Request().Method})
 			return nil
 		}
+	}
+}
+
+// rejectImpersonation refuses requests made while impersonating another
+// user (e.g. an admin changing that user's 2FA).
+func rejectImpersonation(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if sess := sessionFromEcho(c); sess != nil && sess.ImpersonatedBy.Valid {
+			return echo.NewHTTPError(http.StatusForbidden, "not available while impersonating a user")
+		}
+		return next(c)
+	}
+}
+
+// cookieCSRFGuard protects state-changing requests authenticated by the
+// session cookie alone (requests sent straight to /api/v1 by a browser):
+// the browser's Origin (or Sec-Fetch-Site) must be this site. SameSite=Strict
+// still sends the cookie from sibling subdomains, and some handlers parse
+// bodies regardless of Content-Type, so a cross-site text/plain form POST
+// would otherwise work. Requests with an Authorization header (the web
+// app's proxy, the CLI, API keys) are not cookie-based and pass.
+func cookieCSRFGuard(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		r := c.Request()
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			return next(c)
+		}
+		if r.Header.Get("Authorization") != "" {
+			return next(c)
+		}
+		if _, err := r.Cookie(sessionCookieName); err != nil {
+			return next(c)
+		}
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+			if site == "same-origin" || site == "none" {
+				return next(c)
+			}
+			return echo.NewHTTPError(http.StatusForbidden, "cross-site request refused")
+		}
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			if ref := r.Header.Get("Referer"); ref != "" {
+				origin = ref
+			}
+		}
+		if origin == "" {
+			return next(c) // not a browser
+		}
+		u, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(u.Host, r.Host) {
+			return echo.NewHTTPError(http.StatusForbidden, "cross-site request refused")
+		}
+		return next(c)
 	}
 }

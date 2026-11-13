@@ -60,6 +60,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// Request timeout middleware
 	e.Use(TimeoutMiddleware())
 
+	// Cookie-authenticated state changes must come from this site.
+	e.Use(cookieCSRFGuard)
+
 	// Custom HTTP error handler to use our JSON format
 	e.HTTPErrorHandler = customErrorHandler
 
@@ -93,12 +96,12 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// Two-Factor Authentication (2FA) endpoints
 	tfaH := newTwoFactorHandler(s)
-	e.POST("/api/v1/auth/2fa/setup", tfaH.setup2FA, RequireAuth(s))
-	e.POST("/api/v1/auth/2fa/enable", tfaH.enable2FA, RequireAuth(s))
-	e.POST("/api/v1/auth/2fa/disable", tfaH.disable2FA, RequireAuth(s))
+	e.POST("/api/v1/auth/2fa/setup", tfaH.setup2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
+	e.POST("/api/v1/auth/2fa/enable", tfaH.enable2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
+	e.POST("/api/v1/auth/2fa/disable", tfaH.disable2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
 	e.POST("/api/v1/auth/2fa/verify", tfaH.verify2FA, RequireAuth(s))
 	e.GET("/api/v1/auth/2fa/status", tfaH.status2FA, RequireAuth(s))
-	e.POST("/api/v1/auth/2fa/recovery-codes", tfaH.generateRecoveryCodes, RequireAuth(s))
+	e.POST("/api/v1/auth/2fa/recovery-codes", tfaH.generateRecoveryCodes, RequireAuth(s), RequireUserSession, rejectImpersonation)
 
 	// Member routes (separate database)
 	if memberDB != nil {
