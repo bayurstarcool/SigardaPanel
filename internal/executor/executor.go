@@ -306,6 +306,13 @@ var allowedCommands = map[string]bool{
 	"composer": true,
 	"doveadm":  true,
 	"postmap":  true,
+	// SSH/FTP jails
+	"passwd":     true,
+	"ssh-keygen": true,
+	"mount":      true,
+	"umount":     true,
+	"userdel":    true,
+	"sshd":       true,
 }
 
 func isAllowedCommand(name string) bool {

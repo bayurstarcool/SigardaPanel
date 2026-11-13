@@ -9,9 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sigardapanel/internal/jobmodel"
 	"strconv"
@@ -25,223 +22,48 @@ import (
 	"sigardapanel/internal/store"
 )
 
-const sshdConfigFile = "/etc/ssh/sshd_config.d/sigardapanel-ssh.conf"
 
 var sshUsernameRegex = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
 
-// runCmd is a simple helper to run a shell command
-func runCmd(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s failed: %s", name, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// readFstab reads /etc/fstab and returns non-empty lines
-func readFstab() ([]string, error) {
-	b, err := os.ReadFile("/etc/fstab")
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Split(string(b), "\n")
-	var out []string
-	for _, l := range lines {
-		if strings.TrimSpace(l) != "" {
-			out = append(out, l)
+// sshAccountsOnServer lists every SSH/FTP account of sites on serverID
+// (the agent writes the sshd chroot config for all of them), optionally
+// leaving one username out and adding another.
+func (h *siteHandler) sshAccountsOnServer(ctx context.Context, serverID int64, without, add string) []map[string]string {
+	all, _ := h.store.SSH.ListAll(ctx)
+	sites := map[int64]int64{}
+	out := []map[string]string{}
+	for _, u := range all {
+		srv, ok := sites[u.SiteID]
+		if !ok {
+			if st, err := h.store.Sites.GetByID(ctx, u.SiteID); err == nil && st != nil {
+				srv = st.ServerID
+			}
+			sites[u.SiteID] = srv
 		}
-	}
-	return out, nil
-}
-
-// writeFstab writes lines back to /etc/fstab
-func writeFstab(lines []string) error {
-	content := strings.Join(lines, "\n") + "\n"
-	return os.WriteFile("/etc/fstab", []byte(content), 0644)
-}
-
-// sshUserExists checks if a Linux user already exists
-func sshUserExists(username string) bool {
-	return runCmd("id", "-u", username) == nil
-}
-
-// generateSSHConfig rebuilds the entire sshd Match config from all SSH users in the DB
-func (h *siteHandler) generateSSHConfig(ctx echo.Context) error {
-	users, err := h.store.SSH.ListAll(ctx.Request().Context())
-	if err != nil {
-		return err
-	}
-	var sb strings.Builder
-	sb.WriteString("# Managed by SigardaPanel - do not edit manually\n")
-	sb.WriteString("# ChrootDirectory jails for SSH/FTP users\n\n")
-	for _, u := range users {
-		if u.Username == "" || u.HomeDir == "" {
+		if srv != serverID || u.Username == without || u.Username == "" {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("Match User %s\n", u.Username))
-		sb.WriteString(fmt.Sprintf("    ChrootDirectory %s\n", u.HomeDir))
-		sb.WriteString("    X11Forwarding no\n")
-		sb.WriteString("    AllowTcpForwarding no\n")
-		sb.WriteString("    PasswordAuthentication no\n")
-		sb.WriteString("    AuthenticationMethods publickey\n")
-		sb.WriteString("\n")
+		out = append(out, map[string]string{"username": u.Username, "home_dir": u.HomeDir})
 	}
-	if err := os.MkdirAll("/etc/ssh/sshd_config.d", 0755); err != nil {
-		return err
+	if add != "" {
+		out = append(out, map[string]string{"username": add, "home_dir": "/home/" + add})
 	}
-	if err := os.WriteFile(sshdConfigFile, []byte(sb.String()), 0644); err != nil {
-		return err
-	}
-	// Only reload if there are users configured
-	if len(users) > 0 {
-		if err := runCmd("systemctl", "reload", "ssh"); err != nil {
-			// Non-fatal — config was written
-			fmt.Printf("warning: sshd reload failed: %v\n", err)
-		}
-	}
-	return nil
+	return out
 }
 
-// provisionSSHUser creates the Linux user, generates SSH key pair, and sets up chroot jail
-// sshPublicKey and sshPrivateKey are output parameters filled with generated keys.
-func (h *siteHandler) provisionSSHUser(ctx echo.Context, username, password, sshKeys, homeDir, siteRoot string) (sshPublicKey, sshPrivateKey string, err error) {
-	// 1. Check user doesn't already exist
-	if sshUserExists(username) {
-		return "", "", fmt.Errorf("user %s already exists on the system", username)
-	}
-
-	// 2. Create Linux user
-	if err := runCmd("useradd", "-m", "-s", "/bin/bash", username); err != nil {
-		return "", "", fmt.Errorf("create user: %w", err)
-	}
-
-	// 3. Lock password (no password auth — SSH keys only)
-	_ = runCmd("passwd", "-l", username)
-
-	// 4. Generate SSH key pair
-	sshDir := filepath.Join(homeDir, ".ssh")
-	_ = os.MkdirAll(sshDir, 0700)
-	keyFile := filepath.Join(sshDir, "id_ed25519")
-
-	// Generate ed25519 key (no passphrase)
-	if err := runCmd("ssh-keygen", "-t", "ed25519", "-f", keyFile, "-N", "", "-C", username+"@sigardapanel"); err != nil {
-		// Fallback to RSA 4096 if ed25519 not supported
-		_ = runCmd("ssh-keygen", "-t", "rsa", "-b", "4096", "-f", keyFile, "-N", "", "-C", username+"@sigardapanel")
-	}
-
-	// Read generated keys
-	if pkBytes, readErr := os.ReadFile(keyFile); readErr == nil {
-		sshPrivateKey = string(pkBytes)
-	}
-	if pubBytes, readErr := os.ReadFile(keyFile + ".pub"); readErr == nil {
-		sshPublicKey = string(pubBytes)
-	}
-
-	// Set authorized_keys
-	if sshPublicKey != "" {
-		_ = os.WriteFile(filepath.Join(sshDir, "authorized_keys"), []byte(strings.TrimSpace(sshPublicKey)+"\n"), 0600)
-	}
-	// Also add any user-provided SSH keys
-	if sshKeys != "" {
-		existing, _ := os.ReadFile(filepath.Join(sshDir, "authorized_keys"))
-		// Split by newline and write each key on its own line
-		for _, line := range strings.Split(strings.TrimSpace(sshKeys), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				existing = append(existing, []byte(line+"\n")...)
-			}
+// removeSiteSSHAccounts deprovisions every SSH/FTP account of a site on its
+// server (used when the site is deleted; their jails bind-mount the site).
+func (h *siteHandler) removeSiteSSHAccounts(ctx context.Context, site *store.Site) {
+	users, _ := h.store.SSH.ListBySiteID(ctx, site.ID)
+	for _, u := range users {
+		code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/delete",
+			map[string]any{"username": u.Username, "accounts": h.sshAccountsOnServer(ctx, site.ServerID, u.Username, "")}, 2*time.Minute)
+		if err != nil || code >= 400 {
+			slog.Warn("site delete: ssh account not removed", "site_id", site.ID, "user", u.Username, "error", err, "message", agentMessage(out, ""))
+			continue
 		}
-		_ = os.WriteFile(filepath.Join(sshDir, "authorized_keys"), existing, 0600)
+		_ = h.store.SSH.Delete(ctx, site.ID, u.ID)
 	}
-	_ = runCmd("chown", "-R", username+":"+username, sshDir)
-
-	// 5. Chroot setup: home dir must be owned by root for ChrootDirectory
-	_ = runCmd("chown", "root:root", homeDir)
-	_ = runCmd("chmod", "755", homeDir)
-
-	// 6. Bind mount system directories (same as before)
-	sysDirs := []string{"/bin", "/lib", "/lib64", "/usr"}
-	for _, d := range sysDirs {
-		dst := filepath.Join(homeDir, d)
-		_ = os.MkdirAll(dst, 0755)
-		_ = runCmd("mount", "--bind", d, dst)
-		_ = runCmd("mount", "-o", "remount,bind,ro", dst)
-		if lines, err := readFstab(); err == nil {
-			fstabLine := fmt.Sprintf("%s %s none bind,ro 0 0  # sigardapanel:%s", d, dst, username)
-			lines = append(lines, fstabLine)
-			_ = writeFstab(lines)
-		}
-	}
-
-	// 7. Create minimal /etc inside jail (same as before)
-	etcDir := filepath.Join(homeDir, "etc")
-	_ = os.MkdirAll(etcDir, 0755)
-	uidOut, _ := exec.Command("id", "-u", username).CombinedOutput()
-	gidOut, _ := exec.Command("id", "-g", username).CombinedOutput()
-	uidStr := strings.TrimSpace(string(uidOut))
-	gidStr := strings.TrimSpace(string(gidOut))
-	_ = os.WriteFile(filepath.Join(etcDir, "passwd"),
-		[]byte(fmt.Sprintf("root:x:0:0:root:/root:/sbin/nologin\n%s:x:%s:%s::/:/bin/bash\n", username, uidStr, gidStr)), 0644)
-	_ = os.WriteFile(filepath.Join(etcDir, "group"),
-		[]byte(fmt.Sprintf("root:x:0:\n%s:x:%s:\n", username, gidStr)), 0644)
-	if _, err := os.Stat("/etc/resolv.conf"); err == nil {
-		resolv, _ := os.ReadFile("/etc/resolv.conf")
-		_ = os.WriteFile(filepath.Join(etcDir, "resolv.conf"), resolv, 0644)
-	}
-
-	// 8. Create mount point inside jail
-	htdocsDir := filepath.Join(homeDir, "htdocs")
-	if err := os.MkdirAll(htdocsDir, 0755); err != nil {
-		return "", "", fmt.Errorf("create mount point: %w", err)
-	}
-
-	// 9. Bind mount the site root into the jail
-	if siteRoot != "" {
-		_ = runCmd("mount", "--bind", siteRoot, htdocsDir)
-		_ = runCmd("chown", username+":"+username, htdocsDir)
-		if lines, err := readFstab(); err == nil {
-			fstabLine := fmt.Sprintf("%s %s none bind 0 0  # sigardapanel:%s", siteRoot, htdocsDir, username)
-			lines = append(lines, fstabLine)
-			if err := writeFstab(lines); err != nil {
-				fmt.Printf("warning: cannot write fstab: %v\n", err)
-			}
-		}
-	}
-
-	return sshPublicKey, sshPrivateKey, nil
-}
-
-// deprovisionSSHUser removes the Linux user and cleans up
-func (h *siteHandler) deprovisionSSHUser(ctx echo.Context, username, homeDir string) {
-	if username == "" {
-		return
-	}
-
-	// 1. Remove fstab entry
-	htdocsDir := filepath.Join(homeDir, "htdocs")
-	marker := fmt.Sprintf("# sigardapanel:%s", username)
-	if lines, err := readFstab(); err == nil {
-		var filtered []string
-		for _, l := range lines {
-			// Exact matches only: deleting "bo" must not drop "bob"'s mounts.
-			if f := strings.Fields(l); strings.HasSuffix(strings.TrimSpace(l), marker) || (len(f) >= 2 && f[1] == htdocsDir) {
-				continue
-			}
-			filtered = append(filtered, l)
-		}
-		_ = writeFstab(filtered)
-	}
-
-	// 2. Unmount bind mounts (site + system dirs)
-	sysDirs := []string{"/usr", "/lib64", "/lib", "/bin"}
-	for _, d := range sysDirs {
-		_ = runCmd("umount", "-l", filepath.Join(homeDir, d))
-	}
-	_ = runCmd("umount", "-l", htdocsDir)
-
-	// 3. Delete Linux user (home dir too)
-	_ = runCmd("userdel", "-r", username)
 }
 
 // siteAgentCall calls the agent of the server that hosts site.
@@ -630,20 +452,24 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 	}
 
 	homeDir := "/home/" + body.Username
-
-	// Determine site root for bind mount
-	siteRoot := site.RootPath
-	if siteRoot == "" && site.SystemUser.Valid && site.Domain != "" {
-		siteRoot = "/home/" + site.SystemUser.String + "/htdocs/" + site.Domain
+	ctx := c.Request().Context()
+	if site.RootPath == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "the site has no root path")
 	}
-
-	// Provision Linux user with chroot — generates SSH key pair
-	pubKey, privKey, err := h.provisionSSHUser(c, body.Username, body.Password, body.SSHKeys, homeDir, siteRoot)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "user provisioning failed: "+err.Error())
+	// The account (a chrooted Linux user) is created on the site's server.
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/create", map[string]any{
+		"username": body.Username, "site_root": site.RootPath, "ssh_keys": body.SSHKeys,
+		"accounts": h.sshAccountsOnServer(ctx, site.ServerID, "", body.Username),
+	}, 3*time.Minute)
+	if err != nil && code == 0 {
+		return echo.NewHTTPError(http.StatusBadGateway, "the site's agent is unreachable")
 	}
+	if code >= 400 {
+		return agentHTTPError(code, out)
+	}
+	pubKey, _ := out["ssh_public_key"].(string)
+	privKey, _ := out["ssh_private_key"].(string)
 
-	// Save to database
 	user := &store.SiteSSHUser{
 		SiteID:        id,
 		Username:      body.Username,
@@ -653,15 +479,11 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 		SSHPublicKey:  pubKey,
 	}
 	user.HomeDir = homeDir
-	if err := h.store.SSH.Create(c.Request().Context(), user); err != nil {
-		// Clean up the Linux user since DB save failed
-		h.deprovisionSSHUser(c, body.Username, homeDir)
+	if err := h.store.SSH.Create(ctx, user); err != nil {
+		// Undo on the server: the account must not exist without its record.
+		h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/delete",
+			map[string]any{"username": body.Username, "accounts": h.sshAccountsOnServer(ctx, site.ServerID, body.Username, "")}, 2*time.Minute)
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
-	}
-
-	// Regenerate sshd config (now includes the new user from DB)
-	if err := h.generateSSHConfig(c); err != nil {
-		fmt.Printf("warning: generateSSHConfig failed: %v\n", err)
 	}
 
 	h.audit.RecordAction(c.Request().Context(), userID, "ssh_user_create", audit.ResourceSite, id, map[string]any{
@@ -696,8 +518,19 @@ func (h *siteHandler) deleteSshFtp(c echo.Context) error {
 		return err
 	}
 
-	// Deprovision Linux user (unmount, delete user, cleanup)
-	h.deprovisionSSHUser(c, user.Username, user.HomeDir)
+	ctx := c.Request().Context()
+	site, _ := h.store.Sites.GetByID(ctx, user.SiteID)
+	if site == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "site not found")
+	}
+	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/delete",
+		map[string]any{"username": user.Username, "accounts": h.sshAccountsOnServer(ctx, site.ServerID, user.Username, "")}, 2*time.Minute)
+	if err != nil && code == 0 {
+		return echo.NewHTTPError(http.StatusBadGateway, "the site's agent is unreachable")
+	}
+	if code >= 400 {
+		return agentHTTPError(code, out)
+	}
 
 	// Remove from database
 	if err := h.store.SSH.Delete(c.Request().Context(), user.SiteID, sshID); err != nil {
@@ -705,11 +538,6 @@ func (h *siteHandler) deleteSshFtp(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusNotFound, "SSH user not found")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
-	}
-
-	// Regenerate sshd config
-	if err := h.generateSSHConfig(c); err != nil {
-		fmt.Printf("warning: generateSSHConfig failed: %v\n", err)
 	}
 
 	h.audit.RecordAction(c.Request().Context(), userID, "ssh_user_delete", audit.ResourceSite, user.SiteID, map[string]any{

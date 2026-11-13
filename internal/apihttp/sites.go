@@ -499,6 +499,11 @@ func (h *siteHandler) delete(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
+	// SSH/FTP jails bind-mount the site root: remove them on the server
+	// first (their rows used to vanish with the site while the Linux users,
+	// mounts and keys stayed, and lost their chroot on the next sshd sync).
+	h.removeSiteSSHAccounts(c.Request().Context(), site)
+
 	// Clean up databases before deleting site. Mirror the dedicated
 	// delete-database endpoint: drop the real MySQL database (not just its
 	// record), enqueue the agent job as a fallback, then remove the record —

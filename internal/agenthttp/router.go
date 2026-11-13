@@ -55,6 +55,11 @@ type Router struct {
 	stack        *stackManager
 	panelUpdate  *panelUpdater
 	agentUpdate  *panelUpdater
+
+	// SSH/FTP jails
+	sshHomeBase    string
+	fstabPath      string
+	sshdConfigPath string
 }
 
 // RouterOptions allows overriding router defaults for testing.
@@ -95,6 +100,12 @@ type RouterOptions struct {
 	PanelUpdateFreeBytes func(path string) (uint64, error)
 	PanelUpdateBackupDir string
 	AgentUpdateEnvFile   string
+	// SSHHomeBase / FstabPath / SSHDConfigPath replace /home, /etc/fstab and
+	// the sshd drop-in for SSH/FTP accounts (injected routers default to
+	// temp paths so tests never touch the real ones).
+	SSHHomeBase    string
+	FstabPath      string
+	SSHDConfigPath string
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -113,18 +124,21 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	e.HidePort = true
 
 	r := &Router{
-		executor:     &executor.Executor{Timeout: 30 * time.Minute},
-		nginxConfDir: "/etc/nginx/sites-enabled",
-		leDir:        "/etc/letsencrypt",
-		logDir:       "/var/log/nginx",
-		backupDir:    "/var/backups/sigardapanel",
-		authToken:    config.AgentToken(),
-		siteRootDir:  config.AgentSiteRoot(),
-		allowStubSSL: config.AgentAllowStubSSL(),
-		stubDev:      os.Getenv("SIGARDAPANEL_DEV") == "true",
-		certDir:      defaultSSLCertDir,
-		phpRunDir:    defaultPHPRunDir,
-		useraddCmd:   "useradd",
+		executor:       &executor.Executor{Timeout: 30 * time.Minute},
+		nginxConfDir:   "/etc/nginx/sites-enabled",
+		leDir:          "/etc/letsencrypt",
+		logDir:         "/var/log/nginx",
+		backupDir:      "/var/backups/sigardapanel",
+		authToken:      config.AgentToken(),
+		siteRootDir:    config.AgentSiteRoot(),
+		allowStubSSL:   config.AgentAllowStubSSL(),
+		stubDev:        os.Getenv("SIGARDAPANEL_DEV") == "true",
+		certDir:        defaultSSLCertDir,
+		phpRunDir:      defaultPHPRunDir,
+		useraddCmd:     "useradd",
+		sshHomeBase:    "/home",
+		fstabPath:      "/etc/fstab",
+		sshdConfigPath: "/etc/ssh/sshd_config.d/sigardapanel-ssh.conf",
 	}
 	if opts != nil {
 		// RouterOptions is test/dependency-injection surface. Keep production
@@ -169,6 +183,17 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		r.useraddCmd = "sigardapanel-test-useradd-not-configured"
 		if opts.UseraddCommand != "" {
 			r.useraddCmd = opts.UseraddCommand
+		}
+		tmp := filepath.Join(os.TempDir(), "sigardapanel-agent-test-ssh")
+		r.sshHomeBase, r.fstabPath, r.sshdConfigPath = filepath.Join(tmp, "home"), filepath.Join(tmp, "fstab"), filepath.Join(tmp, "sshd.conf")
+		if opts.SSHHomeBase != "" {
+			r.sshHomeBase = opts.SSHHomeBase
+		}
+		if opts.FstabPath != "" {
+			r.fstabPath = opts.FstabPath
+		}
+		if opts.SSHDConfigPath != "" {
+			r.sshdConfigPath = opts.SSHDConfigPath
 		}
 		var sys stackSystem = denyStackSystem{}
 		if opts.StackSystem != nil {
@@ -230,6 +255,10 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.GET("/stack/info", r.stackInfoTask)
 	tasks.POST("/stack/install", r.stackInstallTask)
 	tasks.GET("/stack/ops/:id", r.stackOpTask)
+
+	// SSH/FTP accounts (chroot jails) of sites on this server
+	tasks.POST("/sshftp/create", r.sshCreateTask)
+	tasks.POST("/sshftp/delete", r.sshDeleteTask)
 
 	// Raw vhost editing and disk usage of a site on this server
 	tasks.GET("/vhost/get", r.vhostGetTask)
