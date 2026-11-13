@@ -271,7 +271,8 @@ func (r *Router) runGit(ctx context.Context, rootPath string, args ...string) (s
 	if fi, err := os.Lstat(gitDir); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return "", fmt.Errorf("refusing to run git: .git is a symlink")
 	}
-	if uid, gid, ok := fileOwner(gitDir); ok && uid != 0 {
+	// Only a root agent can (and must) drop to the repository's owner.
+	if uid, gid, ok := fileOwner(gitDir); ok && uid != 0 && os.Geteuid() == 0 {
 		return r.executor.RunAsUser(ctx, uid, gid, rootPath, "git", full...)
 	}
 	return r.executor.RunShell(ctx, "git", full...)
