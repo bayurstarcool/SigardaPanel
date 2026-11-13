@@ -277,7 +277,7 @@ func viewerColumns(ctx context.Context, tx *sql.Tx, req viewerRequest) (*viewerR
 		return nil, err
 	}
 	if req.Type == "mysql" {
-		return viewerQuery(ctx, tx, "mysql", `SELECT column_name AS name, column_type AS type, is_nullable AS nullable, column_key AS ` + "`key`" + `, column_default AS ` + "`default`" + `, extra
+		return viewerQuery(ctx, tx, "mysql", `SELECT column_name AS name, column_type AS type, is_nullable AS nullable, column_key AS `+"`key`"+`, column_default AS `+"`default`"+`, extra
 			FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position`,
 			[]any{req.Table}, 10000)
 	}
