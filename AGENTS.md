@@ -769,8 +769,14 @@ switching requires re-encrypting those values.
 
 ## GitHub Releases
 
+Releases are built, signed and published by `.github/workflows/release.yml` when a
+`vX.Y.Z` tag on `main` is pushed (environment `release`, secrets `MINISIGN_SECRET_KEY`
+and `MINISIGN_PASSWORD`). It runs `scripts/release.sh`, which refuses a signature that
+does not verify with the installer's pinned `PUBKEY`. Notes come from
+`docs/releases/vX.Y.Z.md`. The script still works by hand on a machine with the key.
+
 Binary releases: https://github.com/bayurstarcool/SigardaPanel/releases
-Latest: v1.5.0 (always check the releases page; install/update with `install.sh`, see docs/INSTALL.md)
+Latest: v1.7.0 (always check the releases page; install/update with `install.sh`, see docs/INSTALL.md)
 
 Recent security/stability releases: v1.1.1 file-manager upload traversal fix;
 v1.1.2 worker panic recovery + rate-limiter/error hygiene; v1.1.3 site deletion
@@ -788,3 +794,11 @@ mariadb in use, `apt-get -s` collateral check, panel-host protections, super_adm
 destructive actions and `command` on the panel host); MariaDB core packages removed with it;
 site PHP version lists come from the site's server; Memcached card; agent 401 no longer
 surfaces as a session error.
+v1.7.0 panel self-update (one-click/automatic, window, history, rollback) and agent updates
+from the panel; site operations run on the site's agent (file manager via `os.Root`, vhost,
+logs, usage, SSH/FTP jails, transfer, cron in `/etc/cron.d`, IP allow/deny lists at server
+level); backups remember their provider, apply exclude patterns and restore databases
+(imports as the site user with the database's own account, never root); security fixes from
+two audits (restore/file-manager/symlink escapes, SSRF via agent URLs, 2FA brute force,
+tenant-admin access to global settings, login lock DoS, MySQL account takeover, CSRF);
+Go 1.26.11. Update agents after upgrading the panel.
