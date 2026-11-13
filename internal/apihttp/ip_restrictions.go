@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v4"
+	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/store"
 )
 
@@ -21,6 +22,13 @@ type ipRestrictionHandler struct {
 // newIPRestrictionHandler creates a new ipRestrictionHandler.
 func newIPRestrictionHandler(s *store.Store) *ipRestrictionHandler {
 	return &ipRestrictionHandler{store: s}
+}
+
+func jobID(j *jobmodel.Job) any {
+	if j == nil {
+		return nil
+	}
+	return j.ID
 }
 
 // checkSite enforces the site permission model: listing needs read, creating
@@ -58,9 +66,10 @@ func (h *ipRestrictionHandler) list(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{
-		"restrictions": restrictions,
-	})
+	if restrictions == nil {
+		restrictions = []store.IPRestriction{}
+	}
+	return c.JSON(http.StatusOK, map[string]any{"data": map[string]any{"restrictions": restrictions}})
 }
 
 // create adds a new IP restriction rule.
@@ -110,13 +119,18 @@ func (h *ipRestrictionHandler) create(c echo.Context) error {
 		Reason: strings.TrimSpace(body.Reason),
 	}
 
-	if err := h.store.IPRestrictions.Create(c.Request().Context(), restriction); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if site.Status == "suspended" {
+		return c.JSON(http.StatusConflict, map[string]string{"error": "the site is suspended; resume it first"})
 	}
+	if err := h.store.IPRestrictions.Create(c.Request().Context(), restriction); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "internal error"})
+	}
+	job, _ := enqueueSiteVhostRegen(c.Request().Context(), h.store, site, "Apply IP restrictions to "+site.Domain)
 
-	return c.JSON(http.StatusCreated, map[string]any{
+	return c.JSON(http.StatusCreated, map[string]any{"data": map[string]any{
 		"restriction": restriction,
-	})
+		"job_id":      jobID(job),
+	}})
 }
 
 // delete removes an IP restriction rule.
@@ -140,12 +154,16 @@ func (h *ipRestrictionHandler) delete(c echo.Context) error {
 		return err
 	}
 
+	if site.Status == "suspended" {
+		return c.JSON(http.StatusConflict, map[string]string{"error": "the site is suspended; resume it first"})
+	}
 	if err := h.store.IPRestrictions.Delete(c.Request().Context(), siteID, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "ip restriction not found"})
 		}
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "internal error"})
 	}
+	job, _ := enqueueSiteVhostRegen(c.Request().Context(), h.store, site, "Apply IP restrictions to "+site.Domain)
 
-	return c.JSON(http.StatusOK, map[string]string{"message": "IP restriction deleted"})
+	return c.JSON(http.StatusOK, map[string]any{"data": map[string]any{"message": "IP restriction deleted", "job_id": jobID(job)}})
 }

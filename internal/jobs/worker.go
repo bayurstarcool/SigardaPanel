@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"sigardapanel/internal/agentclient"
 	"sigardapanel/internal/jobmodel"
+	"sigardapanel/internal/nginx"
 	"sigardapanel/internal/notify"
 	"sigardapanel/internal/secrets"
 	"sigardapanel/internal/store"
@@ -648,6 +650,17 @@ func siteIsNew(site *store.Site) bool {
 	return false
 }
 
+// dedupeIPs canonicalises IPs/CIDRs and drops duplicates and invalid entries.
+func dedupeIPs(in []string) []string {
+	out := []string{}
+	for _, v := range in {
+		if norm, err := nginx.NormalizeBlockedIPs([]string{v}); err == nil && len(norm) == 1 && !slices.Contains(out, norm[0]) {
+			out = append(out, norm[0])
+		}
+	}
+	return out
+}
+
 // siteCreatePayload completes a site.create payload from the stored site:
 // fields the caller did not send (app port, proxy URL, PHP settings) and the
 // site's security settings, so a regeneration never drops them. Jobs for a
@@ -678,13 +691,31 @@ func (w *Worker) siteCreatePayload(ctx context.Context, site *store.Site, raw st
 		// container re-creation).
 		p["vhost_regen"] = true
 	}
-	if sec, err := w.store.Security.GetBySiteID(ctx, site.ID); err == nil && sec != nil {
-		p["security"] = map[string]any{
-			"basic_auth_enabled":  sec.BasicAuthEnabled,
-			"basic_auth_username": sec.BasicAuthUsername,
-			"basic_auth_hash":     sec.BasicAuthPassword,
-			"blocked_ips":         sec.BlockedIPs,
+	// The site's IP restrictions join its security settings: "deny" rules
+	// with the blocked IPs, "allow" rules as an allowlist (everyone else
+	// gets 403).
+	var blocked, allowed []string
+	sec, _ := w.store.Security.GetBySiteID(ctx, site.ID)
+	if sec != nil {
+		blocked = append(blocked, sec.BlockedIPs...)
+	}
+	if rules, err := w.store.IPRestrictions.List(ctx, site.ID); err == nil {
+		for _, r := range rules {
+			if r.Action == "allow" {
+				allowed = append(allowed, r.IP)
+			} else {
+				blocked = append(blocked, r.IP)
+			}
 		}
+	}
+	if sec != nil || len(blocked) > 0 || len(allowed) > 0 {
+		security := map[string]any{"blocked_ips": dedupeIPs(blocked), "allowed_ips": dedupeIPs(allowed)}
+		if sec != nil {
+			security["basic_auth_enabled"] = sec.BasicAuthEnabled
+			security["basic_auth_username"] = sec.BasicAuthUsername
+			security["basic_auth_hash"] = sec.BasicAuthPassword
+		}
+		p["security"] = security
 	}
 	b, err := json.Marshal(p)
 	if err != nil {

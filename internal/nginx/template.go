@@ -55,6 +55,8 @@ const staticTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        try_files $uri $uri/ =404;
     }
 
@@ -105,6 +107,8 @@ const phpTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        try_files $uri $uri/ /index.php?$query_string;
     }
 
@@ -156,6 +160,8 @@ const nodeTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        proxy_pass http://127.0.0.1:{{.Port}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -200,6 +206,8 @@ const proxyTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        proxy_pass {{.ProxyPassURL}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -243,6 +251,8 @@ const staticSSLTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        try_files $uri $uri/ =404;
     }
 
@@ -286,6 +296,8 @@ const phpSSLTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        try_files $uri $uri/ /index.php?$query_string;
     }
 
@@ -330,6 +342,8 @@ const nodeSSLTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        proxy_pass http://127.0.0.1:{{.Port}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -367,6 +381,8 @@ const proxySSLTemplate = `server {
 
     location / {
 {{range .BlockedIPs}}        deny {{.}};
+{{end}}{{range .AllowedIPs}}        allow {{.}};
+{{end}}{{if .AllowedIPs}}        deny all;
 {{end}}        proxy_pass {{.ProxyPassURL}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -402,6 +418,7 @@ type SiteConfig struct {
 	BasicAuthUsername     string
 	BasicAuthPasswordPath string
 	BlockedIPs            []string
+	AllowedIPs            []string
 	SSLCertificate        string
 	SSLCertificateKey     string
 }
@@ -465,7 +482,10 @@ func validateSecurity(sec *store.SiteSecurity) error {
 	if _, err := NormalizeBlockedIPs(sec.BlockedIPs); err != nil {
 		return err
 	}
-	for _, v := range sec.BlockedIPs {
+	if _, err := NormalizeBlockedIPs(sec.AllowedIPs); err != nil {
+		return err
+	}
+	for _, v := range append(append([]string{}, sec.BlockedIPs...), sec.AllowedIPs...) {
 		if strings.TrimSpace(v) != v || v == "" {
 			return fmt.Errorf("invalid blocked IP %q", v)
 		}
@@ -620,6 +640,9 @@ func GenerateVhostWithCert(s *store.Site, port int, security *store.SiteSecurity
 	}
 	if security != nil && len(security.BlockedIPs) > 0 {
 		data.BlockedIPs = security.BlockedIPs
+	}
+	if security != nil && len(security.AllowedIPs) > 0 {
+		data.AllowedIPs = security.AllowedIPs
 	}
 
 	var buf bytes.Buffer

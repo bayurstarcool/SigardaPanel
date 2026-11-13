@@ -67,3 +67,28 @@ func TestGenerateVhostCertAndBackupsDenied(t *testing.T) {
 		t.Fatal("unsafe certificate path accepted")
 	}
 }
+
+func TestGenerateVhostAllowlist(t *testing.T) {
+	for _, rt := range []string{"static", "php", "node", "proxy"} {
+		site := &store.Site{Domain: "ex.example.com", Runtime: rt, RootPath: "/home/u/htdocs/ex.example.com"}
+		sec := &store.SiteSecurity{BlockedIPs: []string{"10.0.0.5"}, AllowedIPs: []string{"10.0.0.0/8", "2001:db8::/32"}}
+		out, err := GenerateVhost(site, 3000, sec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// nginx applies the first matching rule: the blocked address before
+		// the allowed range, and "deny all" last.
+		d, a, all := strings.Index(out, "deny 10.0.0.5;"), strings.Index(out, "allow 10.0.0.0/8;"), strings.Index(out, "deny all;\n        ")
+		if d < 0 || a < 0 || all < 0 || !(d < a && a < all) || !strings.Contains(out, "allow 2001:db8::/32;") {
+			t.Fatalf("%s: allowlist not rendered in order:\n%s", rt, out)
+		}
+		if _, err := GenerateVhost(site, 3000, &store.SiteSecurity{AllowedIPs: []string{"1.2.3.4; deny all"}}); err == nil {
+			t.Fatalf("%s: injected allowed IP accepted", rt)
+		}
+		// Without allow rules nobody is denied wholesale.
+		plain, _ := GenerateVhost(site, 3000, &store.SiteSecurity{BlockedIPs: []string{"1.2.3.4"}})
+		if strings.Contains(plain, "allow ") || strings.Count(plain, "deny all;") != strings.Count(out, "deny all;")-1 {
+			t.Fatalf("%s: rules without an allowlist:\n%s", rt, plain)
+		}
+	}
+}

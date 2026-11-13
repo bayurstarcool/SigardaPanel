@@ -2,7 +2,7 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import EmptyState from '$components/EmptyState.svelte';
-  import { Lock, Ban, Plus, Trash2, Save, LoaderCircle } from 'lucide-svelte';
+  import { Lock, Ban, Plus, Trash2, Save, LoaderCircle, ShieldCheck } from 'lucide-svelte';
   import { toasts } from '$lib/toast.svelte';
 
   let { siteId }: { siteId: number } = $props();
@@ -30,6 +30,33 @@
   }
   function addBlockedIP() { if (!newBlockedIP) return; if (!secBlockedIPs.includes(newBlockedIP)) secBlockedIPs = [...secBlockedIPs, newBlockedIP]; newBlockedIP = ''; }
   function removeBlockedIP(ip: string) { secBlockedIPs = secBlockedIPs.filter(i => i !== ip); }
+
+  // Access rules: "allow" entries turn the site into an allowlist (everyone
+  // else gets 403); "deny" entries block like the list above.
+  let rules = $state<any[]>([]);
+  let rulesLoaded = $state(false);
+  let newRule = $state({ ip: '', action: 'allow', reason: '' });
+  let ruleBusy = $state(false);
+  const hasAllow = $derived(rules.some((r) => r.action === 'allow'));
+
+  $effect(() => { if (!rulesLoaded) { rulesLoaded = true; loadRules(); } });
+
+  async function loadRules() {
+    try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/ip-restrictions`); rules = d?.restrictions || []; }
+    catch (e: any) { if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load access rules'); }
+  }
+  async function addRule() {
+    if (!newRule.ip.trim()) return;
+    if (newRule.action === 'allow' && !hasAllow && !confirm('After this rule, only allowed addresses can open the site; everyone else gets 403. Continue?')) return;
+    ruleBusy = true;
+    try { await apiFetch(auth.token, 'POST', `sites/${siteId}/ip-restrictions`, newRule); newRule = { ip: '', action: newRule.action, reason: '' }; toasts.success('Rule added; the vhost is being updated'); await loadRules(); }
+    catch (e: any) { toasts.error(e.message); } finally { ruleBusy = false; }
+  }
+  async function deleteRule(r: any) {
+    if (!confirm(`Remove the ${r.action} rule for ${r.ip}?`)) return;
+    try { await apiFetch(auth.token, 'DELETE', `sites/${siteId}/ip-restrictions/${r.id}`); rules = rules.filter((x) => x.id !== r.id); toasts.success('Rule removed; the vhost is being updated'); }
+    catch (e: any) { toasts.error(e.message); }
+  }
 </script>
 
 <div class="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -87,6 +114,42 @@
         </ul>
       {/if}
     </div>
+  </div>
+</div>
+<div class="card mb-4">
+  <div class="card-header">
+    <h3 class="card-title">Access rules</h3>
+    <ShieldCheck size={16} class="text-subtle" />
+  </div>
+  <div class="card-body">
+    <p class="mb-4 text-[13px] text-muted">
+      {#if hasAllow}Only the allowed addresses below can open this site; everyone else gets 403. Deny rules still win.{:else}Add an <strong>allow</strong> rule to restrict the site to specific IPs or ranges (e.g. your office). Rules apply right away, without the Save button.{/if}
+    </p>
+    <div class="mb-3 flex flex-col gap-2 sm:flex-row">
+      <label for="rule-ip" class="sr-only">IP address or CIDR</label>
+      <input id="rule-ip" bind:value={newRule.ip} class="input font-mono text-[13px] sm:w-56" placeholder="203.0.113.0/24" />
+      <label for="rule-action" class="sr-only">Action</label>
+      <select id="rule-action" bind:value={newRule.action} class="input sm:w-28"><option value="allow">Allow</option><option value="deny">Deny</option></select>
+      <label for="rule-reason" class="sr-only">Note</label>
+      <input id="rule-reason" bind:value={newRule.reason} class="input flex-1 text-[13px]" placeholder="Note (optional)" />
+      <button onclick={addRule} disabled={ruleBusy || !newRule.ip.trim()} class="btn btn-secondary"><Plus size={14} /> Add</button>
+    </div>
+    {#if rules.length === 0}
+      <EmptyState compact icon={ShieldCheck} title="No access rules" description="Everyone not blocked above can open the site." />
+    {:else}
+      <ul class="divide-y divide-line rounded-lg border border-line">
+        {#each rules as r (r.id)}
+          <li class="flex items-center justify-between gap-3 px-3 py-2">
+            <div class="flex min-w-0 flex-wrap items-center gap-2">
+              <span class="badge {r.action === 'allow' ? 'badge-success' : 'badge-danger'}">{r.action}</span>
+              <span class="font-mono text-[13px] text-fg">{r.ip}</span>
+              {#if r.reason}<span class="truncate text-[12px] text-muted">{r.reason}</span>{/if}
+            </div>
+            <button onclick={() => deleteRule(r)} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Remove rule for {r.ip}"><Trash2 size={14} /></button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </div>
 </div>
 <button onclick={saveSecurity} disabled={secSaving} class="btn btn-primary">

@@ -128,3 +128,34 @@ func TestSiteCreateInitialActivatesAndQueuesSSL(t *testing.T) {
 		t.Fatalf("ssl.issue jobs = %d", ssl)
 	}
 }
+
+func TestSiteCreatePayloadIncludesIPRestrictions(t *testing.T) {
+	s := regenWorkerDB(t)
+	ctx := t.Context()
+	w := NewWorker(s, agentclient.New("http://127.0.0.1:1", "token"))
+	srv := &store.Server{Name: "s", Hostname: "s.example.com", Status: "active", AgentToken: "t"}
+	s.Servers.Create(ctx, srv)
+	site := &store.Site{ServerID: srv.ID, Name: "n", Domain: "ip.example.com", Runtime: "static", RootPath: "/home/u/htdocs/ip.example.com", Status: "active"}
+	s.Sites.Create(ctx, site)
+	s.Sites.UpdateStatus(ctx, site.ID, "active")
+	site, _ = s.Sites.GetByID(ctx, site.ID)
+	s.Security.Upsert(ctx, &store.SiteSecurity{SiteID: site.ID, BlockedIPs: []string{"1.2.3.4"}})
+	s.IPRestrictions.Create(ctx, &store.IPRestriction{SiteID: site.ID, IP: "5.6.7.8", Action: "deny"})
+	s.IPRestrictions.Create(ctx, &store.IPRestriction{SiteID: site.ID, IP: "10.0.0.0/8", Action: "allow"})
+	s.IPRestrictions.Create(ctx, &store.IPRestriction{SiteID: site.ID, IP: "1.2.3.4", Action: "deny"})
+
+	raw, err := w.siteCreatePayload(ctx, site, `{"site_id":1,"domain":"ip.example.com"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		Security struct {
+			Blocked []string `json:"blocked_ips"`
+			Allowed []string `json:"allowed_ips"`
+		} `json:"security"`
+	}
+	json.Unmarshal([]byte(raw), &p)
+	if len(p.Security.Blocked) != 2 || len(p.Security.Allowed) != 1 || p.Security.Allowed[0] != "10.0.0.0/8" {
+		t.Fatalf("security = %+v (%s)", p.Security, raw)
+	}
+}

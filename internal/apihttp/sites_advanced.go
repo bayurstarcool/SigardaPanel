@@ -785,6 +785,10 @@ func (h *siteHandler) deleteCron(c echo.Context) error {
 // site's vhost on its server. The worker fills the payload with the site's
 // stored settings (runtime, PHP, app port, proxy URL, security).
 func (h *siteHandler) enqueueVhostRegen(ctx context.Context, site *store.Site, desc string) (*jobmodel.Job, error) {
+	return enqueueSiteVhostRegen(ctx, h.store, site, desc)
+}
+
+func enqueueSiteVhostRegen(ctx context.Context, st *store.Store, site *store.Site, desc string) (*jobmodel.Job, error) {
 	payload, _ := json.Marshal(map[string]any{
 		"site_id":     site.ID,
 		"name":        site.Name,
@@ -800,7 +804,7 @@ func (h *siteHandler) enqueueVhostRegen(ctx context.Context, site *store.Site, d
 		Description: desc,
 		Payload:     string(payload),
 	}
-	if err := h.store.Jobs.Create(ctx, job); err != nil {
+	if err := st.Jobs.Create(ctx, job); err != nil {
 		return nil, err
 	}
 	return job, nil

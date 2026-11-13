@@ -547,6 +547,7 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 			BasicAuthUsername string   `json:"basic_auth_username"`
 			BasicAuthHash     string   `json:"basic_auth_hash"`
 			BlockedIPs        []string `json:"blocked_ips"`
+			AllowedIPs        []string `json:"allowed_ips"`
 		} `json:"security,omitempty"`
 	}
 	if err := c.Bind(&payload); err != nil {
@@ -776,6 +777,7 @@ func (r *Router) siteCreateTask(c echo.Context) error {
 			BasicAuthUsername: payload.Security.BasicAuthUsername,
 			BasicAuthPassword: payload.Security.BasicAuthHash,
 			BlockedIPs:        payload.Security.BlockedIPs,
+			AllowedIPs:        payload.Security.AllowedIPs,
 		}
 	}
 	certPath, keyPath := r.letsEncryptCert(payload.Domain)

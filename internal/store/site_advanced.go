@@ -101,13 +101,16 @@ func (s *varnishStore) Upsert(ctx context.Context, v *SiteVarnish) error {
 // ─── Security ───────────────────────────────────────────────
 
 type SiteSecurity struct {
-	ID                int64     `json:"id"`
-	SiteID            int64     `json:"site_id"`
-	BasicAuthEnabled  bool      `json:"basic_auth_enabled"`
-	BasicAuthUsername string    `json:"basic_auth_username"`
-	BasicAuthPassword string    `json:"basic_auth_password"`
-	BlockedIPs        []string  `json:"blocked_ips"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                int64    `json:"id"`
+	SiteID            int64    `json:"site_id"`
+	BasicAuthEnabled  bool     `json:"basic_auth_enabled"`
+	BasicAuthUsername string   `json:"basic_auth_username"`
+	BasicAuthPassword string   `json:"basic_auth_password"`
+	BlockedIPs        []string `json:"blocked_ips"`
+	// AllowedIPs is not stored with the settings: it carries the site's
+	// "allow" IP restrictions to the vhost (anyone else is denied).
+	AllowedIPs []string  `json:"allowed_ips,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type SecurityRepository interface {
