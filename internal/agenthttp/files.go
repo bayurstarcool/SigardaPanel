@@ -51,6 +51,7 @@ func (r *Router) filesTask(c echo.Context) error {
 		Paths      []string `json:"paths"`
 		Dest       string   `json:"dest"`
 		Name       string   `json:"name"`
+		Mode       string   `json:"mode"`
 	}
 	if err := c.Bind(&p); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid payload"})
@@ -71,10 +72,18 @@ func (r *Router) filesTask(c echo.Context) error {
 		if err != nil {
 			return fsError(c, err)
 		}
-		return c.JSON(http.StatusOK, map[string]any{
-			"ok": true, "content": string(data), "size": info.Size(),
+		out := map[string]any{
+			"ok": true, "size": info.Size(),
 			"mod_time": info.ModTime().Format(time.RFC3339), "mode": info.Mode().String(),
-		})
+		}
+		// Binary or non-UTF-8 content would be mangled by JSON and the
+		// editor (and saving it would corrupt the file): download only.
+		if sitefs.IsText(data) {
+			out["content"] = string(data)
+		} else {
+			out["binary"], out["content"] = true, ""
+		}
+		return c.JSON(http.StatusOK, out)
 	case "write":
 		if p.Content == nil {
 			return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "content required"})
@@ -112,6 +121,17 @@ func (r *Router) filesTask(c echo.Context) error {
 			return fsError(c, err)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"ok": true, "archive": name, "size": size})
+	case "extract":
+		written, skipped, err := f.Extract(p.Path, p.Dest)
+		if err != nil {
+			return fsError(c, err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"ok": true, "extracted": written, "skipped": skipped})
+	case "chmod":
+		if err := f.Chmod(p.Path, p.Mode); err != nil {
+			return fsError(c, err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"ok": true})
 	default:
 		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "unknown operation"})
 	}

@@ -16,13 +16,14 @@ export async function openPma(databaseId: number) {
     });
     if (res.status === 401) { window.location.href = '/login'; return; }
     if (!res.ok) {
-      toasts.error('phpMyAdmin gagal dibuka. Database harus punya user MySQL aktif.');
+      const d = await res.json().catch(() => null);
+      toasts.error(d?.error?.message || 'Could not open phpMyAdmin: the database needs a MySQL user with a password stored in the panel.');
       return;
     }
     const { ticket } = await res.json();
     window.open(`/pma/t/${encodeURIComponent(ticket)}`, '_blank', 'noopener,noreferrer');
   } catch {
-    toasts.error('phpMyAdmin gagal dibuka. Coba lagi.');
+    toasts.error('Could not open phpMyAdmin. Try again.');
   }
 }
 

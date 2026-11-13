@@ -342,6 +342,7 @@ var allowedCommands = map[string]bool{
 	"ssh-keygen": true,
 	"mount":      true,
 	"umount":     true,
+	"nsenter":    true, // mount/umount in the host mount namespace (SSH jails)
 	"userdel":    true,
 	"sshd":       true,
 }

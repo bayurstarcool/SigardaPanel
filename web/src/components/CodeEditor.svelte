@@ -73,7 +73,12 @@
       '.cm-foldPlaceholder': { backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-line)', color: 'var(--c-muted)' },
     });
 
+    // Keep Windows line endings: without this CodeMirror normalises the
+    // document to \n, the file shows as modified at once and Save rewrites
+    // every line ending.
+    const lineSep = (content || '').includes('\r\n') ? '\r\n' : null;
     const extensions = [
+      ...(lineSep ? [EditorState.lineSeparator.of(lineSep)] : []),
       lineNumbers(),
       highlightActiveLine(),
       highlightActiveLineGutter(),
@@ -86,7 +91,8 @@
       chromeTheme,
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
-          const newContent = update.state.doc.toString();
+          // sliceDoc keeps the file's own line separator (CRLF stays CRLF).
+          const newContent = update.state.sliceDoc();
           content = newContent;
           value = newContent;
           onChange(newContent);
@@ -117,7 +123,7 @@
   // Sync external content changes
   $effect(() => {
     if (editorView && initialized) {
-      const currentContent = editorView.state.doc.toString();
+      const currentContent = editorView.state.sliceDoc();
       if (content !== currentContent && content !== undefined) {
         editorView.dispatch({
           changes: { from: 0, to: currentContent.length, insert: content },

@@ -138,8 +138,12 @@ func (h *siteHandler) get(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
+	data := siteToMap(*site)
+	for k, v := range siteCapabilities(c.Request().Context(), h.store, sess, site) {
+		data[k] = v
+	}
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      siteToMap(*site),
+		Data:      data,
 		RequestID: rid,
 	})
 }

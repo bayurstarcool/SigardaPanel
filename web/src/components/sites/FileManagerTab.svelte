@@ -8,7 +8,7 @@
     FileMusic, FileArchive, FileCog, FileBraces, FileTerminal, FileKey,
     RefreshCw, Search, Plus, X, Check, CornerUpLeft, Upload, Save, LoaderCircle,
     Trash2, Pencil, ChevronRight, Globe, Database, TriangleAlert, Download, House,
-    MoreHorizontal, FolderPlus, FilePlus, FolderInput, CheckCheck,
+    MoreHorizontal, FolderPlus, FilePlus, FolderInput, CheckCheck, Link2, KeyRound, PackageOpen,
   } from 'lucide-svelte';
 
   let { siteId }: { siteId: number } = $props();
@@ -42,6 +42,28 @@
   let fmCompressModal = $state(false);
   let fmCompressName = $state('archive.zip');
   let fmUploading = $state(false);
+  let fmOpening = $state<string | null>(null);
+  let fmChmodEntry = $state<any>(null);
+  let fmChmodMode = $state('644');
+
+  // Uploads pass the web proxy (34 MiB body limit) and the API (32 MiB).
+  const MAX_UPLOAD = 32 * 1024 * 1024;
+  const dirOf = (p: string) => (p === '/' || p === '.' ? '.' : p.replace(/^\/+/, ''));
+  const isZip = (name: string) => name.toLowerCase().endsWith('.zip');
+  // "-rwxr-xr-x" -> "755" (the API returns Go's mode string).
+  function octalMode(mode: string): string {
+    const m = (mode || '').slice(-9);
+    if (m.length !== 9) return '';
+    let out = '';
+    for (let i = 0; i < 9; i += 3) {
+      out += String((m[i] !== '-' ? 4 : 0) + (m[i + 1] !== '-' ? 2 : 0) + (m[i + 2] !== '-' && m[i + 2] !== 'S' && m[i + 2] !== 'T' ? 1 : 0));
+    }
+    return out;
+  }
+  function fmDate(iso: string): string {
+    const d = new Date(iso);
+    return isNaN(+d) ? '' : d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
 
   const fmFilteredEntries = $derived(fmSearch ? fmEntries.filter((e: any) => e.name.toLowerCase().includes(fmSearch.toLowerCase())) : fmEntries);
   const dirCount = $derived(fmEntries.filter((e: any) => e.is_dir).length);
@@ -82,25 +104,58 @@
   $effect(() => { if (fmEntries.length === 0 && !fmLoading && !fmLoaded) { fmLoaded = true; loadFiles(); } });
 
   function buildBreadcrumbs(path: string) {
-    const parts = path === '.' ? [] : path.split('/'); fmBreadcrumbs = [{ name: 'root', path: '.' }]; let acc = '';
+    const parts = path.split('/').filter((p) => p && p !== '.'); fmBreadcrumbs = [{ name: 'root', path: '.' }]; let acc = '';
     for (const p of parts) { acc = acc ? acc + '/' + p : p; fmBreadcrumbs.push({ name: p, path: acc }); }
   }
 
   async function loadFiles(path?: string) {
     fmLoading = true;
-    try { let p = path || fmPath; if (p.startsWith('/')) p = p.slice(1) || '.'; if (p === '') p = '.'; const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/files?path=${encodeURIComponent(p)}`); fmEntries = d?.entries || []; fmPath = d?.current === '.' ? '/' : '/' + (d?.current || p); buildBreadcrumbs(fmPath); }
+    try {
+      let p = path || fmPath; if (p.startsWith('/')) p = p.slice(1) || '.'; if (p === '') p = '.';
+      const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/files?path=${encodeURIComponent(p)}`);
+      const next = d?.current === '.' ? '/' : '/' + (d?.current || p);
+      // A selection or filter belongs to the folder it was made in.
+      if (next !== fmPath) { fmSelectedEntries = new Set(); fmSearch = ''; }
+      fmEntries = d?.entries || []; fmPath = next; buildBreadcrumbs(fmPath);
+    }
     catch (e: any) { toasts.error(e.message); } finally { fmLoading = false; }
   }
 
   async function fmNavigate(entry: any) { if (entry.is_dir) { fmEditFile = null; fmEntries = []; fmSelectedEntries = new Set(); await loadFiles(entry.path); } else { await fmOpenFile(entry.path); } }
-  async function fmOpenFile(path: string) { loadEditor(); try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/files/read?path=${encodeURIComponent(path)}`); fmEditFile = path; fmEditContent = d?.content || ''; fmEditOriginal = d?.content || ''; } catch (e: any) { toasts.error(e.message); } }
+  async function fmOpenFile(path: string) {
+    loadEditor(); fmOpening = path;
+    try {
+      const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/files/read?path=${encodeURIComponent(path)}`);
+      if (d?.binary) {
+        // Editing would corrupt binary / non-UTF-8 files.
+        toasts.info('This file is binary or not UTF-8 text, so it is downloaded instead of opened.');
+        fmDownload({ path, name: path.split('/').pop() });
+        return;
+      }
+      fmEditFile = path; fmEditContent = d?.content || ''; fmEditOriginal = d?.content || '';
+    } catch (e: any) {
+      // Too large for the editor: offer the download.
+      if (/too large/i.test(e.message || '')) { toasts.info('Too large to edit here (over 1 MB); downloading instead.'); fmDownload({ path, name: path.split('/').pop() }); }
+      else toasts.error(e.message);
+    } finally { fmOpening = null; }
+  }
+  const fmDirty = $derived(fmEditFile !== null && fmEditContent !== fmEditOriginal);
+  // Leaving the editor must not silently drop unsaved edits.
+  function fmCloseEditor(): boolean {
+    if (fmDirty && !confirm('Discard unsaved changes?')) return false;
+    fmEditFile = null; return true;
+  }
+  function onBeforeUnload(e: BeforeUnloadEvent) { if (fmDirty) { e.preventDefault(); e.returnValue = ''; } }
+  function onEditorKey(e: KeyboardEvent) {
+    if (fmEditFile && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (!fmEditSaving) fmSaveFile(); }
+  }
   async function fmSaveFile() { if (!fmEditFile) return; fmEditSaving = true; try { await apiFetch(auth.token, 'POST', `sites/${siteId}/files/write`, { path: fmEditFile, content: fmEditContent }); fmEditOriginal = fmEditContent; toasts.success('File saved'); } catch (e: any) { toasts.error(e.message); } finally { fmEditSaving = false; } }
   async function fmCreateEntry() {
     if (!fmNewName) return; fmCreating = true;
     try { let basePath = fmPath.startsWith('/') ? fmPath.slice(1) : fmPath; if (basePath === '' || basePath === '.') basePath = ''; const p = basePath ? basePath + '/' + fmNewName : fmNewName; await apiFetch(auth.token, 'POST', `sites/${siteId}/files/create`, { path: p, is_dir: fmNewIsDir }); fmShowCreate = false; fmNewName = ''; toasts.success(fmNewIsDir ? 'Directory created' : 'File created'); fmNewIsDir = false; fmEntries = []; await loadFiles(fmPath); }
     catch (e: any) { toasts.error(e.message); } finally { fmCreating = false; }
   }
-  async function fmDeleteEntry(entry: any) { if (!confirm(`Delete "${entry.name}"?`)) return; try { await apiFetch(auth.token, 'DELETE', `sites/${siteId}/files?path=${encodeURIComponent(entry.path)}`); fmEntries = fmEntries.filter(e => e.path !== entry.path); toasts.success(`Deleted "${entry.name}"`); } catch (e: any) { toasts.error(e.message); } }
+  async function fmDeleteEntry(entry: any) { if (!confirm(entry.is_dir ? `Delete the folder "${entry.name}" and everything in it?` : `Delete "${entry.name}"?`)) return; try { await apiFetch(auth.token, 'DELETE', `sites/${siteId}/files?path=${encodeURIComponent(entry.path)}`); fmEntries = fmEntries.filter(e => e.path !== entry.path); toasts.success(`Deleted "${entry.name}"`); } catch (e: any) { toasts.error(e.message); } }
   async function fmDeleteSelected() {
     const paths = [...fmSelectedEntries];
     if (paths.length === 0 || !confirm(`Delete ${paths.length} item(s)?`)) return;
@@ -110,29 +165,63 @@
   function fmToggleSelect(path: string) { const next = new Set(fmSelectedEntries); if (next.has(path)) next.delete(path); else next.add(path); fmSelectedEntries = next; }
   function fmRename(entry: any) { fmRenameEntry = entry; fmRenameNewName = entry.name; }
   async function fmSaveRename(entry: any) { if (!fmRenameNewName || fmRenameNewName === entry.name) { fmRenameEntry = null; return; } try { await apiFetch(auth.token, 'POST', `sites/${siteId}/files/rename`, { old_path: entry.path, new_name: fmRenameNewName }); fmRenameEntry = null; toasts.success('Renamed'); fmEntries = []; await loadFiles(fmPath); } catch (e: any) { toasts.error(e.message); } }
-  function fmDownload(entry: any) { const url = `/api/proxy/sites/${siteId}/files/download?path=${encodeURIComponent(entry.path)}`; const a = document.createElement('a'); a.href = url; a.download = entry.name; document.body.appendChild(a); a.click(); document.body.removeChild(a); }
-  async function fmMoveSelected() { const paths = [...fmSelectedEntries]; if (paths.length === 0) return; fmBusy = true; try { const dest = fmMoveDest.replace(/^\/+/, '') || '.'; await apiFetch(auth.token, 'POST', `sites/${siteId}/files/move`, { paths, dest }); fmMoveModal = false; fmMoveDest = ''; fmSelectedEntries = new Set(); toasts.success(`Moved ${paths.length} item(s)`); fmEntries = []; await loadFiles(fmPath); } catch (e: any) { toasts.error(e.message); } finally { fmBusy = false; } }
+  // Check the response first: a plain link would save an error message under
+  // the file's name. The probe is aborted as soon as the headers arrive.
+  async function fmDownload(entry: any) {
+    const url = `/api/proxy/sites/${siteId}/files/download?path=${encodeURIComponent(entry.path)}`;
+    const ctl = new AbortController();
+    try {
+      const r = await fetch(url, { headers: bearerHeaders(), signal: ctl.signal, cache: 'no-store' });
+      if (!r.ok) { const d = await r.json().catch(() => null); ctl.abort(); toasts.error(d?.error?.message || `Download failed (${r.status})`); return; }
+      ctl.abort();
+    } catch (e: any) { if (e?.name !== 'AbortError') { toasts.error(e?.message || 'Download failed'); return; } }
+    const a = document.createElement('a'); a.href = url; a.download = entry.name || ''; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+  async function fmExtract(entry: any) {
+    fmBusy = true;
+    try {
+      const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/files/extract`, { path: entry.path, dest: dirOf(fmPath) });
+      toasts.success(`Extracted ${d?.extracted ?? 0} file(s)` + (d?.skipped ? `, ${d.skipped} skipped (already exist or not regular files)` : ''));
+      await loadFiles(fmPath);
+    } catch (e: any) { toasts.error(e.message); } finally { fmBusy = false; }
+  }
+  function fmOpenChmod(entry: any) { fmChmodEntry = entry; fmChmodMode = octalMode(entry.mode) || (entry.is_dir ? '755' : '644'); }
+  async function fmSaveChmod() {
+    if (!fmChmodEntry) return; fmBusy = true;
+    try { await apiFetch(auth.token, 'POST', `sites/${siteId}/files/chmod`, { path: fmChmodEntry.path, mode: fmChmodMode }); toasts.success(`Permissions set to ${fmChmodMode}`); fmChmodEntry = null; await loadFiles(fmPath); }
+    catch (e: any) { toasts.error(e.message); } finally { fmBusy = false; }
+  }
+  async function fmMoveSelected() { const paths = [...fmSelectedEntries]; if (paths.length === 0) return; fmBusy = true; try { const dest = fmMoveDest.replace(/^\/+/, '') || '.'; await apiFetch(auth.token, 'POST', `sites/${siteId}/files/move`, { paths, dest }); fmMoveModal = false; fmMoveDest = ''; fmSelectedEntries = new Set(); toasts.success(`Moved ${paths.length} item(s)`); } catch (e: any) { toasts.error(e.message); } finally { fmBusy = false; await loadFiles(fmPath); } }
   async function fmCompressSelected() { const paths = [...fmSelectedEntries]; if (paths.length === 0) return; fmBusy = true; try { const dest = (fmPath === '/' || fmPath === '.' ? '.' : fmPath.replace(/^\/+/, '')); await apiFetch(auth.token, 'POST', `sites/${siteId}/files/compress`, { paths, name: fmCompressName, dest }); fmCompressModal = false; fmCompressName = 'archive.zip'; fmSelectedEntries = new Set(); toasts.success(`Compressed ${paths.length} item(s)`); fmEntries = []; await loadFiles(fmPath); } catch (e: any) { toasts.error(e.message); } finally { fmBusy = false; } }
   async function fmUploadFiles(files: FileList | null) {
-    if (!files || files.length === 0) return; fmUploading = true;
+    if (!files || files.length === 0) return;
+    const big = Array.from(files).filter((f) => f.size > MAX_UPLOAD);
+    if (big.length) { toasts.error(`${big.map((f) => f.name).join(', ')}: larger than 32 MB. Upload big files over SFTP, or as a .zip in parts.`); return; }
+    fmUploading = true;
     const dir = (fmPath === '/' || fmPath === '.') ? '.' : fmPath.replace(/^\/+/, '');
     try { for (const file of Array.from(files)) { const formData = new FormData(); formData.append('file', file); formData.append('path', dir); await fetch(`/api/proxy/sites/${siteId}/files/upload`, { method: 'POST', headers: bearerHeaders(), body: formData }).then(async r => { if (!r.ok) { const d = await r.json().catch(() => null); throw new Error(d?.error?.message || 'Upload failed'); } }); } fmEntries = []; await loadFiles(fmPath); toasts.success(`Uploaded ${files.length} file(s)`); }
     catch (e: any) { toasts.error(e.message); } finally { fmUploading = false; }
   }
-  function fmSelectAll() { fmSelectedEntries = new Set(fmFilteredEntries.filter((e: any) => !e.is_dir).map((e: any) => e.path)); }
+  function fmSelectAll() {
+    const all = fmFilteredEntries.map((e: any) => e.path);
+    fmSelectedEntries = fmSelectedEntries.size === all.length ? new Set() : new Set(all);
+  }
+  function fmSelectOnly(entry: any) { fmSelectedEntries = new Set([entry.path]); }
   function fmHideContextMenu() { fmContextMenu = { show: false, x: 0, y: 0, entry: null }; }
   function fmShowMenuAt(x: number, y: number, entry: any) {
     fmContextMenu = { show: true, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 220), entry };
   }
-  function fmGoUp() { fmEditFile = null; fmEntries = []; const parts = fmPath.split('/').filter(Boolean); parts.pop(); loadFiles('/' + parts.join('/') || '/'); }
+  function fmGoUp() { if (!fmCloseEditor()) return; fmEntries = []; const parts = fmPath.split('/').filter(Boolean); parts.pop(); loadFiles('/' + parts.join('/') || '/'); }
   function fmOpenCreate(isDir: boolean) { fmShowCreate = !fmShowCreate || fmNewIsDir !== isDir; fmNewName = ''; fmNewIsDir = isDir; }
 </script>
+
+<svelte:window onbeforeunload={onBeforeUnload} onkeydown={onEditorKey} />
 
 {#if fmEditFile}
   <div class="card overflow-hidden">
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
       <div class="flex min-w-0 items-center gap-2">
-        <button onclick={() => { fmEditFile = null; fmEntries = []; fmLoaded = false; loadFiles(fmPath); }} class="btn btn-ghost btn-icon btn-sm" aria-label="Back to files" title="Back to files">
+        <button onclick={() => { if (fmCloseEditor()) { fmEntries = []; fmLoaded = false; loadFiles(fmPath); } }} class="btn btn-ghost btn-icon btn-sm" aria-label="Back to files" title="Back to files">
           <CornerUpLeft size={14} />
         </button>
         <div class="min-w-0">
@@ -142,7 +231,7 @@
       </div>
       <div class="flex shrink-0 items-center gap-2">
         <span class="badge uppercase">{fmDetectLang(fmEditFile)}</span>
-        <button onclick={fmSaveFile} disabled={fmEditSaving} class="btn btn-primary btn-sm">
+        <button onclick={fmSaveFile} disabled={fmEditSaving} class="btn btn-primary btn-sm" title="Save (Ctrl+S)">
           {#if fmEditSaving}<LoaderCircle size={14} class="animate-spin" />{:else}<Save size={14} />{/if}
           {fmEditSaving ? 'Saving…' : 'Save'}
         </button>
@@ -172,7 +261,7 @@
     <!-- Breadcrumbs + search -->
     <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
       <nav class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto" aria-label="Path">
-        <button onclick={() => { fmEditFile = null; fmEntries = []; fmSelectedEntries = new Set(); loadFiles('.'); }} class="btn btn-ghost btn-icon btn-xs" aria-label="Go to site root" title="Go to site root"><House size={14} /></button>
+        <button onclick={() => { fmEntries = []; loadFiles('.'); }} class="btn btn-ghost btn-icon btn-xs" aria-label="Go to site root" title="Go to site root"><House size={14} /></button>
         {#each fmBreadcrumbs as bc, i (bc.path)}
           {#if bc.path !== '.'}
             <ChevronRight size={12} class="shrink-0 text-subtle" />
@@ -201,7 +290,7 @@
         <input type="file" multiple class="hidden" onchange={(e) => { fmUploadFiles((e.target as HTMLInputElement).files); (e.target as HTMLInputElement).value = ''; }} />
       </label>
       <span class="mx-1 h-4 w-px shrink-0 bg-line"></span>
-      <button onclick={fmSelectAll} class="btn btn-ghost btn-sm"><CheckCheck size={14} /> Select all</button>
+      <button onclick={fmSelectAll} class="btn btn-ghost btn-sm" disabled={fmFilteredEntries.length === 0}><CheckCheck size={14} /> {fmSelectedEntries.size > 0 && fmSelectedEntries.size === fmFilteredEntries.length ? 'Select none' : 'Select all'}</button>
       <button onclick={() => loadFiles(fmPath)} class="btn btn-ghost btn-sm" aria-label="Reload"><RefreshCw size={14} class={fmLoading ? 'animate-spin' : ''} /><span class="max-sm:hidden">Reload</span></button>
     </div>
 
@@ -236,15 +325,25 @@
         {#if fmSearch}<button onclick={() => (fmSearch = '')} class="link mt-1 text-[13px]">Clear filter</button>{/if}
       </div>
     {:else}
-      <ul class="max-h-[50vh] divide-y divide-line overflow-y-auto select-none lg:max-h-[60vh]">
+      <div class="hidden items-center gap-3 border-b border-line bg-surface-2/40 px-4 py-1.5 text-[11px] font-medium tracking-wide text-subtle uppercase md:flex">
+        <span class="w-7 shrink-0"></span>
+        <span class="flex-1">Name</span>
+        <span class="w-20 shrink-0 text-right">Size</span>
+        <span class="w-36 shrink-0 max-lg:hidden">Modified</span>
+        <span class="w-12 shrink-0 text-center">Perm</span>
+        <span class="w-6 shrink-0"></span>
+      </div>
+      <ul class="max-h-[50vh] divide-y divide-line overflow-y-auto lg:max-h-[60vh]">
         {#each fmFilteredEntries as entry (entry.path)}
           {@const selected = fmSelectedEntries.has(entry.path)}
-          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
           <li
-            class="group flex min-h-11 cursor-pointer items-center gap-3 px-4 py-2 text-sm transition-colors duration-100 {selected ? 'bg-accent/10' : 'hover:bg-surface-2/60'}"
-            onclick={() => { if (fmContextMenu.show) return; if (entry.is_dir) fmNavigate(entry); else fmToggleSelect(entry.path); }}
+            class="group flex min-h-11 items-center gap-3 px-4 py-1.5 text-sm transition-colors duration-100 {selected ? 'bg-accent/10' : 'hover:bg-surface-2/60'}"
             oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); fmShowMenuAt(e.clientX, e.clientY, entry); }}>
-            <span class="flex size-7 shrink-0 items-center justify-center rounded-md {selected ? 'bg-accent text-white' : 'bg-surface-2'}">
+            <!-- The icon is the selection checkbox; the name opens. -->
+            <button
+              onclick={() => fmToggleSelect(entry.path)}
+              class="flex size-7 shrink-0 items-center justify-center rounded-md transition-colors {selected ? 'bg-accent text-white' : 'bg-surface-2 hover:ring-1 hover:ring-accent/50'}"
+              role="checkbox" aria-checked={selected} aria-label="Select {entry.name}" title="Select">
               {#if selected}
                 <Check size={14} />
               {:else if entry.is_dir}
@@ -253,9 +352,19 @@
                 {@const fileIcon = fmFileIconWithColor(entry.name)}
                 <fileIcon.icon size={14} class={fileIcon.color} />
               {/if}
-            </span>
-            <span class="min-w-0 flex-1 truncate text-fg">{entry.name}{#if entry.is_dir}<span class="ml-0.5 text-subtle">/</span>{/if}</span>
-            <span class="w-16 shrink-0 text-right font-mono text-xs text-subtle tabular-nums lg:w-20">{entry.is_dir ? '—' : fmFormatSize(entry.size)}</span>
+            </button>
+            <button
+              onclick={() => { if (!fmContextMenu.show) fmNavigate(entry); }}
+              ondblclick={(e) => e.preventDefault()}
+              class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-fg hover:text-accent"
+              title={entry.is_symlink ? `${entry.name} (symbolic link)` : entry.name}>
+              <span class="truncate">{entry.name}{#if entry.is_dir}<span class="ml-0.5 text-subtle">/</span>{/if}</span>
+              {#if entry.is_symlink}<Link2 size={12} class="shrink-0 text-subtle" aria-label="symbolic link" />{/if}
+              {#if fmOpening === entry.path}<LoaderCircle size={12} class="shrink-0 animate-spin text-subtle" />{/if}
+            </button>
+            <span class="w-16 shrink-0 text-right font-mono text-xs text-subtle tabular-nums md:w-20">{entry.is_dir ? '—' : fmFormatSize(entry.size)}</span>
+            <span class="w-36 shrink-0 truncate text-xs text-subtle tabular-nums max-lg:hidden" title={entry.mod_time}>{fmDate(entry.mod_time)}</span>
+            <span class="hidden w-12 shrink-0 text-center font-mono text-xs text-subtle md:inline" title={entry.mode}>{octalMode(entry.mode)}</span>
             <button
               class="btn btn-ghost btn-icon btn-xs shrink-0 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
               aria-label="Actions for {entry.name}"
@@ -270,7 +379,7 @@
       <span class="flex items-center gap-1"><Folder size={12} /> {dirCount} dir</span>
       <span class="flex items-center gap-1"><FileText size={12} /> {fileCount} file{fileCount !== 1 ? 's' : ''}</span>
       <span>{fmEntries.length} total</span>
-      <span class="ml-auto max-sm:hidden">Click a folder to open, a file to select · right-click for actions</span>
+      <span class="ml-auto max-sm:hidden">Click a name to open · the icon selects · right-click for actions</span>
     </div>
   </div>
 {/if}
@@ -286,7 +395,15 @@
           <button role="menuitem" onclick={() => { fmOpenFile(fmContextMenu.entry.path); fmHideContextMenu(); }} class="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-fg transition-colors hover:bg-surface-2"><File size={14} class="text-subtle" /> View / edit</button>
           <button role="menuitem" onclick={() => { fmDownload(fmContextMenu.entry); fmHideContextMenu(); }} class="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-fg transition-colors hover:bg-surface-2"><Download size={14} class="text-subtle" /> Download</button>
         {/if}
+        {#if !fmContextMenu.entry.is_dir && isZip(fmContextMenu.entry.name)}
+          <button role="menuitem" onclick={() => { fmExtract(fmContextMenu.entry); fmHideContextMenu(); }} class="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-fg transition-colors hover:bg-surface-2"><PackageOpen size={14} class="text-subtle" /> Extract here</button>
+        {/if}
         <button role="menuitem" onclick={() => { fmRename(fmContextMenu.entry); fmHideContextMenu(); }} class="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-fg transition-colors hover:bg-surface-2"><Pencil size={14} class="text-subtle" /> Rename</button>
+        <button role="menuitem" onclick={() => { const en = fmContextMenu.entry; fmSelectOnly(en); fmMoveDirs = fmEntries.filter((x: any) => x.is_dir && x.path !== en.path).map((x: any) => x.path); fmMoveModal = true; fmHideContextMenu(); }} class="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-fg transition-colors hover:bg-surface-2"><FolderInput size={14} class="text-subtle" /> Move…</button>
+        <button role="menuitem" onclick={() => { const en = fmContextMenu.entry; fmSelectOnly(en); fmCompressName = (en.name.replace(/\.[^./]+$/, '') || en.name) + '.zip'; fmCompressModal = true; fmHideContextMenu(); }} class="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-fg transition-colors hover:bg-surface-2"><FileArchive size={14} class="text-subtle" /> Compress…</button>
+        {#if !fmContextMenu.entry.is_symlink}
+          <button role="menuitem" onclick={() => { fmOpenChmod(fmContextMenu.entry); fmHideContextMenu(); }} class="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-fg transition-colors hover:bg-surface-2"><KeyRound size={14} class="text-subtle" /> Permissions…</button>
+        {/if}
         <div class="my-1 h-px bg-line"></div>
         <button role="menuitem" onclick={() => { fmDeleteEntry(fmContextMenu.entry); fmHideContextMenu(); }} class="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-danger transition-colors hover:bg-danger/10"><Trash2 size={14} /> Delete</button>
       {/if}
@@ -325,5 +442,23 @@
   {#snippet footer()}
     <button onclick={() => { fmCompressModal = false; fmCompressName = 'archive.zip'; }} disabled={fmBusy} class="btn btn-secondary btn-sm">Cancel</button>
     <button onclick={fmCompressSelected} disabled={!fmCompressName || fmBusy} class="btn btn-primary btn-sm">{fmBusy ? 'Compressing…' : 'Compress'}</button>
+  {/snippet}
+</Modal>
+
+<Modal open={!!fmChmodEntry} title="Permissions" maxWidth="sm" onclose={() => (fmChmodEntry = null)}>
+  {#if fmChmodEntry}
+    <p class="mb-3 truncate font-mono text-[13px] text-muted">{fmChmodEntry.path}</p>
+    <label for="fm-chmod" class="label">Mode (octal)</label>
+    <input id="fm-chmod" bind:value={fmChmodMode} maxlength="4" inputmode="numeric" class="input font-mono text-[13px]" onkeydown={(e) => { if (e.key === 'Enter') fmSaveChmod(); }} />
+    <p class="hint">Owner / group / others: 4 = read, 2 = write, 1 = execute. Common: 644 files, 755 folders and scripts, 600 secrets such as .env.</p>
+    <div class="mt-3 flex flex-wrap gap-1.5">
+      {#each ['644', '755', '600', '640', '750'] as m (m)}
+        <button onclick={() => (fmChmodMode = m)} class="btn btn-xs {fmChmodMode === m ? 'btn-primary' : 'btn-secondary'} font-mono">{m}</button>
+      {/each}
+    </div>
+  {/if}
+  {#snippet footer()}
+    <button onclick={() => (fmChmodEntry = null)} disabled={fmBusy} class="btn btn-secondary btn-sm">Cancel</button>
+    <button onclick={fmSaveChmod} disabled={fmBusy || !/^[0-7]{3,4}$/.test(fmChmodMode)} class="btn btn-primary btn-sm">{fmBusy ? 'Saving…' : 'Apply'}</button>
   {/snippet}
 </Modal>

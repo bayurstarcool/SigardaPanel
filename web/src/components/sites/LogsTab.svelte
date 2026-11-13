@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { findSiteContainer } from '$lib/siteContainer';
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import EmptyState from '$components/EmptyState.svelte';
@@ -27,12 +28,8 @@
 
       if (site?.runtime === 'docker' && site?.server_id) {
         // Docker container logs
-        const containerName = `site-${site.name}`;
-        const domainBase = site.domain?.split(".")[0] || "";
         const containers = await apiFetch(auth.token, 'GET', `servers/${site.server_id}/docker/containers`);
-        const list = containers?.containers || [];
-        const container = list.find((c: any) => c.name === containerName)
-          || list.find((c: any) => c.name?.includes(site.name) || c.name?.includes(domainBase));
+        const container = findSiteContainer<any>(containers?.containers || [], site);
         if (container) {
           const d = await apiFetch(auth.token, 'GET', `servers/${site.server_id}/docker/container/logs?container_id=${container.id}&lines=200`);
           const raw = d?.logs || '';
@@ -56,7 +53,12 @@
   const isDocker = $derived(site?.runtime === 'docker');
   const logOptions = $derived(isDocker
     ? [{ key: 'container', label: 'Container logs', icon: Box }]
-    : [{ key: 'error', label: 'Nginx error', icon: TriangleAlert }, { key: 'access', label: 'Nginx access', icon: Globe }, { key: 'php', label: 'PHP-FPM', icon: Server }]
+    : [
+        { key: 'error', label: 'Nginx error', icon: TriangleAlert },
+        { key: 'access', label: 'Nginx access', icon: Globe },
+        // The PHP-FPM log only exists for PHP sites.
+        ...(site?.runtime === 'php' ? [{ key: 'php', label: 'PHP-FPM', icon: Server }] : []),
+      ]
   );
 
   function lineClass(entry: string): string {

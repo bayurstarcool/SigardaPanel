@@ -282,6 +282,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/vhost/validate", r.vhostValidateTask)
 	tasks.POST("/vhost/put", r.vhostPutTask)
 	tasks.POST("/site/usage", r.siteUsageTask)
+	tasks.POST("/db/view", r.viewerTask)
 
 	// File manager (operations on a site root on this server)
 	tasks.POST("/files/op", r.filesTask)
@@ -2186,8 +2187,8 @@ func (r *Router) databaseCreateTask(c echo.Context) error {
 		}
 	case "postgres":
 		sql := fmt.Sprintf("SELECT 'CREATE DATABASE %s' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = %s)\\gexec\n", payload.Name, sqlQuote(payload.Name))
-		if output, err := r.executor.RunWithInput(ctx, sql, "psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres"); err != nil {
-			return echo.NewHTTPError(http.StatusFailedDependency, "postgres create database failed: "+strings.TrimSpace(output))
+		if output, err := r.postgresAdmin(ctx, "postgres", sql); err != nil {
+			return echo.NewHTTPError(http.StatusFailedDependency, "postgres create database failed: "+pgErr(output, err))
 		}
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, "unsupported database type")
@@ -2221,9 +2222,10 @@ func (r *Router) databaseDeleteTask(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusFailedDependency, "mysql drop database failed: "+strings.TrimSpace(output))
 		}
 	case "postgres":
-		sql := fmt.Sprintf("DROP DATABASE IF EXISTS %s;\n", payload.Name)
-		if output, err := r.executor.RunWithInput(ctx, sql, "psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres"); err != nil {
-			return echo.NewHTTPError(http.StatusFailedDependency, "postgres drop database failed: "+strings.TrimSpace(output))
+		// WITH (FORCE): open connections (the site's app) must not block the drop.
+		sql := fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE);\n", payload.Name)
+		if output, err := r.postgresAdmin(ctx, "postgres", sql); err != nil {
+			return echo.NewHTTPError(http.StatusFailedDependency, "postgres drop database failed: "+pgErr(output, err))
 		}
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, "unsupported database type")
@@ -2290,8 +2292,18 @@ func (r *Router) dbUserCreateTask(c echo.Context) error {
 			"DO %s BEGIN CREATE ROLE %s LOGIN PASSWORD %s; EXCEPTION WHEN duplicate_object THEN ALTER ROLE %s WITH PASSWORD %s; END %s; GRANT ALL PRIVILEGES ON DATABASE %s TO %s;\n",
 			tag, payload.Username, sqlQuote(payload.Password), payload.Username, sqlQuote(payload.Password), tag, payload.DatabaseName, payload.Username,
 		)
-		if output, err := r.executor.RunWithInput(ctx, sql, "psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres"); err != nil {
-			return echo.NewHTTPError(http.StatusFailedDependency, "postgres create user failed: "+strings.TrimSpace(output))
+		if output, err := r.postgresAdmin(ctx, "postgres", sql); err != nil {
+			return echo.NewHTTPError(http.StatusFailedDependency, "postgres create user failed: "+pgErr(output, err))
+		}
+		// CONNECT on the database is not enough to use it: since PostgreSQL
+		// 15 the public schema is closed to everyone but its owner. Grant the
+		// schema and what is already in it, and the same for later objects.
+		grants := fmt.Sprintf(
+			"GRANT ALL ON SCHEMA public TO %[1]s; GRANT ALL ON ALL TABLES IN SCHEMA public TO %[1]s; GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %[1]s; "+
+				"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO %[1]s; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %[1]s;\n",
+			payload.Username)
+		if output, err := r.postgresAdmin(ctx, payload.DatabaseName, grants); err != nil {
+			return echo.NewHTTPError(http.StatusFailedDependency, "postgres grant on schema failed: "+pgErr(output, err))
 		}
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, "unsupported database type")
@@ -2334,9 +2346,20 @@ func (r *Router) dbUserDeleteTask(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusFailedDependency, "mysql drop user failed: "+strings.TrimSpace(output))
 		}
 	case "postgres":
-		sql := fmt.Sprintf("DROP ROLE IF EXISTS %s;\n", payload.Username)
-		if output, err := r.executor.RunWithInput(ctx, sql, "psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres"); err != nil {
-			return echo.NewHTTPError(http.StatusFailedDependency, "postgres drop user failed: "+strings.TrimSpace(output))
+		// A role that owns objects or holds privileges cannot be dropped: hand
+		// its objects to postgres and drop its privileges in the database it
+		// was created for first. A role still used by another database keeps
+		// failing here, which is safer than dropping it everywhere.
+		if isValidDBIdentifier(payload.DatabaseName) {
+			cleanup := fmt.Sprintf("DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = %s) THEN EXECUTE 'REASSIGN OWNED BY %s TO postgres'; EXECUTE 'DROP OWNED BY %s'; END IF; END $$;\n",
+				sqlQuote(payload.Username), payload.Username, payload.Username)
+			if output, err := r.postgresAdmin(ctx, payload.DatabaseName, cleanup); err != nil && !strings.Contains(output, "does not exist") {
+				return echo.NewHTTPError(http.StatusFailedDependency, "postgres drop user failed: "+pgErr(output, err))
+			}
+		}
+		sql := fmt.Sprintf("DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = %s) THEN EXECUTE 'DROP ROLE %s'; END IF; END $$;\n", sqlQuote(payload.Username), payload.Username)
+		if output, err := r.postgresAdmin(ctx, "postgres", sql); err != nil {
+			return echo.NewHTTPError(http.StatusFailedDependency, "postgres drop user failed: "+pgErr(output, err))
 		}
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, "unsupported database type")
@@ -2678,4 +2701,12 @@ func phpFPMLogPath(version string) string {
 		}
 	}
 	return "/var/log/php8.3-fpm.log"
+}
+
+// pgErr is the psql output, or the error when psql produced none.
+func pgErr(output string, err error) string {
+	if out := strings.TrimSpace(output); out != "" {
+		return out
+	}
+	return err.Error()
 }

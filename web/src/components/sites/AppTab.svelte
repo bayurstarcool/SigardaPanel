@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { findSiteContainer } from '$lib/siteContainer';
   import { apiFetch } from '$lib/api';
   import { auth } from '$lib/auth.svelte';
   import { toasts } from '$lib/toast.svelte';
@@ -57,12 +58,7 @@
     dockerLoading = true;
     try {
       const containers = await apiFetch(auth.token, 'GET', `servers/${site.server_id}/docker/containers`);
-      const list = containers?.containers || [];
-      const containerName = `site-${site.name}`;
-      const domainBase = site.domain?.split('.')[0] || '';
-      dockerContainer =
-        list.find((c: any) => c.name === containerName) ||
-        list.find((c: any) => c.name?.includes(site.name) || c.name?.includes(domainBase));
+      dockerContainer = findSiteContainer<any>(containers?.containers || [], site);
       if (dockerContainer) {
         configImage = dockerContainer.image || '';
       }
@@ -134,10 +130,12 @@
         await apiFetch(auth.token, 'POST', `servers/${site.server_id}/docker/container/remove`, { container_id: dockerContainer.id, force: true }).catch(() => {});
       }
 
-      const ports = site.proxy_pass_url ? [site.proxy_pass_url.replace('http://127.0.0.1:', '') + ':80'] : [];
+      // The site's app port on the host, mapped to the container's port 80.
+      const hostPort = site.app_port || Number((site.proxy_pass_url || '').match(/:(\d+)\/?$/)?.[1] || 0);
+      const ports = hostPort ? [`${hostPort}:80`] : [];
       await apiFetch(auth.token, 'POST', `servers/${site.server_id}/docker/container/create`, {
         image: configImage,
-        name: `site-${site.name}`,
+        name: `sp-site-${site.id}`, // the name the panel and its guards expect
         restart: 'unless-stopped',
         ports: ports.length ? ports : undefined,
         env: configEnv
@@ -368,7 +366,7 @@
           <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {@render field('Runtime', site.runtime)}
             {@render field('Domain', site.domain, true)}
-            {@render field('Port', String(site.port || '—'), true)}
+            {@render field('Port', String(site.app_port || '—'), true)}
             {@render field('Status', isRunning ? 'Running' : 'Stopped')}
           </div>
         </div>

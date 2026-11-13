@@ -309,9 +309,11 @@
                     <button onclick={() => rotateUserById(u)} disabled={busyId === u.id} class="btn btn-ghost btn-icon btn-xs" title="Rotate password" aria-label="Rotate password for {u.username}">
                       {#if busyId === u.id}<LoaderCircle size={14} class="animate-spin" />{:else}<KeyRound size={14} />{/if}
                     </button>
-                    <button onclick={() => openPma(u.database_id)} class="btn btn-ghost btn-icon btn-xs max-sm:hidden" title="Open phpMyAdmin" aria-label="Open phpMyAdmin for {u.database_name}">
-                      <DatabaseIcon size={14} />
-                    </button>
+                    {#if u.database_type !== 'postgres'}
+                      <button onclick={() => openPma(u.database_id)} class="btn btn-ghost btn-icon btn-xs max-sm:hidden" title="Open phpMyAdmin" aria-label="Open phpMyAdmin for {u.database_name}">
+                        <DatabaseIcon size={14} />
+                      </button>
+                    {/if}
                     <button onclick={() => deleteUserById(u)} disabled={busyId === u.id} class="btn btn-danger-ghost btn-icon btn-xs" title="Delete user" aria-label="Delete user {u.username}">
                       <Trash2 size={14} />
                     </button>

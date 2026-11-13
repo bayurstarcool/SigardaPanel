@@ -9,7 +9,7 @@
   import { openPma, fmtSize, siteLabel } from './pma';
   import {
     Database as DatabaseIcon, Search, Trash2, ChevronRight, ExternalLink, Users,
-    LoaderCircle, Pencil, UserPlus, KeyRound,
+    LoaderCircle, Pencil, UserPlus, KeyRound, Table2,
   } from 'lucide-svelte';
 
   let {
@@ -104,7 +104,7 @@
   }
 
   function deleteDb(db: any) {
-    ask(`Delete database "${db.name}"?`, 'This will DROP the database from MySQL permanently.', 'Delete database', async () => {
+    ask(`Delete database "${db.name}"?`, `This drops the database from ${db.type === 'postgres' ? 'PostgreSQL' : 'MySQL'} permanently, with all its data.`, 'Delete database', async () => {
       busyId = db.id;
       try {
         await apiFetch(auth.token, 'DELETE', `databases/${db.id}`);
@@ -120,7 +120,9 @@
     if (!newDb.name || !newDb.site_id) return;
     busyId = -1;
     try {
-      await apiFetch(auth.token, 'POST', `sites/${newDb.site_id}/databases`, newDb);
+      const { site_id, ...rest } = newDb;
+      // Charset/collation are MySQL settings.
+      await apiFetch(auth.token, 'POST', `sites/${site_id}/databases`, newDb.type === 'mysql' ? rest : { name: rest.name, type: rest.type });
       toasts.success(`Database ${newDb.name} created`);
       newDb = emptyDb();
       newDbSiteQuery = '';
@@ -292,10 +294,16 @@
                       <ExternalLink size={14} /> View site
                     </a>
                   {/if}
-                  <button onclick={(e) => { e.stopPropagation(); openPma(db.id); }} class="btn btn-ghost btn-xs text-accent" title="Open phpMyAdmin">
-                    <DatabaseIcon size={14} /><span class="max-sm:hidden">phpMyAdmin</span>
+                  <a href="/databases/{db.id}" onclick={(e) => e.stopPropagation()} class="btn btn-ghost btn-xs text-accent" title="Browse tables and run read-only queries">
+                    <Table2 size={14} /><span class="max-sm:hidden">Browse</span>
+                  </a>
+                  {#if db.type !== 'postgres'}
+                  <button onclick={(e) => { e.stopPropagation(); openPma(db.id); }} class="btn btn-ghost btn-xs max-md:hidden" title="Open phpMyAdmin">
+                    <DatabaseIcon size={14} /><span class="max-lg:hidden">phpMyAdmin</span>
                   </button>
+                  {/if}
                   <button
+                    hidden={db.type === 'postgres'}
                     onclick={(e) => { e.stopPropagation(); startEditDb(db); }}
                     class="btn btn-ghost btn-icon btn-xs"
                     title="Edit charset/collation"

@@ -137,3 +137,45 @@ func accessibleSiteIDs(ctx context.Context, s *store.Store, userID int64) (map[i
 	}
 	return ids, nil
 }
+
+// sitePermissionOf is the caller's effective level on site, for the UI:
+// "super_admin", "owner", an assignment level ("admin", "write", "read"),
+// or "" (an admin seeing a site only through their role).
+func sitePermissionOf(ctx context.Context, s *store.Store, sess *store.Session, site *store.Site) string {
+	user := sessionUser(ctx, s, sess)
+	if user == nil || site == nil {
+		return ""
+	}
+	if user.Role == auth.RoleSuperAdmin {
+		return "super_admin"
+	}
+	if site.OwnerID.Valid && site.OwnerID.Int64 == user.ID {
+		return "owner"
+	}
+	if perm, err := s.UserSites.GetPermission(ctx, user.ID, site.ID); err == nil {
+		return perm
+	}
+	return ""
+}
+
+// siteCapabilities tells the UI which site actions the caller may use, using
+// the same rules as the handlers, so it can hide controls the API refuses.
+func siteCapabilities(ctx context.Context, s *store.Store, sess *store.Session, site *store.Site) map[string]any {
+	perm := sitePermissionOf(ctx, s, sess, site)
+	user := sessionUser(ctx, s, sess)
+	full := perm == "super_admin" || perm == "owner"
+	canTransfer := full
+	if !canTransfer && user != nil && user.Role == auth.RoleAdmin && site.OwnerID.Valid {
+		if owner, err := s.Users.GetByID(ctx, site.OwnerID.Int64); err == nil && owner != nil && owner.CreatedBy.Valid && owner.CreatedBy.Int64 == user.ID {
+			canTransfer = true
+		}
+	}
+	return map[string]any{
+		"my_permission":    perm,
+		"can_write":        hasSitePermission(ctx, s, sess, site, sitePermWrite),
+		"can_delete":       full,
+		"can_manage_users": full,
+		"can_transfer":     canTransfer,
+		"is_admin":         user != nil && auth.HasRole(user.Role, auth.RoleAdmin),
+	}
+}

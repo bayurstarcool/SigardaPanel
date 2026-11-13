@@ -19,11 +19,16 @@ async function forward(method: string, params: { path: string }, request: Reques
   const url = `${API_URL}/api/v1/${params.path}${new URL(request.url).search}`;
   const headers: Record<string, string> = { ...authHeaders(request), ...clientIpHeaders(request) };
   let body: ArrayBuffer | undefined;
-  if (method !== "GET" && method !== "DELETE") {
-    headers["Content-Type"] = request.headers.get("content-type") || "application/json";
-    body = await request.arrayBuffer();
-  }
   try {
+    if (method !== "GET" && method !== "DELETE") {
+      headers["Content-Type"] = request.headers.get("content-type") || "application/json";
+      // Throws when the body is over BODY_SIZE_LIMIT: answer with JSON the UI can show.
+      try {
+        body = await request.arrayBuffer();
+      } catch {
+        return json({ error: { message: "request too large (the limit is 32 MB)" } }, { status: 413 });
+      }
+    }
     const res = await fetch(url, { method, headers, body, cache: "no-store", redirect: "manual" });
     const out = new Headers();
     for (const h of forwardedResponseHeaders) {

@@ -97,8 +97,11 @@
     try { site = await apiFetch(auth.token, 'GET', `sites/${siteId}`); if (site) configForm = { root_path: site.root_path || '', proxy_pass_url: site.proxy_pass_url || '' }; }
     catch (e: any) { if (e.message === 'session expired') return; toasts.error(e.message); }
     finally { loading = false; }
-    await Promise.all([loadApp(), loadPHP()]);
+    // Only app runtimes have a process to manage, only PHP sites a PHP config.
+    await Promise.all([isAppRuntime ? loadApp() : null, site?.runtime === 'php' ? loadPHP() : null]);
   });
+  const isAppRuntime = $derived(['node', 'go', 'golang', 'python'].includes(site?.runtime));
+  const hasProxyURL = $derived(['proxy', 'node', 'go', 'golang', 'python', 'docker'].includes(site?.runtime));
 
   const canStop = $derived(appStatus === 'running' || appStatus === 'errored');
 </script>
@@ -123,10 +126,12 @@
           <label for="sd-root" class="label">Root path <span class="text-subtle">(read-only)</span></label>
           <input id="sd-root" value={configForm.root_path} readonly class="input cursor-not-allowed bg-surface-2 font-mono text-[13px] text-muted" />
         </div>
-        <div>
-          <label for="sd-proxy" class="label">Proxy pass URL</label>
-          <input id="sd-proxy" bind:value={configForm.proxy_pass_url} class="input font-mono text-[13px]" placeholder="http://127.0.0.1:3000" />
-        </div>
+        {#if hasProxyURL}
+          <div>
+            <label for="sd-proxy" class="label">Proxy pass URL</label>
+            <input id="sd-proxy" bind:value={configForm.proxy_pass_url} class="input font-mono text-[13px]" placeholder="http://127.0.0.1:3000" />
+          </div>
+        {/if}
         <button onclick={saveConfig} disabled={configBusy} class="btn btn-primary btn-sm">
           {#if configBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Save size={14} />{/if} {configBusy ? 'Saving…' : 'Save config'}
         </button>
@@ -134,7 +139,7 @@
     </div>
 
     <!-- App process -->
-    {#if site.runtime !== 'php'}
+    {#if isAppRuntime}
       <div class="card">
         <div class="card-header">
           <div class="flex items-center gap-2">
@@ -200,7 +205,7 @@
         </div>
         <div class="card-body">
           <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div><dt class="stat-label">Container name</dt><dd class="mt-1 font-mono text-[13px] text-fg">site-{site.name}</dd></div>
+            <div><dt class="stat-label">Container name</dt><dd class="mt-1 font-mono text-[13px] text-fg">sp-site-{site.id}</dd></div>
             <div><dt class="stat-label">Proxy pass</dt><dd class="mt-1 font-mono text-[13px] text-fg">{site.proxy_pass_url || '—'}</dd></div>
             <div class="min-w-0"><dt class="stat-label">Nginx config</dt><dd class="mt-1 truncate font-mono text-[13px] text-fg">{site.conf_file || '/etc/nginx/sites-available/' + site.domain + '.conf'}</dd></div>
             <div><dt class="stat-label">Restart policy</dt><dd class="mt-1 font-mono text-[13px] text-fg">unless-stopped</dd></div>

@@ -12,9 +12,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // MaxReadSize is the largest file Read returns (the editor is for text).
@@ -55,6 +58,10 @@ type Entry struct {
 	IsDir   bool   `json:"is_dir"`
 	Mode    string `json:"mode"`
 	ModTime string `json:"mod_time"`
+	// IsSymlink: the entry is a symbolic link. IsDir then tells whether it
+	// points at a directory inside the root (links leaving the root are
+	// shown but cannot be followed).
+	IsSymlink bool `json:"is_symlink,omitempty"`
 }
 
 // clean validates a path relative to the root and returns it cleaned
@@ -178,11 +185,26 @@ func (f *FS) List(rel string) ([]Entry, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Entry{
+		ent := Entry{
 			Name: e.Name(), Path: filepath.Join(rel, e.Name()), Size: ei.Size(), IsDir: e.IsDir(),
 			Mode: ei.Mode().String(), ModTime: ei.ModTime().Format(time.RFC3339),
-		})
+		}
+		if ei.Mode()&os.ModeSymlink != 0 {
+			ent.IsSymlink = true
+			// os.Root follows the link only while it stays beneath the root.
+			if ti, err := r.Stat(filepath.Join(clean, e.Name())); err == nil {
+				ent.IsDir = ti.IsDir()
+			}
+		}
+		out = append(out, ent)
 	}
+	// Folders first, then by name (case-insensitive): ReadDir returns disk order.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].IsDir != out[j].IsDir {
+			return out[i].IsDir
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
 	return out, nil
 }
 
@@ -205,7 +227,7 @@ func (f *FS) Read(rel string) ([]byte, os.FileInfo, error) {
 		return nil, nil, err
 	}
 	defer r.Close()
-	fh, err := r.OpenFile(clean, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	fh, err := r.OpenFile(clean, os.O_RDONLY, 0) // os.Root follows links only beneath the root
 	if err != nil {
 		return nil, nil, pathErr(err, http.StatusNotFound, "file not found")
 	}
@@ -643,8 +665,8 @@ func (f *FS) OpenDownload(rel string) (*os.File, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	defer r.Close() // an open file stays usable after its Root is closed
-	fh, err := r.OpenFile(clean, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	defer r.Close()                              // an open file stays usable after its Root is closed
+	fh, err := r.OpenFile(clean, os.O_RDONLY, 0) // links resolve only beneath the root
 	if err != nil {
 		return nil, nil, pathErr(err, http.StatusNotFound, "file not found")
 	}
@@ -657,4 +679,163 @@ func (f *FS) OpenDownload(rel string) (*os.File, os.FileInfo, error) {
 		return nil, nil, fail(http.StatusNotFound, "file not found")
 	}
 	return fh, info, nil
+}
+
+// IsText reports whether data looks like text the editor can round-trip:
+// valid UTF-8 without NUL bytes. Anything else is offered as a download only,
+// since editing would replace invalid bytes and corrupt the file.
+func IsText(data []byte) bool {
+	for _, b := range data {
+		if b == 0 {
+			return false
+		}
+	}
+	return utf8.Valid(data)
+}
+
+// Chmod sets the permission bits (octal, e.g. "644" or "0755") of a file or
+// directory. setuid/setgid/sticky bits are refused, and symbolic links are
+// not followed.
+func (f *FS) Chmod(rel, mode string) error {
+	clean, err := f.clean(rel)
+	if err != nil {
+		return err
+	}
+	if clean == "." {
+		return fail(http.StatusBadRequest, "cannot change the site root")
+	}
+	mode = strings.TrimSpace(mode)
+	v, err := strconv.ParseUint(mode, 8, 32)
+	if err != nil || len(mode) < 3 || len(mode) > 4 || v > 0o777 {
+		return fail(http.StatusBadRequest, "mode must be octal permissions like 644 or 755")
+	}
+	r, err := f.open()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	info, err := r.Lstat(clean)
+	if err != nil {
+		return pathErr(err, http.StatusNotFound, "not found")
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fail(http.StatusBadRequest, "cannot change the permissions of a symbolic link")
+	}
+	if err := r.Chmod(clean, os.FileMode(v)); err != nil {
+		return pathErr(err, http.StatusInternalServerError, "failed to change permissions")
+	}
+	return nil
+}
+
+// Extraction limits: a zip bomb must not fill the disk or the inode table.
+const (
+	MaxExtractEntries = 50000
+	MaxExtractBytes   = 4 << 30
+)
+
+// Extract unpacks a .zip archive into dest (both relative to the root).
+// Every path goes through os.Root, so entries cannot escape the site
+// ("zip slip"); symbolic links and special files are skipped, and files that
+// already exist are kept (reported as skipped). Extracted files belong to the
+// site owner. Returns the number of files written and skipped.
+func (f *FS) Extract(archiveRel, dest string) (int, int, error) {
+	archive, err := f.clean(archiveRel)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !strings.HasSuffix(strings.ToLower(archive), ".zip") {
+		return 0, 0, fail(http.StatusBadRequest, "only .zip archives can be extracted")
+	}
+	destClean, err := f.clean(dest)
+	if err != nil {
+		return 0, 0, err
+	}
+	r, err := f.open()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer r.Close()
+	if info, err := r.Stat(destClean); err != nil || !info.IsDir() {
+		return 0, 0, pathErr(err, http.StatusBadRequest, "destination is not a directory")
+	}
+	fh, err := r.OpenFile(archive, os.O_RDONLY, 0)
+	if err != nil {
+		return 0, 0, pathErr(err, http.StatusNotFound, "archive not found")
+	}
+	defer fh.Close()
+	info, err := fh.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return 0, 0, fail(http.StatusBadRequest, "not a file")
+	}
+	zr, err := zip.NewReader(fh, info.Size())
+	if err != nil {
+		return 0, 0, fail(http.StatusBadRequest, "not a valid zip archive")
+	}
+	if len(zr.File) > MaxExtractEntries {
+		return 0, 0, fail(http.StatusBadRequest, "archive has too many entries")
+	}
+	var total uint64
+	for _, zf := range zr.File {
+		total += zf.UncompressedSize64
+	}
+	if total > MaxExtractBytes {
+		return 0, 0, fail(http.StatusBadRequest, "archive is too large to extract (over 4 GiB)")
+	}
+	written, skipped := 0, 0
+	var budget int64 = MaxExtractBytes
+	for _, zf := range zr.File {
+		name := filepath.Clean(filepath.FromSlash(strings.TrimLeft(zf.Name, "/")))
+		if name == "." || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) || filepath.IsAbs(name) {
+			skipped++
+			continue
+		}
+		target := filepath.Join(destClean, name)
+		mode := zf.Mode()
+		switch {
+		case mode.IsDir():
+			if err := f.mkdirAll(r, target); err != nil {
+				return written, skipped, pathErr(err, http.StatusInternalServerError, "failed to create "+name)
+			}
+			continue
+		case !mode.IsRegular():
+			skipped++ // symlinks, devices, pipes
+			continue
+		}
+		if err := f.mkdirAll(r, filepath.Dir(target)); err != nil {
+			return written, skipped, pathErr(err, http.StatusInternalServerError, "failed to create "+filepath.Dir(name))
+		}
+		perm := os.FileMode(0o644)
+		if mode.Perm()&0o111 != 0 {
+			perm = 0o755
+		}
+		out, err := r.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, perm)
+		if err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				skipped++
+				continue
+			}
+			return written, skipped, pathErr(err, http.StatusInternalServerError, "failed to write "+name)
+		}
+		in, err := zf.Open()
+		if err != nil {
+			out.Close()
+			r.Remove(target)
+			return written, skipped, fail(http.StatusBadRequest, "corrupt archive entry: "+name)
+		}
+		// The size headers can lie: cap what is actually decompressed.
+		n, err := io.Copy(out, io.LimitReader(in, budget+1))
+		in.Close()
+		out.Close()
+		budget -= n
+		if err != nil || budget < 0 {
+			r.Remove(target)
+			if budget < 0 {
+				return written, skipped, fail(http.StatusBadRequest, "archive is too large to extract (over 4 GiB)")
+			}
+			return written, skipped, fail(http.StatusInternalServerError, "failed to extract "+name)
+		}
+		f.own(r, target)
+		written++
+	}
+	return written, skipped, nil
 }

@@ -20,6 +20,7 @@ import (
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/nginx"
+	"sigardapanel/internal/secrets"
 	"sigardapanel/internal/store"
 )
 
@@ -494,13 +495,18 @@ func (h *siteHandler) createSshFtp(c echo.Context) error {
 	}
 	pubKey, _ := out["ssh_public_key"].(string)
 	privKey, _ := out["ssh_private_key"].(string)
+	// Kept (for the key download) encrypted at rest, like other secrets.
+	encryptedKey, encErr := secrets.Encrypt(privKey)
+	if encErr != nil {
+		encryptedKey = ""
+	}
 
 	user := &store.SiteSSHUser{
 		SiteID:        id,
 		Username:      body.Username,
 		Password:      "", // password auth disabled
 		SSHKeys:       body.SSHKeys,
-		SSHPrivateKey: privKey,
+		SSHPrivateKey: encryptedKey,
 		SSHPublicKey:  pubKey,
 	}
 	user.HomeDir = homeDir
@@ -621,9 +627,14 @@ func (h *siteHandler) getSSHPrivateKey(c echo.Context) error {
 	if user.SSHPrivateKey == "" {
 		return echo.NewHTTPError(http.StatusNotFound, "no private key found for this user")
 	}
+	// Older accounts stored the key in plain text; Decrypt returns those as is.
+	key, err := secrets.Decrypt(user.SSHPrivateKey)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "the stored key cannot be decrypted")
+	}
 
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{
-		"private_key": user.SSHPrivateKey,
+		"private_key": key,
 		"public_key":  user.SSHPublicKey,
 		"username":    user.Username,
 	}, RequestID: rid})

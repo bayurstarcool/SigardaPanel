@@ -35,6 +35,13 @@
   let site = $state<any>(null);
   let loading = $state(true);
   let activeTab = $state<string>('info');
+  // The open tab lives in ?tab= so a reload or a shared link keeps it.
+  function setTab(key: string) {
+    activeTab = key;
+    const url = new URL(window.location.href);
+    if (key === 'info') url.searchParams.delete('tab'); else url.searchParams.set('tab', key);
+    history.replaceState(history.state, '', url);
+  }
 
   // Deploy state
   let deployBusy = $state(false);
@@ -66,6 +73,12 @@
   let dockerContainer = $state<any>(null);
 
   const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
+  // What the caller may do on this site, as the API decides it (GET /sites/:id).
+  const canWrite = $derived(!!site?.can_write);
+  const canDelete = $derived(!!site?.can_delete);
+  const canTransfer = $derived(!!site?.can_transfer);
+  const noRoot = $derived(site?.runtime === 'proxy'); // a reverse proxy serves no files of its own
+  const noGit = $derived(site?.runtime === 'proxy' || site?.runtime === 'docker');
   const hasSSL = $derived(!!site?.ssl_status && site.ssl_status !== 'none');
 
   // Copy helper
@@ -100,7 +113,7 @@
 
   async function initSite() {
     if (!auth.user) { window.location.href = '/login'; return; }
-    site = null; loading = true; activeTab = 'info'; dockerContainer = null; dbsCount = 0;
+    site = null; loading = true; activeTab = new URL(window.location.href).searchParams.get('tab') || 'info'; dockerContainer = null; dbsCount = 0;
     await loadSite();
     if (site) void loadDiskUsage();
     // Load db count for stats
@@ -197,17 +210,23 @@
   ] as const;
 
   const appRuntimes = ['node', 'go', 'golang', 'python', 'docker'];
+  // Tabs that fit the site's runtime and the caller's permission:
+  // App only for app runtimes; no Databases, Cron, Files or SSH for a reverse
+  // proxy (it has no files or code of its own); Users only for admins (the
+  // assignment API is admin-only).
   const tabs = $derived(
-    (!site ? allTabs.filter((t) => t.key !== 'app')
-    : site.runtime === 'php' ? allTabs.filter((t) => t.key !== 'app')
-    : appRuntimes.includes(site.runtime) ? allTabs
-    : allTabs.filter((t) => t.key !== 'app'))
-      // Site user assignments are admin-only in the API.
-      .filter((t) => isAdmin || t.key !== 'users')
+    allTabs.filter((t) => {
+      if (t.key === 'app') return !!site && appRuntimes.includes(site.runtime);
+      if (noRoot && ['databases', 'cron', 'files', 'ssh'].includes(t.key)) return false;
+      if (t.key === 'users') return isAdmin;
+      return true;
+    }),
   );
+  // A tab from the URL that does not exist for this site falls back to Info.
+  $effect(() => { if (site && !tabs.some((t) => t.key === activeTab)) activeTab = 'info'; });
 
   const pendingReason = $derived(
-    !site ? '' : !site.conf_file ? 'Nginx belum terdaftar' : !hasSSL ? 'SSL belum aktif' : 'Provisioning incomplete',
+    !site ? '' : !site.conf_file ? 'Nginx vhost not created yet' : !hasSSL ? 'SSL not active yet' : 'Provisioning incomplete',
   );
 </script>
 
@@ -272,7 +291,7 @@
       {/snippet}
       {#snippet actions()}
         <a href="http://{site.domain}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm"><ExternalLink size={14} /> Visit</a>
-        {#if isAdmin && site.git_repo}
+        {#if canWrite && site.git_repo && !noGit}
           <button onclick={triggerDeploy} disabled={deployBusy} class="btn btn-primary btn-sm">
             {#if deployBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Upload size={14} />{/if} Git pull
           </button>
@@ -283,7 +302,9 @@
             {site.status === 'suspended' ? 'Resume' : 'Suspend'}
           </button>
         {/if}
-        <button onclick={deleteSite} class="btn btn-danger-ghost btn-sm"><Trash2 size={14} /> Delete</button>
+        {#if canDelete}
+          <button onclick={deleteSite} class="btn btn-danger-ghost btn-sm"><Trash2 size={14} /> Delete</button>
+        {/if}
       {/snippet}
     </PageHeader>
 
@@ -308,7 +329,7 @@
     <!-- Tabs -->
     <div class="tabs mb-6" role="tablist">
       {#each tabs as t (t.key)}
-        <button role="tab" aria-selected={activeTab === t.key} onclick={() => (activeTab = t.key)} class="tab {activeTab === t.key ? 'tab-active' : ''}">
+        <button role="tab" aria-selected={activeTab === t.key} onclick={() => setTab(t.key)} class="tab {activeTab === t.key ? 'tab-active' : ''}">
           <t.icon size={14} /> {t.label}
         </button>
       {/each}
@@ -364,11 +385,11 @@
                 {@render row('Expires', site.ssl_expires_at ? `${fmtDate(site.ssl_expires_at)} · ${fmtDaysLeft(site.ssl_expires_at)}` : '—')}
               </dl>
             {:else}
-              <EmptyState compact icon={ShieldCheck} title="No SSL configured" description="Issue a certificate from the SSL tab." actionLabel="Open SSL tab" onaction={() => (activeTab = 'ssl')} />
+              <EmptyState compact icon={ShieldCheck} title="No SSL configured" description="Issue a certificate from the SSL tab." actionLabel="Open SSL tab" onaction={() => setTab('ssl')} />
             {/if}
           </div>
 
-          {#if isAdmin}
+          {#if canTransfer}
             <div class="card">
               <div class="card-header">
                 <h2 class="card-title">Transfer ownership</h2>
@@ -397,14 +418,15 @@
         </div>
       </div>
 
-      <!-- Git deploy -->
+      <!-- Git deploy (not for reverse proxies or Docker sites: nothing to pull) -->
+      {#if !noGit}
       <div class="card">
         <div class="card-header">
           <div class="flex items-center gap-2">
             <GitBranch size={16} class="text-subtle" />
             <h2 class="card-title">Git deploy</h2>
           </div>
-          {#if !gitEditing}
+          {#if !gitEditing && canWrite}
             <button onclick={startEditGit} class="btn btn-ghost btn-sm"><Pencil size={14} /> {site.git_repo ? 'Edit' : 'Configure'}</button>
           {/if}
         </div>
@@ -452,6 +474,7 @@
           <p class="card-body text-[13px] text-muted">No git repository configured. Click Configure to set up git deploy.</p>
         {/if}
       </div>
+      {/if}
     {:else if activeTab === 'vhost'}
       {#await import('$components/sites/VhostTab.svelte')}
         {@render tabLoading()}
