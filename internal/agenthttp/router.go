@@ -90,6 +90,8 @@ type RouterOptions struct {
 	PanelUpdateStateDir string
 	PanelUpdateEnvFile  string
 	PanelUpdateVersion  string
+	// PanelUpdateFreeBytes replaces the free-space lookup of the preflight.
+	PanelUpdateFreeBytes func(path string) (uint64, error)
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.

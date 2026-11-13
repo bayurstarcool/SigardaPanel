@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -35,6 +39,12 @@ const (
 	defaultPanelUpdateDir = "/var/lib/sigardapanel-update"
 	defaultPanelEnvFile   = "/etc/sigardapanel/panel.env"
 	panelUpdateMaxRuntime = 45 * time.Minute
+	panelUpdateHistoryMax = 10
+	// Free space the installer needs: the backup holds the binary, the web
+	// bundle and a copy of the database; /tmp holds the download.
+	panelUpdateMinFreeBackup = 512 << 20
+	panelUpdateMinFreeTmp    = 300 << 20
+	panelUpdateMinFreeBin    = 200 << 20
 )
 
 // panelUpdateRunFunc runs a command and returns its combined output.
@@ -47,6 +57,19 @@ type panelUpdater struct {
 	version  string
 	run      panelUpdateRunFunc
 	euid     func() int
+	lookPath func(string) (string, error)
+	// freeBytes reports the free space of the file system holding path.
+	freeBytes func(path string) (uint64, error)
+	// paths checked for free space
+	backupDir, tmpDir, binDir, dbPath string
+}
+
+func hostFreeBytes(path string) (uint64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return 0, err
+	}
+	return st.Bavail * uint64(st.Bsize), nil
 }
 
 func hostPanelUpdateRun(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -79,6 +102,28 @@ type PanelUpdateStatus struct {
 	// panel host, not installed with install.sh, a development build...).
 	Supported   bool   `json:"supported"`
 	Unsupported string `json:"unsupported_reason,omitempty"`
+	// Preflight lists the checks an update must pass before it starts.
+	Preflight []PanelUpdateCheck `json:"preflight,omitempty"`
+	// History holds earlier runs, newest first (without their logs).
+	History []PanelUpdateRun `json:"history"`
+}
+
+// PanelUpdateCheck is one preflight check.
+type PanelUpdateCheck struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail"`
+}
+
+// PanelUpdateRun is a finished update kept in the history.
+type PanelUpdateRun struct {
+	Tag         string     `json:"tag"`
+	FromVersion string     `json:"from_version"`
+	State       string     `json:"state"`
+	StartedAt   time.Time  `json:"started_at"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	ExitCode    *int       `json:"exit_code,omitempty"`
+	Message     string     `json:"message,omitempty"`
 }
 
 func (u *panelUpdater) path(name string) string { return filepath.Join(u.stateDir, name) }
@@ -99,19 +144,32 @@ func (u *panelUpdater) unsupported() string {
 
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
-func (u *panelUpdater) logTail(max int64) string {
-	f, err := os.Open(u.path("update.log"))
+func readLogTail(path string, max int64) string {
+	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
+	truncated := false
 	if st, err := f.Stat(); err == nil && st.Size() > max {
 		_, _ = f.Seek(st.Size()-max, 0)
+		truncated = true
 	}
 	b := make([]byte, max)
-	n, _ := f.Read(b)
-	return ansiRe.ReplaceAllString(string(b[:n]), "")
+	n, _ := io.ReadFull(f, b)
+	out := string(b[:n])
+	if truncated {
+		// Start at a whole line (and never in the middle of a UTF-8 rune).
+		if i := strings.IndexByte(out, '\n'); i >= 0 {
+			out = out[i+1:]
+		}
+		out = "… (earlier lines omitted)\n" + out
+	}
+	out = ansiRe.ReplaceAllString(out, "")
+	return strings.ToValidUTF8(out, "")
 }
+
+func (u *panelUpdater) logTail(max int64) string { return readLogTail(u.path("update.log"), max) }
 
 func (u *panelUpdater) unitActive(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -122,12 +180,20 @@ func (u *panelUpdater) unitActive(ctx context.Context) bool {
 }
 
 func (u *panelUpdater) status(ctx context.Context) PanelUpdateStatus {
-	st := PanelUpdateStatus{State: "idle", AgentVersion: u.version}
+	st := u.current(ctx)
 	if reason := u.unsupported(); reason != "" {
 		st.Unsupported = reason
 	} else {
 		st.Supported = true
+		st.Preflight = u.preflight()
 	}
+	st.History = u.history()
+	return st
+}
+
+// current describes the latest run (state idle when there never was one).
+func (u *panelUpdater) current(ctx context.Context) PanelUpdateStatus {
+	st := PanelUpdateStatus{State: "idle", AgentVersion: u.version, History: []PanelUpdateRun{}}
 	raw, err := os.ReadFile(u.path("meta.json"))
 	if err != nil {
 		return st
@@ -187,14 +253,21 @@ func (u *panelUpdater) start(ctx context.Context, tag string) (int, string) {
 	if !selfupdate.Newer(tag, u.version) {
 		return http.StatusConflict, tag + " is not newer than the installed version " + u.version
 	}
-	if st := u.status(ctx); st.State == "running" {
-		return http.StatusConflict, "an update to " + st.Tag + " is already running"
+	prev := u.current(ctx)
+	if prev.State == "running" {
+		return http.StatusConflict, "an update to " + prev.Tag + " is already running"
+	}
+	for _, c := range u.preflight() {
+		if !c.OK {
+			return http.StatusConflict, "preflight check failed: " + c.Name + ": " + c.Detail
+		}
 	}
 	if err := os.MkdirAll(u.stateDir, 0o700); err != nil {
 		return http.StatusInternalServerError, "cannot create " + u.stateDir + ": " + err.Error()
 	}
 	_ = os.Chmod(u.stateDir, 0o700)
-	for _, f := range []string{"exit", "exit.tmp", "update.log"} {
+	u.archive(prev)
+	for _, f := range []string{"exit", "exit.tmp", "update.log", "meta.json"} {
 		_ = os.Remove(u.path(f))
 	}
 	script := u.path("install.sh")
@@ -235,13 +308,134 @@ func (u *panelUpdater) start(ctx context.Context, tag string) (int, string) {
 	return http.StatusAccepted, "update to " + tag + " started"
 }
 
+// archive moves a finished run (meta, exit code, log) into history/ and
+// keeps the newest panelUpdateHistoryMax runs.
+func (u *panelUpdater) archive(prev PanelUpdateStatus) {
+	if prev.State == "idle" || prev.StartedAt == nil {
+		return
+	}
+	dir := u.path("history")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	base := fmt.Sprintf("%d-%s", prev.StartedAt.Unix(), prev.Tag)
+	run := PanelUpdateRun{
+		Tag: prev.Tag, FromVersion: prev.FromVersion, State: prev.State, StartedAt: *prev.StartedAt,
+		FinishedAt: prev.FinishedAt, ExitCode: prev.ExitCode, Message: prev.Message,
+	}
+	if b, err := json.Marshal(run); err == nil {
+		_ = os.WriteFile(filepath.Join(dir, base+".json"), b, 0o600)
+	}
+	if log := readLogTail(u.path("update.log"), 256<<10); log != "" {
+		_ = os.WriteFile(filepath.Join(dir, base+".log"), []byte(log), 0o600)
+	}
+	entries, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	sort.Strings(entries) // names start with the Unix start time
+	for len(entries) > panelUpdateHistoryMax {
+		old := strings.TrimSuffix(entries[0], ".json")
+		_ = os.Remove(old + ".json")
+		_ = os.Remove(old + ".log")
+		entries = entries[1:]
+	}
+}
+
+// history returns the archived runs, newest first.
+func (u *panelUpdater) history() []PanelUpdateRun {
+	entries, _ := filepath.Glob(filepath.Join(u.path("history"), "*.json"))
+	runs := make([]PanelUpdateRun, 0, len(entries))
+	for _, e := range entries {
+		raw, err := os.ReadFile(e)
+		if err != nil {
+			continue
+		}
+		var r PanelUpdateRun
+		if json.Unmarshal(raw, &r) == nil && r.Tag != "" {
+			runs = append(runs, r)
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool { return runs[i].StartedAt.After(runs[j].StartedAt) })
+	return runs
+}
+
+// preflight checks what the installer needs before an update may start.
+func (u *panelUpdater) preflight() []PanelUpdateCheck {
+	var checks []PanelUpdateCheck
+	if _, err := u.lookPath("systemd-run"); err != nil {
+		checks = append(checks, PanelUpdateCheck{Name: "systemd", Detail: "systemd-run not found; the update needs systemd"})
+	} else {
+		checks = append(checks, PanelUpdateCheck{Name: "systemd", OK: true, Detail: "systemd-run available"})
+	}
+	var dbSize uint64
+	if u.dbPath != "" {
+		if fi, err := os.Stat(u.dbPath); err == nil {
+			dbSize = uint64(fi.Size())
+		}
+	}
+	space := func(name, path string, need uint64) {
+		// Check the nearest existing directory (the backup dir may not exist yet).
+		p := path
+		for p != "/" && p != "." {
+			if _, err := os.Stat(p); err == nil {
+				break
+			}
+			p = filepath.Dir(p)
+		}
+		free, err := u.freeBytes(p)
+		switch {
+		case err != nil:
+			checks = append(checks, PanelUpdateCheck{Name: name, Detail: "cannot read free space of " + path + ": " + err.Error()})
+		case free < need:
+			checks = append(checks, PanelUpdateCheck{Name: name, Detail: fmt.Sprintf("%s has %s free, needs %s", path, humanBytes(free), humanBytes(need))})
+		default:
+			checks = append(checks, PanelUpdateCheck{Name: name, OK: true, Detail: fmt.Sprintf("%s: %s free", path, humanBytes(free))})
+		}
+	}
+	space("backup space", u.backupDir, panelUpdateMinFreeBackup+dbSize)
+	space("download space", u.tmpDir, panelUpdateMinFreeTmp)
+	space("install space", u.binDir, panelUpdateMinFreeBin)
+	return checks
+}
+
+func humanBytes(b uint64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// panelDBPath reads SIGARDAPANEL_DB_PATH from panel.env (for the backup
+// space estimate); "" when unknown.
+func panelDBPath(envFile string) string {
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "SIGARDAPANEL_DB_PATH="); ok {
+			return strings.Trim(v, `"'`)
+		}
+	}
+	return ""
+}
+
 func newPanelUpdater(opts *RouterOptions) *panelUpdater {
 	u := &panelUpdater{
-		stateDir: defaultPanelUpdateDir,
-		envFile:  defaultPanelEnvFile,
-		version:  buildinfo.Version,
-		run:      hostPanelUpdateRun,
-		euid:     os.Geteuid,
+		stateDir:  defaultPanelUpdateDir,
+		envFile:   defaultPanelEnvFile,
+		version:   buildinfo.Version,
+		run:       hostPanelUpdateRun,
+		euid:      os.Geteuid,
+		lookPath:  exec.LookPath,
+		freeBytes: hostFreeBytes,
+		backupDir: "/var/backups/sigardapanel-updates",
+		tmpDir:    os.TempDir(),
+		binDir:    "/usr/local/bin",
 	}
 	if opts != nil {
 		// Injected routers (tests) never touch the real host.
@@ -261,7 +455,14 @@ func newPanelUpdater(opts *RouterOptions) *panelUpdater {
 			u.version = opts.PanelUpdateVersion
 		}
 		u.euid = func() int { return 0 }
+		u.lookPath = func(string) (string, error) { return "/usr/bin/systemd-run", nil }
+		u.freeBytes = func(string) (uint64, error) { return 100 << 30, nil }
+		if opts.PanelUpdateFreeBytes != nil {
+			u.freeBytes = opts.PanelUpdateFreeBytes
+		}
+		u.backupDir, u.tmpDir, u.binDir = u.stateDir, u.stateDir, u.stateDir
 	}
+	u.dbPath = panelDBPath(u.envFile)
 	return u
 }
 

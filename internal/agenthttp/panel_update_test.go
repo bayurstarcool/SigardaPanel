@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeUpdateHost struct {
@@ -140,5 +141,81 @@ func TestPanelUpdateInjectedRouterRunsNothing(t *testing.T) {
 	code, out := doJSON(t, e, "POST", "/tasks/panel/update", `{"tag":"v1.7.0"}`)
 	if code == http.StatusAccepted {
 		t.Fatalf("injected router started an update: %v", out)
+	}
+}
+
+func TestPanelUpdateArchivesHistory(t *testing.T) {
+	h, host, state := newUpdateRouter(t, "1.6.2", true)
+	for i := 0; i < panelUpdateHistoryMax+2; i++ {
+		if code, out := doJSON(t, h, "POST", "/tasks/panel/update", `{"tag":"v1.7.0"}`); code != http.StatusAccepted {
+			t.Fatalf("start %d = %d %v", i, code, out)
+		}
+		// Give every run a distinct start second, then let it fail.
+		raw, _ := os.ReadFile(filepath.Join(state, "meta.json"))
+		var m panelUpdateMeta
+		json.Unmarshal(raw, &m)
+		m.StartedAt = m.StartedAt.Add(time.Duration(i) * time.Minute)
+		raw, _ = json.Marshal(m)
+		os.WriteFile(filepath.Join(state, "meta.json"), raw, 0o600)
+		os.WriteFile(filepath.Join(state, "update.log"), []byte("run log\n"), 0o600)
+		os.WriteFile(filepath.Join(state, "exit"), []byte("1\n"), 0o600)
+		host.active = false
+	}
+	_, out := doJSON(t, h, "GET", "/tasks/panel/update", "")
+	hist, _ := out["history"].([]any)
+	if len(hist) != panelUpdateHistoryMax {
+		t.Fatalf("history has %d runs, want %d", len(hist), panelUpdateHistoryMax)
+	}
+	first := hist[0].(map[string]any)
+	if first["state"] != "failed" || first["tag"] != "v1.7.0" {
+		t.Fatalf("unexpected newest history entry: %v", first)
+	}
+	logs, _ := filepath.Glob(filepath.Join(state, "history", "*.log"))
+	if len(logs) != panelUpdateHistoryMax {
+		t.Fatalf("kept %d logs, want %d", len(logs), panelUpdateHistoryMax)
+	}
+}
+
+func TestPanelUpdatePreflightRefusesLowDisk(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, "panel.env")
+	os.WriteFile(env, []byte("X=1\n"), 0o600)
+	host := &fakeUpdateHost{}
+	e := NewRouterWithOptions(RouterOptions{
+		PanelUpdateRun: host.run, PanelUpdateStateDir: filepath.Join(dir, "state"),
+		PanelUpdateEnvFile: env, PanelUpdateVersion: "1.6.2",
+		PanelUpdateFreeBytes: func(string) (uint64, error) { return 10 << 20, nil },
+	})
+	code, out := doJSON(t, e, "POST", "/tasks/panel/update", `{"tag":"v1.7.0"}`)
+	if code != http.StatusConflict || !strings.Contains(out["message"].(string), "preflight") {
+		t.Fatalf("start with a full disk = %d %v", code, out)
+	}
+	for _, c := range host.calls {
+		if c[0] == "systemd-run" {
+			t.Fatal("systemd-run ran despite a failed preflight")
+		}
+	}
+	_, st := doJSON(t, e, "GET", "/tasks/panel/update", "")
+	checks, _ := st["preflight"].([]any)
+	failed := 0
+	for _, c := range checks {
+		if c.(map[string]any)["ok"] == false {
+			failed++
+		}
+	}
+	if failed == 0 {
+		t.Fatalf("preflight did not report the low disk: %v", st["preflight"])
+	}
+}
+
+func TestReadLogTailStartsAtWholeLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "log")
+	os.WriteFile(p, []byte("first line\nsecond \x1b[0;32mline\x1b[0m\nthird line\n"), 0o600)
+	got := readLogTail(p, 25)
+	if strings.Contains(got, "first") || !strings.Contains(got, "third line") || strings.Contains(got, "\x1b") {
+		t.Fatalf("readLogTail = %q", got)
+	}
+	if !strings.HasPrefix(got, "… (earlier lines omitted)") {
+		t.Fatalf("truncation is not marked: %q", got)
 	}
 }

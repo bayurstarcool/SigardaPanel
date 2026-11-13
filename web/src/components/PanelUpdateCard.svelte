@@ -7,17 +7,30 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
-  import { fmtDateTime, fmtRelative } from '$lib/format';
+  import { fmtDateTime, fmtRelative, parseDate } from '$lib/format';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
-  import { ArrowUpCircle, RefreshCw, LoaderCircle, CheckCircle2, AlertTriangle, ExternalLink, ChevronDown } from 'lucide-svelte';
+  import StatusPill from '$components/StatusPill.svelte';
+  import {
+    ArrowUpCircle, RefreshCw, LoaderCircle, CheckCircle2, AlertTriangle, ExternalLink, ChevronDown, XCircle,
+  } from 'lucide-svelte';
   import { onMount, onDestroy } from 'svelte';
 
+  type Run = {
+    tag: string;
+    from_version?: string;
+    state: 'succeeded' | 'failed' | 'running' | 'idle';
+    started_at: string;
+    finished_at?: string;
+    message?: string;
+  };
   type UpdateInfo = {
     current_version: string;
     is_release_build: boolean;
     latest?: { tag: string; name: string; notes: string; url: string; published_at: string } | null;
     update_available: boolean;
     auto_update: boolean;
+    auto_update_window?: { start: number; end: number } | null;
+    server_time?: string;
     checked_at?: string;
     check_error?: string;
     agent_error?: string;
@@ -32,8 +45,16 @@
       log?: string;
       supported: boolean;
       unsupported_reason?: string;
+      preflight?: { name: string; ok: boolean; detail: string }[];
+      history?: Run[];
     } | null;
   };
+
+  // How long the page follows an update before giving up (the agent caps a
+  // run at 45 minutes).
+  const FOLLOW_LIMIT_MS = 50 * 60 * 1000;
+  const BADGE_KEY = 'sigarda_panel_update';
+  const hours = Array.from({ length: 24 }, (_, h) => h);
 
   let info = $state<UpdateInfo | null>(null);
   let loading = $state(true);
@@ -44,16 +65,22 @@
   let confirmOpen = $state(false);
   let showNotes = $state(false);
   let showLog = $state(false);
+  let showHistory = $state(false);
   // Set while this page follows an update it started or found running.
   let following = $state(false);
+  let followSince = 0;
   let unreachable = $state(false);
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let destroyed = false;
   let logEl = $state<HTMLPreElement | null>(null);
+  let winStart = $state('any');
+  let winEnd = $state('6');
 
   const updState = $derived(info?.status?.state ?? 'idle');
   const running = $derived(following || updState === 'running');
   const supported = $derived(info?.status?.supported ?? false);
+  const failedChecks = $derived((info?.status?.preflight ?? []).filter((c) => !c.ok));
+  const history = $derived(info?.status?.history ?? []);
   const blockedReason = $derived(
     !info
       ? ''
@@ -63,14 +90,31 @@
           ? info.agent_error
           : info.status && !info.status.supported
             ? info.status.unsupported_reason || 'Self-update is not available on this host.'
-            : '',
+            : failedChecks.length
+              ? `Preflight check failed: ${failedChecks.map((c) => `${c.name} (${c.detail})`).join('; ')}.`
+              : '',
   );
   const canUpdate = $derived(!!info?.update_available && supported && !running && !blockedReason);
+
+  function clearBadgeCache() {
+    try { sessionStorage.removeItem(BADGE_KEY); } catch { /* storage unavailable */ }
+  }
+
+  function syncWindow(d: UpdateInfo) {
+    if (d.auto_update_window) {
+      winStart = String(d.auto_update_window.start);
+      winEnd = String(d.auto_update_window.end);
+    } else {
+      winStart = 'any';
+    }
+  }
 
   async function load(refresh = false) {
     try {
       const d: UpdateInfo = await apiFetch(auth.token, 'GET', `system/panel-update${refresh ? '?refresh=1' : ''}`);
       info = d;
+      if (!savingAuto) syncWindow(d);
+      if (!d.update_available) clearBadgeCache();
       loadError = '';
       unreachable = false;
       return d;
@@ -92,9 +136,17 @@
     const d = await load(true).catch(() => null);
     checking = false;
     if (!d) return;
+    clearBadgeCache();
     if (d.check_error) toasts.error(`Could not check for updates: ${d.check_error}`);
     else if (d.update_available) toasts.success(`${d.latest?.tag} is available`);
     else toasts.success('SigardaPanel is up to date');
+  }
+
+  function startFollowing() {
+    following = true;
+    followSince = Date.now();
+    showLog = true;
+    schedulePoll();
   }
 
   function schedulePoll() {
@@ -103,28 +155,35 @@
     pollTimer = setTimeout(poll, 3000);
   }
 
+  const sameVersion = (version?: string, tag?: string) =>
+    !!version && !!tag && `v${version.replace(/^v/, '')}` === tag;
+
   async function poll() {
     if (destroyed) return;
+    if (Date.now() - followSince > FOLLOW_LIMIT_MS) {
+      following = false;
+      toasts.error('Stopped following the update: no result after 50 minutes. Check the log or the server.');
+      load();
+      return;
+    }
     if (document.hidden) { schedulePoll(); return; }
-    const before = info?.status?.tag;
     const d = await load().catch(() => null);
     const st = d?.status?.state;
-    if (d && st !== 'running') {
-      if (st === 'succeeded' && d.current_version && `v${d.current_version.replace(/^v/, '')}` === (d.status?.tag ?? before)) {
-        following = false;
-        toasts.success(`SigardaPanel updated to ${d.status?.tag}. Reloading…`);
-        setTimeout(() => window.location.reload(), 2500);
-        return;
-      }
-      if (st === 'failed') {
-        following = false;
-        showLog = true;
-        toasts.error(d.status?.message || 'The update failed');
-        return;
-      }
-      // succeeded but the API still reports the old version: services are
-      // still restarting. Anything else: keep waiting a little.
+    if (d && st === 'succeeded' && sameVersion(d.current_version, d.status?.tag)) {
+      following = false;
+      clearBadgeCache();
+      toasts.success(`SigardaPanel updated to ${d.status?.tag}. Reloading…`);
+      setTimeout(() => window.location.reload(), 2500);
+      return;
     }
+    if (d && st === 'failed') {
+      following = false;
+      showLog = true;
+      toasts.error(d.status?.message || 'The update failed');
+      return;
+    }
+    // running, or succeeded while the API still reports the old version
+    // (services still restarting), or unreachable: keep waiting.
     schedulePoll();
   }
 
@@ -132,10 +191,8 @@
     starting = true;
     try {
       await apiFetch(auth.token, 'POST', 'system/panel-update', {});
-      following = true;
-      showLog = true;
       toasts.success('Update started. The panel restarts for a moment during the update.');
-      schedulePoll();
+      startFollowing();
     } catch (e: any) {
       if (e?.message !== 'session expired') toasts.error(e?.message || 'Could not start the update');
       load();
@@ -144,19 +201,55 @@
     }
   }
 
-  async function toggleAuto(e: Event) {
-    const enabled = (e.currentTarget as HTMLInputElement).checked;
+  async function saveSettings(body: Record<string, unknown>, okMsg: string) {
     savingAuto = true;
     try {
-      await apiFetch(auth.token, 'PUT', 'system/panel-update/settings', { auto_update: enabled });
-      if (info) info.auto_update = enabled;
-      toasts.success(enabled ? 'Automatic updates enabled' : 'Automatic updates disabled');
+      const d = await apiFetch(auth.token, 'PUT', 'system/panel-update/settings', body);
+      if (info) {
+        info.auto_update = !!d?.auto_update;
+        info.auto_update_window = d?.auto_update_window ?? null;
+        syncWindow(info);
+      }
+      toasts.success(okMsg);
+      return true;
     } catch (err: any) {
-      (e.currentTarget as HTMLInputElement).checked = !enabled;
       if (err?.message !== 'session expired') toasts.error(err?.message || 'Could not save the setting');
+      if (info) syncWindow(info);
+      return false;
     } finally {
       savingAuto = false;
     }
+  }
+
+  async function toggleAuto(e: Event) {
+    // Keep the element: currentTarget is gone once the handler awaits.
+    const box = e.currentTarget as HTMLInputElement;
+    const enabled = box.checked;
+    const ok = await saveSettings({ auto_update: enabled }, enabled ? 'Automatic updates enabled' : 'Automatic updates disabled');
+    if (!ok) box.checked = !enabled;
+  }
+
+  function saveWindow() {
+    if (winStart === 'any') {
+      saveSettings({ auto_update_window: null }, 'Automatic updates may run at any time');
+      return;
+    }
+    const start = Number(winStart);
+    let end = Number(winEnd);
+    if (end === start) end = (start + 1) % 24;
+    saveSettings(
+      { auto_update_window: { start, end } },
+      `Automatic updates run between ${pad(start)}:00 and ${pad(end)}:00 server time`,
+    );
+  }
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  function duration(r: { started_at?: string; finished_at?: string }) {
+    const a = parseDate(r.started_at), b = parseDate(r.finished_at);
+    if (!a || !b) return '—';
+    const s = Math.max(0, Math.round((b.getTime() - a.getTime()) / 1000));
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
   }
 
   $effect(() => {
@@ -167,10 +260,9 @@
 
   onMount(async () => {
     const d = await load().catch(() => null);
-    if (d?.status?.state === 'running') {
-      following = true;
-      showLog = true;
-      schedulePoll();
+    if (d?.status?.state === 'running') startFollowing();
+    if (window.location.hash === '#panel-update') {
+      document.getElementById('panel-update')?.scrollIntoView({ block: 'start' });
     }
   });
 
@@ -180,7 +272,7 @@
   });
 </script>
 
-<section class="card md:col-span-2">
+<section id="panel-update" class="card scroll-mt-20 md:col-span-2">
   <div class="card-header">
     <h2 class="card-title flex items-center gap-2">
       <ArrowUpCircle size={16} class="text-subtle" /> Panel update
@@ -239,7 +331,7 @@
       {/if}
 
       {#if running}
-        <div class="rounded-lg border border-line bg-surface-2 p-3 text-[13px] text-muted">
+        <div class="rounded-lg border border-line bg-surface-2 p-3 text-[13px] text-muted" aria-live="polite">
           <p class="flex items-center gap-2 font-medium text-fg">
             <LoaderCircle size={14} class="animate-spin text-accent" />
             Updating{info.status?.from_version ? ` from ${info.status.from_version}` : ''} to {info.status?.tag ?? info.latest?.tag}…
@@ -255,12 +347,13 @@
       {:else if updState === 'succeeded' && info.status?.tag}
         <p class="flex items-center gap-1.5 text-[13px] text-success"><CheckCircle2 size={14} /> Last update: {info.status.message}{info.status.finished_at ? ` · ${fmtDateTime(info.status.finished_at)}` : ''}</p>
       {:else if updState === 'failed'}
-        <p class="flex items-start gap-1.5 text-[13px] text-danger"><AlertTriangle size={14} class="mt-0.5 shrink-0" /> {info.status?.message}</p>
+        <p class="flex items-start gap-1.5 text-[13px] text-danger"><XCircle size={14} class="mt-0.5 shrink-0" /> {info.status?.message}</p>
       {/if}
 
       {#if blockedReason && info.update_available && !running}
-        <p class="text-[13px] text-muted">
-          {blockedReason} Update from a shell instead: <code class="code">sudo bash install.sh update</code>
+        <p class="flex items-start gap-1.5 text-[13px] text-muted">
+          <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
+          <span>{blockedReason} You can also update from a shell: <code class="code">sudo bash install.sh update</code></span>
         </p>
       {/if}
 
@@ -281,7 +374,7 @@
       {#if info.status?.log}
         <div>
           <button class="btn btn-ghost btn-xs" onclick={() => (showLog = !showLog)} aria-expanded={showLog}>
-            <ChevronDown size={14} class={showLog ? 'rotate-180' : ''} /> Update log
+            <ChevronDown size={14} class={showLog ? 'rotate-180' : ''} /> Update log{info.status.tag ? ` (${info.status.tag})` : ''}
           </button>
           {#if showLog}
             <pre bind:this={logEl} class="mt-2 max-h-72 overflow-auto rounded-lg border border-line bg-bg p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted">{info.status.log}</pre>
@@ -289,12 +382,55 @@
         </div>
       {/if}
 
-      <div class="flex items-start gap-3 border-t border-line pt-4">
-        <input id="auto-update" type="checkbox" class="checkbox mt-0.5" checked={info.auto_update} onchange={toggleAuto} disabled={savingAuto} />
-        <label for="auto-update" class="min-w-0">
-          <span class="block text-sm text-fg">Install new releases automatically</span>
-          <span class="hint block">The panel checks GitHub every hour and installs each new signed release once (with backup and automatic rollback). Super admins are notified either way.</span>
-        </label>
+      {#if history.length}
+        <div>
+          <button class="btn btn-ghost btn-xs" onclick={() => (showHistory = !showHistory)} aria-expanded={showHistory}>
+            <ChevronDown size={14} class={showHistory ? 'rotate-180' : ''} /> Earlier updates ({history.length})
+          </button>
+          {#if showHistory}
+            <div class="table-wrap mt-2">
+              <table class="table">
+                <thead><tr><th>Started</th><th>Version</th><th>Result</th><th class="max-sm:hidden">Duration</th></tr></thead>
+                <tbody>
+                  {#each history as r (r.started_at + r.tag)}
+                    <tr>
+                      <td class="text-[13px] tabular-nums">{fmtDateTime(r.started_at)}</td>
+                      <td class="font-mono text-[13px]">{r.from_version ? `${r.from_version} → ` : ''}{r.tag}</td>
+                      <td><span title={r.message}><StatusPill status={r.state === 'succeeded' ? 'success' : 'failed'} label={r.state} /></span></td>
+                      <td class="text-[13px] text-muted tabular-nums max-sm:hidden">{duration(r)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <div class="space-y-3 border-t border-line pt-4">
+        <div class="flex items-start gap-3">
+          <input id="auto-update" type="checkbox" class="checkbox mt-0.5" checked={info.auto_update} onchange={toggleAuto} disabled={savingAuto} />
+          <label for="auto-update" class="min-w-0">
+            <span class="block text-sm text-fg">Install new releases automatically</span>
+            <span class="hint block">The panel checks GitHub every hour and installs each new signed release once (with backup and automatic rollback). Super admins are notified of new releases and of every update result.</span>
+          </label>
+        </div>
+        {#if info.auto_update}
+          <div class="flex flex-wrap items-center gap-2 pl-7 text-[13px] text-muted">
+            <label for="win-start">Only between</label>
+            <select id="win-start" class="input h-8 w-auto text-[13px]" bind:value={winStart} onchange={saveWindow} disabled={savingAuto}>
+              <option value="any">any time</option>
+              {#each hours as h (h)}<option value={String(h)}>{pad(h)}:00</option>{/each}
+            </select>
+            {#if winStart !== 'any'}
+              <label for="win-end">and</label>
+              <select id="win-end" class="input h-8 w-auto text-[13px]" bind:value={winEnd} onchange={saveWindow} disabled={savingAuto}>
+                {#each hours as h (h)}<option value={String(h)} disabled={String(h) === winStart}>{pad(h)}:00</option>{/each}
+              </select>
+            {/if}
+            <span class="text-xs text-subtle">server time{info.server_time ? ` (now ${info.server_time.slice(11, 16)})` : ''}</span>
+          </div>
+        {/if}
       </div>
     {/if}
   </div>

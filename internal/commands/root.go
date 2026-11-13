@@ -111,6 +111,8 @@ func (a *App) Run(args []string) int {
 		return a.User(args[1:])
 	case "db":
 		return a.DB(args[1:])
+	case "panel-update", "self-update":
+		return a.PanelUpdate(args[1:])
 	case "system":
 		return a.System(args[1:])
 	case "docker":
@@ -361,6 +363,7 @@ Resources:
   logs       tail
   metrics    latest|list|gpu
   system     disk-usage|updates
+  panel-update status|check|apply|auto         update the panel itself (super_admin)
   user       create|list|update|reset-password|passwd|delete
   apikey     create|list|revoke                personal API keys
   audit      list|purge

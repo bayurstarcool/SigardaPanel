@@ -1,15 +1,33 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { theme } from '$lib/theme.svelte';
   import { onMount } from 'svelte';
-  import { Bell, Search, Settings, LogOut, ChevronDown, Menu, X, Sun, Moon, User, Undo2 } from 'lucide-svelte';
+  import { Bell, Search, Settings, LogOut, ChevronDown, Menu, X, Sun, Moon, User, Undo2, ArrowUpCircle } from 'lucide-svelte';
 
   let { mobileOpen, onToggleMobile, onSearchOpen }: { mobileOpen: boolean; onToggleMobile: () => void; onSearchOpen?: () => void } = $props();
 
   let showUserMenu = $state(false);
   let menuEl = $state<HTMLDivElement>();
   let unreadCount = $state(0);
+  // Super admins see when a newer panel release exists (cached per tab for an hour).
+  let panelUpdateTag = $state('');
+
+  async function checkPanelUpdate() {
+    if (!hasRole(auth.user?.role, 'super_admin') || auth.isImpersonating) return;
+    const key = 'sigarda_panel_update';
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(key) || 'null');
+      if (cached && Date.now() - cached.at < 3600_000) { panelUpdateTag = cached.tag || ''; return; }
+    } catch { /* storage unavailable */ }
+    try {
+      const d = await apiFetch(auth.token, 'GET', 'system/panel-update/summary');
+      panelUpdateTag = d?.update_available ? d.latest_tag : '';
+      try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), tag: panelUpdateTag })); } catch { /* ignore */ }
+    } catch {
+      // silent — the header must never break on a failed check
+    }
+  }
 
   function handleLogout() {
     auth.logout();
@@ -41,6 +59,7 @@
     document.addEventListener('keydown', onKey);
     document.addEventListener('visibilitychange', onVisible);
     fetchUnreadCount();
+    checkPanelUpdate();
     const timer = setInterval(fetchUnreadCount, 30000);
     return () => {
       document.removeEventListener('mousedown', onDown);
@@ -94,6 +113,11 @@
       >
         {#if theme.isDark}<Sun size={16} />{:else}<Moon size={16} />{/if}
       </button>
+      {#if panelUpdateTag}
+        <a href="/settings#panel-update" class="badge badge-accent gap-1 max-sm:hidden" title="A new SigardaPanel release is available">
+          <ArrowUpCircle size={12} /> {panelUpdateTag} available
+        </a>
+      {/if}
       <a href="/notifications" class="btn btn-ghost btn-icon btn-sm relative" aria-label="Notifications" title="Notifications">
         <Bell size={16} />
         {#if unreadCount > 0}

@@ -93,31 +93,34 @@ type Checker struct {
 	// MinInterval is the shortest time between two real lookups, even when
 	// a caller asks for a fresh answer (default 60s).
 	MinInterval time.Duration
+	// ErrorBackoff is how long a failed lookup is remembered before the next
+	// caller tries again (default 5m), whatever maxAge that caller passes:
+	// one GitHub hiccup must not hide new releases for hours.
+	ErrorBackoff time.Duration
 
 	mu        sync.Mutex
+	fetching  chan struct{} // non-nil while a lookup runs
 	latest    *Release
 	lastErr   error
-	checkedAt time.Time
+	attemptAt time.Time // last lookup, successful or not
+	successAt time.Time // last successful lookup
 }
 
 // NewChecker returns a Checker with production defaults.
 func NewChecker() *Checker {
-	return &Checker{HTTP: &http.Client{Timeout: 20 * time.Second}}
+	return &Checker{HTTP: &http.Client{Timeout: 15 * time.Second}}
 }
 
-// Cached returns the last answer without doing a lookup.
+// Cached returns the last known release, when it was last fetched
+// successfully and the error of the last attempt (nil when it succeeded),
+// without doing a lookup.
 func (c *Checker) Cached() (*Release, time.Time, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.latest, c.checkedAt, c.lastErr
+	return c.latest, c.successAt, c.lastErr
 }
 
-// Latest returns the latest release, looking it up when the cached answer is
-// older than maxAge (maxAge 0 asks for a fresh lookup, still bounded by
-// MinInterval).
-func (c *Checker) Latest(ctx context.Context, maxAge time.Duration) (*Release, time.Time, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Checker) fresh(maxAge time.Duration) bool {
 	minInterval := c.MinInterval
 	if minInterval <= 0 {
 		minInterval = time.Minute
@@ -125,16 +128,71 @@ func (c *Checker) Latest(ctx context.Context, maxAge time.Duration) (*Release, t
 	if maxAge < minInterval {
 		maxAge = minInterval
 	}
-	if !c.checkedAt.IsZero() && time.Since(c.checkedAt) < maxAge {
-		return c.latest, c.checkedAt, c.lastErr
+	if c.attemptAt.IsZero() {
+		return false
 	}
-	rel, err := c.fetch(ctx)
-	c.checkedAt = time.Now()
-	c.lastErr = err
-	if err == nil {
-		c.latest = rel
+	if c.lastErr != nil {
+		backoff := c.ErrorBackoff
+		if backoff <= 0 {
+			backoff = 5 * time.Minute
+		}
+		if backoff < minInterval {
+			backoff = minInterval
+		}
+		if maxAge > backoff {
+			maxAge = backoff
+		}
 	}
-	return c.latest, c.checkedAt, err
+	return time.Since(c.attemptAt) < maxAge
+}
+
+// Latest returns the latest known release, the time it was last fetched
+// successfully, and the error of the last attempt. It looks the release up
+// when the cached answer is older than maxAge (0 asks for a fresh lookup,
+// still bounded by MinInterval; a failed lookup is retried after
+// ErrorBackoff). Concurrent callers share one lookup, and a lookup aborted
+// because the caller's context ended is not remembered as an error.
+func (c *Checker) Latest(ctx context.Context, maxAge time.Duration) (*Release, time.Time, error) {
+	for {
+		c.mu.Lock()
+		if c.fresh(maxAge) {
+			defer c.mu.Unlock()
+			return c.latest, c.successAt, c.lastErr
+		}
+		if wait := c.fetching; wait != nil {
+			c.mu.Unlock()
+			select {
+			case <-wait:
+				continue // the other lookup finished; use its answer
+			case <-ctx.Done():
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				return c.latest, c.successAt, ctx.Err()
+			}
+		}
+		done := make(chan struct{})
+		c.fetching = done
+		c.mu.Unlock()
+
+		rel, err := c.fetch(ctx)
+
+		c.mu.Lock()
+		c.fetching = nil
+		close(done)
+		if err != nil && ctx.Err() != nil {
+			// The caller gave up; do not cache that as GitHub's answer.
+			defer c.mu.Unlock()
+			return c.latest, c.successAt, err
+		}
+		c.attemptAt = time.Now()
+		c.lastErr = err
+		if err == nil {
+			c.latest = rel
+			c.successAt = c.attemptAt
+		}
+		defer c.mu.Unlock()
+		return c.latest, c.successAt, c.lastErr
+	}
 }
 
 func (c *Checker) fetch(ctx context.Context) (*Release, error) {
@@ -148,7 +206,7 @@ func (c *Checker) fetch(ctx context.Context) (*Release, error) {
 	}
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = &http.Client{Timeout: 15 * time.Second}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/repos/"+repo+"/releases/latest", nil)
 	if err != nil {

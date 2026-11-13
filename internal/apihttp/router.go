@@ -280,6 +280,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	puH := &panelUpdateHandler{store: s, db: db, audit: auditRec}
 	e.GET("/api/v1/system/panel-update", puH.status, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 	e.POST("/api/v1/system/panel-update", puH.start, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/system/panel-update/summary", puH.summary, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 	e.PUT("/api/v1/system/panel-update/settings", puH.settings, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	e.GET("/api/v1/settings/retention", getRetention(db), RequireAuth(s), RequireAdmin(s))

@@ -158,6 +158,7 @@ sigardapanel
 ├── logs         tail
 ├── metrics      latest|list|gpu
 ├── system       disk-usage|updates
+├── panel-update status|check|apply|auto     (alias self-update; super_admin)
 ├── user         list|create|update|reset-password|delete
 ├── apikey       list|create|revoke
 ├── audit        list|purge
@@ -467,7 +468,8 @@ shows would take other packages with it.
 - `GET/PUT /api/v1/settings/retention` — Retention settings
 - `GET /api/v1/system/panel-update` — Installed/latest release, update status (`?refresh=1` re-checks GitHub; super_admin)
 - `POST /api/v1/system/panel-update` — Install the latest release (202; super_admin, interactive session)
-- `PUT /api/v1/system/panel-update/settings` — `{auto_update}` (super_admin)
+- `GET /api/v1/system/panel-update/summary` — Cached `{current_version, latest_tag, update_available}` for the header badge (super_admin)
+- `PUT /api/v1/system/panel-update/settings` — `{auto_update, auto_update_window: {start,end}|null}`, partial (super_admin)
 - `POST /api/v1/databases/phpmyadmin-credentials` — phpMyAdmin login
 - `POST /api/v1/databases/phpmyadmin-reset-passwords` — Reset passwords
 - `GET /api/v1/database-server` — DB server info
@@ -524,11 +526,18 @@ installer embedded in the binary (`installer/embed.go` → `installer/install.sh
 `SIGARDA_VERSION=<tag>` in the transient unit `sigardapanel-update.service`
 (`systemd-run --collect`), so it survives the agent/API/web restarts. Signature
 check, backup and rollback are the installer's. The agent refuses dev builds,
-hosts without `/etc/sigardapanel/panel.env`, non-newer tags and a second run.
-`StartPanelUpdateChecker` (hourly) notifies super admins once per new release and,
-with `app_settings.panel_auto_update=true`, starts one update per release
-(`panel_update_auto_tag`). Injected agent routers get a runner that executes
-nothing (`RouterOptions.PanelUpdate*`). `build.sh` must copy `installer/`.
+hosts without `/etc/sigardapanel/panel.env`, non-newer tags, a second run and a
+failed preflight (systemd-run, free space for backup/download/binary). A new start
+archives the previous run to `history/` (last 10, shown in the card).
+`StartPanelUpdateChecker` (1 min after start, then hourly) announces the result of
+the latest run once (`panel_update_reported_run`), notifies super admins once per new
+release and, with `app_settings.panel_auto_update=true` and inside
+`panel_auto_update_window` ("start-end" local hours), starts one update per release
+(`panel_update_auto_tag`). `watchPanelUpdate` follows a started update and announces
+its result without waiting for the hourly tick. `selfupdate.Checker` shares one lookup
+between callers, retries a failed lookup after 5 min and never caches a lookup the
+caller cancelled. CLI: `internal/commands/panelupdate.go`. Injected agent routers get a
+runner that executes nothing (`RouterOptions.PanelUpdate*`). `build.sh` must copy `installer/`.
 
 ## Fail2ban Management
 

@@ -14,7 +14,7 @@ sigardapanel <command> [subcommand] --help
   [Output formats](#output-formats) · [Exit codes](#exit-codes) · [Conventions](#conventions)
 - Commands: [services & bootstrap](#services--bootstrap) · [session](#session) ·
   [server](#server) · [site](#site) · [ssl](#ssl) · [job](#job) · [backup](#backup) ·
-  [db](#db) · [logs](#logs) · [metrics](#metrics) · [system](#system) · [user](#user) ·
+  [db](#db) · [logs](#logs) · [metrics](#metrics) · [system](#system) · [panel-update](#panel-update) · [user](#user) ·
   [apikey](#apikey) · [audit](#audit) · [notification](#notification) ·
   [channels](#channels) · [alerts](#alerts) · [docker](#docker) · [git](#git) ·
   [firewall](#firewall) · [redis](#redis) · [cloudpanel](#cloudpanel)
@@ -347,6 +347,25 @@ sigardapanel metrics gpu --server ID [-o FORMAT]
 sigardapanel system disk-usage --server ID [-o FORMAT]
 sigardapanel system updates --server ID               # admin; runs apt on the server
 ```
+
+
+## panel-update
+
+Update the panel itself (super_admin, logged-in session; API keys are refused).
+Same updater as Settings → Panel update: signed release, backup, automatic rollback.
+
+```
+sigardapanel panel-update [status] [-o FORMAT]   # installed/latest release, auto-update, last run
+sigardapanel panel-update check [-o FORMAT]      # same, but asks GitHub again now
+sigardapanel panel-update apply [--yes] [--no-wait] [--timeout 45m]
+sigardapanel panel-update auto on|off [--window START-END|any]
+```
+
+- `apply` follows the update (prints the installer log) until it finishes; it
+  keeps polling while the API restarts. Exit 0 when the panel runs the new
+  version, 1 when the update failed (and was rolled back).
+- `auto --window 2-5` limits automatic updates to 02:00–05:00 server time;
+  `--window any` clears the window. `self-update` is an alias of `panel-update`.
 
 ## user
 

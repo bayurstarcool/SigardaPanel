@@ -1,12 +1,14 @@
 package apihttp
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
@@ -16,9 +18,22 @@ import (
 )
 
 type fakePanelAgent struct {
-	mu      sync.Mutex
-	started []string
-	state   string
+	mu        sync.Mutex
+	started   []string
+	state     string
+	startedAt string
+}
+
+func (f *fakePanelAgent) set(state, startedAt string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state, f.startedAt = state, startedAt
+}
+
+func (f *fakePanelAgent) startedTags() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.started...)
 }
 
 func (f *fakePanelAgent) handler(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +46,7 @@ func (f *fakePanelAgent) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		json.NewEncoder(w).Encode(map[string]any{"state": f.state, "supported": true})
+		json.NewEncoder(w).Encode(map[string]any{"state": f.state, "supported": true, "tag": "v1.7.0", "started_at": f.startedAt, "message": "boom"})
 	case http.MethodPost:
 		var body struct{ Tag string }
 		json.NewDecoder(r.Body).Decode(&body)
@@ -54,10 +69,18 @@ func setupPanelUpdate(t *testing.T, version, latestTag string) *fakePanelAgent {
 	t.Cleanup(ag.Close)
 
 	origChecker, origAgent, origVersion := panelReleases, panelUpdateAgent, buildinfo.Version
+	origCtx, origInterval := panelWatchCtx, panelUpdateWatchInterval
+	watchCtx, stopWatch := context.WithCancel(context.Background())
 	panelReleases = &selfupdate.Checker{HTTP: gh.Client(), APIBase: gh.URL, Repo: "o/r"}
 	panelUpdateAgent = func() (string, string) { return ag.URL, "agent-tok" }
 	buildinfo.Version = version
-	t.Cleanup(func() { panelReleases, panelUpdateAgent, buildinfo.Version = origChecker, origAgent, origVersion })
+	panelWatchCtx, panelUpdateWatchInterval = watchCtx, 5*time.Millisecond
+	t.Cleanup(func() {
+		stopWatch()
+		panelWatchWG.Wait() // no watcher may outlive the test (it uses its DB)
+		panelReleases, panelUpdateAgent, buildinfo.Version = origChecker, origAgent, origVersion
+		panelWatchCtx, panelUpdateWatchInterval = origCtx, origInterval
+	})
 	return agent
 }
 
@@ -87,8 +110,8 @@ func TestPanelUpdateStatusAndStart(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("start: %d %s", rec.Code, rec.Body.String())
 	}
-	if len(agent.started) != 1 || agent.started[0] != "v1.7.0" {
-		t.Fatalf("agent started %v", agent.started)
+	if len(agent.startedTags()) != 1 || agent.startedTags()[0] != "v1.7.0" {
+		t.Fatalf("agent started %v", agent.startedTags())
 	}
 
 	rec = doRequest(t, e, http.MethodPut, "/api/v1/system/panel-update/settings", map[string]any{"auto_update": true}, tok)
@@ -115,8 +138,8 @@ func TestPanelUpdateRequiresSuperAdmin(t *testing.T) {
 			}
 		}
 	}
-	if len(agent.started) != 0 {
-		t.Fatalf("agent started %v", agent.started)
+	if len(agent.startedTags()) != 0 {
+		t.Fatalf("agent started %v", agent.startedTags())
 	}
 }
 
@@ -128,8 +151,8 @@ func TestPanelUpdateRefusesWhenCurrentOrDev(t *testing.T) {
 		if rec := doRequest(t, e, http.MethodPost, "/api/v1/system/panel-update", map[string]any{}, tok); rec.Code != http.StatusConflict {
 			t.Fatalf("version %s: start = %d %s", c.version, rec.Code, rec.Body.String())
 		}
-		if len(agent.started) != 0 {
-			t.Fatalf("agent started %v", agent.started)
+		if len(agent.startedTags()) != 0 {
+			t.Fatalf("agent started %v", agent.startedTags())
 		}
 	}
 }
@@ -144,8 +167,8 @@ func TestPanelUpdateTickAutoInstallsOncePerRelease(t *testing.T) {
 	rec := audit.NewRecorder(d)
 	panelUpdateTick(ctx, s, d, rec)
 	panelUpdateTick(ctx, s, d, rec)
-	if len(agent.started) != 0 {
-		t.Fatalf("installed with auto-update off: %v", agent.started)
+	if len(agent.startedTags()) != 0 {
+		t.Fatalf("installed with auto-update off: %v", agent.startedTags())
 	}
 	if n := countNotifications(t, s, "panel_update"); n != 1 {
 		t.Fatalf("expected 1 notification, got %d", n)
@@ -153,10 +176,10 @@ func TestPanelUpdateTickAutoInstallsOncePerRelease(t *testing.T) {
 
 	store.SetSetting(ctx, d, settingPanelAutoUpdate, "true")
 	panelUpdateTick(ctx, s, d, rec)
-	agent.state = "failed" // the attempt failed; it must not be retried
+	agent.set("failed", "") // the attempt failed; it must not be retried
 	panelUpdateTick(ctx, s, d, rec)
-	if len(agent.started) != 1 || agent.started[0] != "v1.7.0" {
-		t.Fatalf("auto-update started %v, want exactly one v1.7.0", agent.started)
+	if len(agent.startedTags()) != 1 || agent.startedTags()[0] != "v1.7.0" {
+		t.Fatalf("auto-update started %v, want exactly one v1.7.0", agent.startedTags())
 	}
 }
 
@@ -167,4 +190,111 @@ func countNotifications(t *testing.T, s *store.Store, typ string) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+func TestAutoWindow(t *testing.T) {
+	at := func(h int) time.Time { return time.Date(2026, 1, 1, h, 30, 0, 0, time.Local) }
+	day := parseAutoWindow("2-5")
+	night := parseAutoWindow("22-3")
+	for _, c := range []struct {
+		w    *autoWindow
+		h    int
+		want bool
+	}{{day, 2, true}, {day, 4, true}, {day, 5, false}, {day, 1, false}, {night, 23, true}, {night, 2, true}, {night, 3, false}, {night, 12, false}, {nil, 12, true}} {
+		if got := c.w.contains(at(c.h)); got != c.want {
+			t.Errorf("%v.contains(%d) = %v, want %v", c.w, c.h, got, c.want)
+		}
+	}
+	for _, bad := range []string{"", "5-5", "24-1", "a-b", "-1-3"} {
+		if parseAutoWindow(bad) != nil {
+			t.Errorf("parseAutoWindow(%q) accepted", bad)
+		}
+	}
+}
+
+func TestPanelUpdateTickRespectsWindow(t *testing.T) {
+	agent := setupPanelUpdate(t, "1.6.2", "v1.7.0")
+	_, s, ctx := newTestApp(t)
+	d := s.DB()
+	store.SetSetting(ctx, d, settingPanelAutoUpdate, "true")
+	store.SetSetting(ctx, d, settingPanelAutoWindow, "2-4")
+	orig := panelUpdateNow
+	t.Cleanup(func() { panelUpdateNow = orig })
+	panelUpdateNow = func() time.Time { return time.Date(2026, 1, 1, 12, 0, 0, 0, time.Local) }
+	panelUpdateTick(ctx, s, d, audit.NewRecorder(d))
+	if len(agent.startedTags()) != 0 {
+		t.Fatalf("installed outside the window: %v", agent.startedTags())
+	}
+	panelUpdateNow = func() time.Time { return time.Date(2026, 1, 2, 3, 0, 0, 0, time.Local) }
+	panelUpdateTick(ctx, s, d, audit.NewRecorder(d))
+	if len(agent.startedTags()) != 1 {
+		t.Fatalf("did not install inside the window: %v", agent.startedTags())
+	}
+}
+
+func TestPanelUpdateReportsResultOnce(t *testing.T) {
+	agent := setupPanelUpdate(t, "1.7.0", "v1.7.0")
+	_, s, ctx := newTestApp(t)
+	roleToken(t, s, ctx, "boss", auth.RoleSuperAdmin)
+	agent.set("failed", "2026-11-13T05:00:00Z")
+	panelUpdateReport(ctx, s, s.DB())
+	panelUpdateReport(ctx, s, s.DB())
+	if n := countNotifications(t, s, "panel_update"); n != 1 {
+		t.Fatalf("expected one failure notification, got %d", n)
+	}
+	agent.set("succeeded", "2026-11-13T06:00:00Z")
+	panelUpdateReport(ctx, s, s.DB())
+	if n := countNotifications(t, s, "panel_update"); n != 2 {
+		t.Fatalf("expected a success notification, got %d total", n)
+	}
+}
+
+func TestPanelUpdateSettingsValidation(t *testing.T) {
+	setupPanelUpdate(t, "1.6.2", "v1.7.0")
+	e, s, ctx := newTestApp(t)
+	tok := roleToken(t, s, ctx, "boss", auth.RoleSuperAdmin)
+	for _, bad := range []map[string]any{
+		{},
+		{"auto_update": "yes"},
+		{"auto_update_window": map[string]any{"start": 3, "end": 3}},
+		{"auto_update_window": map[string]any{"start": 25, "end": 3}},
+	} {
+		if rec := doRequest(t, e, http.MethodPut, "/api/v1/system/panel-update/settings", bad, tok); rec.Code != http.StatusBadRequest {
+			t.Errorf("%v accepted: %d", bad, rec.Code)
+		}
+	}
+	rec := doRequest(t, e, http.MethodPut, "/api/v1/system/panel-update/settings", map[string]any{"auto_update_window": map[string]any{"start": 22, "end": 3}}, tok)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"start":22`) {
+		t.Fatalf("window not saved: %d %s", rec.Code, rec.Body.String())
+	}
+	// Leaving auto_update out keeps it; null clears the window.
+	rec = doRequest(t, e, http.MethodPut, "/api/v1/system/panel-update/settings", map[string]any{"auto_update_window": nil}, tok)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"auto_update_window":null`) {
+		t.Fatalf("window not cleared: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doRequest(t, e, http.MethodGet, "/api/v1/system/panel-update/summary", nil, tok)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"update_available":true`) {
+		t.Fatalf("summary: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPanelUpdateWatcherAnnouncesManualResult(t *testing.T) {
+	agent := setupPanelUpdate(t, "1.6.2", "v1.7.0")
+	orig := panelUpdateWatchInterval
+	panelUpdateWatchInterval = 5 * time.Millisecond
+	t.Cleanup(func() { panelUpdateWatchInterval = orig })
+	e, s, ctx := newTestApp(t)
+	tok := roleToken(t, s, ctx, "boss", auth.RoleSuperAdmin)
+	if rec := doRequest(t, e, http.MethodPost, "/api/v1/system/panel-update", map[string]any{}, tok); rec.Code != http.StatusAccepted {
+		t.Fatalf("start: %d", rec.Code)
+	}
+	agent.set("failed", "2026-11-13T07:00:00Z")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if countNotifications(t, s, "panel_update") > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the failed update was not announced")
 }

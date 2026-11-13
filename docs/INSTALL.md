@@ -288,9 +288,12 @@ sudo systemctl daemon-reload && sudo systemctl restart sigardapanel-api sigardap
 
 ### From the panel (one click or automatic)
 
-Super admins see a **Panel update** card under **Settings**. It shows the
-installed and the latest release (looked up on GitHub, cached for up to six
-hours; **Check now** looks again) with its release notes.
+Super admins see a **Panel update** card under **Settings** (and a
+"vX.Y.Z available" badge in the header when a newer release exists). It shows
+the installed and the latest release (looked up on GitHub, cached for up to
+six hours, a failed lookup is retried after five minutes; **Check now** looks
+again) with its release notes, the log of the latest update and the ten
+earlier updates.
 
 - **Update now** downloads, verifies and installs the latest release right
   away. The panel is unavailable for about a minute while the services
@@ -299,7 +302,17 @@ hours; **Check now** looks again) with its release notes.
 - **Install new releases automatically**: the API checks GitHub every hour and
   installs each new release by itself, once per release (a release whose
   update failed is not retried; use **Update now** or the shell command
-  below). Without it, super admins get one in-app notification per new release.
+  below). **Only between** limits automatic updates to a window of hours in
+  server time (for example 02:00–05:00; windows may wrap past midnight).
+- Super admins get an in-app notification for each new release (when
+  automatic updates are off or cannot run) and for the result of every update,
+  manual or automatic.
+
+Before an update starts the agent checks that `systemd-run` exists and that
+there is enough free space for the backup (512 MiB plus the database size, in
+`/var/backups/sigardapanel-updates`), the download (300 MiB in `/tmp`) and the
+new binary (200 MiB in `/usr/local/bin`); the card lists a failed check
+instead of starting.
 
 Both run exactly the updater described below — the `install.sh` that is
 embedded in the installed binary, so no unsigned script is downloaded — with
@@ -307,16 +320,21 @@ the same signature check, backup and automatic rollback. The local agent (root)
 starts it in its own transient systemd unit, `sigardapanel-update.service`, so
 it survives the restart of agent, API and web it performs. Its log, exit code
 and the copy of the script are kept in `/var/lib/sigardapanel-update/`
-(mode 700; `update.log` is also shown in the card). Only release installs made
+(mode 700), earlier runs in `history/` there. Only release installs made
 with `install.sh` can update themselves (development builds and servers
 without `/etc/sigardapanel/panel.env` show the reason instead), and only to a
 newer version than the installed one. Every start is recorded in the audit
 log (`panel.update`, `panel.auto_update`).
 
+CLI (super_admin): `sigardapanel panel-update [status|check|apply|auto]`, see
+[CLI.md](CLI.md#panel-update).
+
 API (super_admin, interactive session): `GET /api/v1/system/panel-update`
-(`?refresh=1` re-checks GitHub), `POST /api/v1/system/panel-update` (install
+(`?refresh=1` re-checks GitHub), `GET /api/v1/system/panel-update/summary`
+(cached, for the header badge), `POST /api/v1/system/panel-update` (install
 the latest release, 202), `PUT /api/v1/system/panel-update/settings`
-`{"auto_update": true|false}`.
+`{"auto_update": true|false, "auto_update_window": {"start": 2, "end": 5} | null}`
+(fields left out are kept).
 
 ### From the shell
 

@@ -75,3 +75,56 @@ func TestCheckerRejectsBadTag(t *testing.T) {
 		t.Fatalf("expected an error, got %+v", rel)
 	}
 }
+
+func TestCheckerRetriesErrorsSoonAndKeepsLastRelease(t *testing.T) {
+	var fail atomic.Bool
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if fail.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte(`{"tag_name":"v1.7.0"}`))
+	}))
+	defer srv.Close()
+	c := &Checker{HTTP: srv.Client(), APIBase: srv.URL, Repo: "o/r", MinInterval: time.Millisecond, ErrorBackoff: 20 * time.Millisecond}
+	if rel, _, err := c.Latest(context.Background(), time.Hour); err != nil || rel.Tag != "v1.7.0" {
+		t.Fatalf("first lookup: %v %v", rel, err)
+	}
+	fail.Store(true)
+	time.Sleep(5 * time.Millisecond)
+	rel, okAt, err := c.Latest(context.Background(), 0)
+	if err == nil || rel == nil || rel.Tag != "v1.7.0" || okAt.IsZero() {
+		t.Fatalf("failed lookup must keep the last release: %v %v %v", rel, okAt, err)
+	}
+	// With a 6h maxAge the error is still retried after ErrorBackoff.
+	fail.Store(false)
+	time.Sleep(30 * time.Millisecond)
+	if _, _, err := c.Latest(context.Background(), 6*time.Hour); err != nil || hits.Load() != 3 {
+		t.Fatalf("error was not retried after the backoff: hits=%d err=%v", hits.Load(), err)
+	}
+}
+
+func TestCheckerDoesNotCacheCancelledLookup(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-block:
+		case <-r.Context().Done():
+			return
+		}
+		w.Write([]byte(`{"tag_name":"v1.7.0"}`))
+	}))
+	defer srv.Close()
+	c := &Checker{HTTP: srv.Client(), APIBase: srv.URL, Repo: "o/r"}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, _, err := c.Latest(ctx, time.Hour); err == nil {
+		t.Fatal("expected the cancelled lookup to fail")
+	}
+	close(block)
+	if rel, _, err := c.Latest(context.Background(), time.Hour); err != nil || rel == nil {
+		t.Fatalf("a cancelled lookup was cached: %v %v", rel, err)
+	}
+}
