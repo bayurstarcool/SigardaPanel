@@ -1,6 +1,7 @@
 package agenthttp
 
 import (
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ func (r *Router) siteFS(rootPath, systemUser string) (*sitefs.FS, error) {
 		return nil, &sitefs.Error{Status: http.StatusBadRequest, Msg: "invalid site root"}
 	}
 	f := &sitefs.FS{Root: filepath.Clean(rootPath)}
-	if uid, gid, ok := siteUserIDs(systemUser); ok {
+	if uid, gid, ok := siteUserIDs(systemUser); ok && uid <= math.MaxInt32 && gid <= math.MaxInt32 {
 		f.UID, f.GID = int(uid), int(gid)
 	} else if fi, err := os.Stat(f.Root); err == nil {
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid != 0 {
