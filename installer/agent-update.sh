@@ -13,7 +13,7 @@ umask 022
 
 REPO="bayurstarcool/SigardaPanel"
 # Must be the same key as installer/install.sh (scripts/test-installers.sh checks it).
-PUBKEY="RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI"
+PUBKEY="RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM"
 INSTALL_BIN="/usr/local/bin/sigardapanel"
 ENV_FILE="/etc/sigardapanel/agent.env"
 BACKUP_DIR="/var/backups/sigardapanel-agent-updates"

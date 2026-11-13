@@ -25,7 +25,7 @@ umask 022
 
 REPO="bayurstarcool/SigardaPanel"
 # minisign public key used to verify releases. Also published in the repository README.
-PUBKEY="RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI"
+PUBKEY="RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM"
 
 INSTALL_BIN="/usr/local/bin/sigardapanel"
 WEB_DIR="/opt/sigardapanel/web"

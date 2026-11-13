@@ -775,6 +775,12 @@ and `MINISIGN_PASSWORD`). It runs `scripts/release.sh`, which refuses a signatur
 does not verify with the installer's pinned `PUBKEY`. Notes come from
 `docs/releases/vX.Y.Z.md`. The script still works by hand on a machine with the key.
 
+Signing key: `RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM` since v1.7.0
+(pinned in `install.sh`, `installer/install.sh`, `installer/agent-update.sh`,
+`releasePublicKey`, README, docs/INSTALL.md). Releases up to v1.6.2 used
+`RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI`; panels installed before
+v1.7.0 trust only that one and must run the current `install.sh update` once by hand.
+
 Binary releases: https://github.com/bayurstarcool/SigardaPanel/releases
 Latest: v1.7.0 (always check the releases page; install/update with `install.sh`, see docs/INSTALL.md)
 

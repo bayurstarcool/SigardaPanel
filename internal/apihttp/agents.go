@@ -251,7 +251,7 @@ func (h *agentHandler) statusDashboard(c echo.Context) error {
 
 // releasePublicKey is the minisign key every release is signed with; it is
 // also pinned in installer/install.sh and the README.
-const releasePublicKey = "RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI"
+const releasePublicKey = "RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM"
 
 // agentReleaseTag is the release a new agent installs: the panel's own version,
 // so panel and agent always speak the same protocol. Development builds

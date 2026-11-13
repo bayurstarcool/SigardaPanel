@@ -45,11 +45,19 @@ Every release contains `SHA256SUMS` and `SHA256SUMS.minisig`, signed with this
 [minisign](https://jedisct1.github.io/minisign/) key:
 
 ```
-RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI
+RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM
 ```
 
 `install.sh` pins this key and refuses to install anything that fails the
-signature or checksum check. To verify by hand:
+signature or checksum check.
+
+The signing key was replaced in v1.7.0. Releases up to and including v1.6.2
+are signed with the previous key, `RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI`.
+Panels installed before v1.7.0 still trust only that key, so update them once
+by hand: download the current `install.sh` (as in Quick install) and run
+`sudo bash install.sh update`. Automatic updates work again afterwards.
+
+To verify by hand:
 
 ```bash
 V=v1.5.0
@@ -57,7 +65,7 @@ base=https://github.com/bayurstarcool/SigardaPanel/releases/download/$V
 for f in SHA256SUMS SHA256SUMS.minisig sigardapanel-linux-amd64 sigardapanel-web.tar.gz; do
   curl -fsSLO "$base/$f"
 done
-minisign -Vm SHA256SUMS -P RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI
+minisign -Vm SHA256SUMS -P RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 

@@ -189,7 +189,7 @@ Every release ships `SHA256SUMS` and `SHA256SUMS.minisig`, signed with this
 [minisign](https://jedisct1.github.io/minisign/) public key (also pinned in `install.sh`):
 
 ```
-RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI
+RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM
 ```
 
 ```bash
@@ -199,7 +199,7 @@ base=https://github.com/bayurstarcool/SigardaPanel/releases/download/$V
 for f in SHA256SUMS SHA256SUMS.minisig "sigardapanel-linux-$ARCH" sigardapanel-web.tar.gz; do
   curl -fsSLO "$base/$f"
 done
-minisign -Vm SHA256SUMS -P RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI
+minisign -Vm SHA256SUMS -P RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
@@ -506,7 +506,7 @@ V=v1.6.0                           # the panel's version: sigardapanel version, 
 ARCH=$(dpkg --print-architecture)  # amd64 or arm64
 base=https://github.com/bayurstarcool/SigardaPanel/releases/download/$V
 for f in SHA256SUMS SHA256SUMS.minisig "sigardapanel-linux-$ARCH"; do curl -fsSLO "$base/$f"; done
-minisign -Vm SHA256SUMS -P RWTNXRQ/oh97GPfWH0tDwxbnMTe/WTZeoJdZtGTW3ESF0OpTSlNXpFXI
+minisign -Vm SHA256SUMS -P RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM
 sha256sum -c --ignore-missing SHA256SUMS
 install -m 755 "sigardapanel-linux-$ARCH" /usr/local/bin/sigardapanel
 ```
