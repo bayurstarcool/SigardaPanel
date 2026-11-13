@@ -5,6 +5,7 @@
 ```bash
 sudo bash install.sh            # install the latest signed release
 sudo bash install.sh update     # update with backup + automatic rollback
+sudo bash install.sh rollback   # restore the state before the last update (list: rollback list)
 bash install.sh verify          # print the pinned release-signing key
 ```
 
@@ -23,6 +24,12 @@ Notes for maintainers:
   panel's one-click/automatic update (Settings → Panel update) runs that copy
   as `install.sh update`, so `update` must keep working non-interactively with
   only `SIGARDA_VERSION` set, and must exit non-zero on failure.
+- `agent-update.sh` is embedded too: remote agents run it to update themselves
+  (`bash agent-update.sh vX.Y.Z`). Its `PUBKEY` must equal the one in
+  `install.sh` and `releasePublicKey` in `internal/apihttp/agents.go`.
+- `scripts/test-installer-sandbox.sh` and `scripts/test-agent-update-sandbox.sh`
+  run both scripts against stubbed system tools (update, failed update,
+  rollback, failed rollback, checksum/version checks).
 - CI runs `bash -n` and `shellcheck -S error` on `installer/install.sh`.
 - Changes are tested end-to-end in a throwaway systemd container (Ubuntu 24.04):
   install, `verify`, `update` (including a forced failure to exercise the rollback).

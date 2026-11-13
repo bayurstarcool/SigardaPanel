@@ -158,7 +158,8 @@ sigardapanel
 ├── logs         tail
 ├── metrics      latest|list|gpu
 ├── system       disk-usage|updates
-├── panel-update status|check|apply|auto     (alias self-update; super_admin)
+├── panel-update status|check|apply|auto|backups|rollback|agents|update-agents|agents-auto
+│                                             (alias self-update; super_admin)
 ├── user         list|create|update|reset-password|delete
 ├── apikey       list|create|revoke
 ├── audit        list|purge
@@ -470,6 +471,12 @@ shows would take other packages with it.
 - `POST /api/v1/system/panel-update` — Install the latest release (202; super_admin, interactive session)
 - `GET /api/v1/system/panel-update/summary` — Cached `{current_version, latest_tag, update_available}` for the header badge (super_admin)
 - `PUT /api/v1/system/panel-update/settings` — `{auto_update, auto_update_window: {start,end}|null}`, partial (super_admin)
+- `GET /api/v1/system/panel-update/backups` — Pre-update backups (super_admin)
+- `POST /api/v1/system/panel-update/rollback` — `{backup}`: restore binary, web, database (202; super_admin)
+- `GET /api/v1/system/agent-updates` — Agent version + updater state per server, `target_version` (super_admin)
+- `POST /api/v1/system/agent-updates` — `{server_ids}` or `{all:true}`: update remote agents to the panel version (super_admin)
+- `PUT /api/v1/system/agent-updates/settings` — `{auto_update}` for remote agents (super_admin)
+- `POST /api/v1/servers/:id/agent-update` — Update one remote agent (202; super_admin)
 - `POST /api/v1/databases/phpmyadmin-credentials` — phpMyAdmin login
 - `POST /api/v1/databases/phpmyadmin-reset-passwords` — Reset passwords
 - `GET /api/v1/database-server` — DB server info
@@ -536,7 +543,25 @@ release and, with `app_settings.panel_auto_update=true` and inside
 (`panel_update_auto_tag`). `watchPanelUpdate` follows a started update and announces
 its result without waiting for the hourly tick. `selfupdate.Checker` shares one lookup
 between callers, retries a failed lookup after 5 min and never caches a lookup the
-caller cancelled. CLI: `internal/commands/panelupdate.go`. Injected agent routers get a
+caller cancelled. CLI: `internal/commands/panelupdate.go`.
+
+Rollback: `install.sh rollback [BACKUP|list]` (`make_backup`/`restore_backup` are shared
+with `update`; backups carry `VERSION`, `TARGET`, `KIND` = update|pre-rollback). It
+backs up the current state first and restores it if the rolled-back panel is unhealthy.
+Agent `GET /tasks/panel/backups`, `POST /tasks/panel/rollback {backup}` run it in the same
+unit as updates and write a `hold` file (the version rolled back from); `POST
+/tasks/panel/update {tag, auto:true}` refuses held versions, a manual update clears the hold.
+
+Remote agents: the same updater type with kind `agent` (`newAgentUpdater`) runs the
+embedded `installer/agent-update.sh <tag>` in `sigardapanel-agent-update.service`
+(`GET|POST /tasks/agent/update`; refused on the panel host and without
+`/etc/sigardapanel/agent.env`). API: `internal/apihttp/agent_update.go` — target is the
+panel's version, any 404 from an agent means "too old: reinstall once";
+`agentUpdateTick` (with the panel tick) announces results (`agent_update_reported_<id>`)
+and with `agent_auto_update=true` starts one update per server and release
+(`agent_update_tried_<id>`). The release key is pinned in install.sh, agent-update.sh
+and `releasePublicKey` (checked by `scripts/test-installers.sh`, which also runs
+`scripts/test-installer-sandbox.sh` and `scripts/test-agent-update-sandbox.sh`). Injected agent routers get a
 runner that executes nothing (`RouterOptions.PanelUpdate*`). `build.sh` must copy `installer/`.
 
 ## Fail2ban Management

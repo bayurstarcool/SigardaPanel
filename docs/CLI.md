@@ -359,7 +359,18 @@ sigardapanel panel-update [status] [-o FORMAT]   # installed/latest release, aut
 sigardapanel panel-update check [-o FORMAT]      # same, but asks GitHub again now
 sigardapanel panel-update apply [--yes] [--no-wait] [--timeout 45m]
 sigardapanel panel-update auto on|off [--window START-END|any]
+sigardapanel panel-update backups [-o FORMAT]    # backups made before each update
+sigardapanel panel-update rollback BACKUP [--yes] [--no-wait]
+sigardapanel panel-update agents [-o FORMAT]     # agent version/update state per server
+sigardapanel panel-update update-agents --all | --server ID [--server ID...] [--yes]
+sigardapanel panel-update agents-auto on|off
 ```
+
+- `rollback` restores binary, web app **and database** from the backup (changes made
+  since are lost; the current state is backed up first and restored if the rolled-back
+  panel is unhealthy) and follows it, also to releases that predate this command.
+- `update-agents` updates remote agents to the panel's version; `--all` picks every
+  remote server whose agent is older. Exit 1 if any could not be started.
 
 - `apply` follows the update (prints the installer log) until it finishes; it
   keeps polling while the API restarts. Exit 0 when the panel runs the new

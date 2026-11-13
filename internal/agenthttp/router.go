@@ -54,6 +54,7 @@ type Router struct {
 	useraddCmd   string // creates site owners' Linux accounts
 	stack        *stackManager
 	panelUpdate  *panelUpdater
+	agentUpdate  *panelUpdater
 }
 
 // RouterOptions allows overriding router defaults for testing.
@@ -92,6 +93,8 @@ type RouterOptions struct {
 	PanelUpdateVersion  string
 	// PanelUpdateFreeBytes replaces the free-space lookup of the preflight.
 	PanelUpdateFreeBytes func(path string) (uint64, error)
+	PanelUpdateBackupDir string
+	AgentUpdateEnvFile   string
 }
 
 // NewRouter returns a new Echo router for the agent with production defaults.
@@ -184,6 +187,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	}
 
 	r.panelUpdate = newPanelUpdater(opts)
+	r.agentUpdate = newAgentUpdater(opts)
 
 	e.GET("/health", healthHandler)
 	// /metrics forks several processes per call, so it requires the agent token.
@@ -230,6 +234,11 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	// Panel self-update (panel host only; runs the embedded, signature-verifying installer)
 	tasks.GET("/panel/update", r.panelUpdateStatusTask)
 	tasks.POST("/panel/update", r.panelUpdateStartTask)
+	tasks.GET("/panel/backups", r.panelBackupsTask)
+	tasks.POST("/panel/rollback", r.panelRollbackTask)
+	// Agent self-update on remote servers (runs the embedded agent-update.sh)
+	tasks.GET("/agent/update", r.agentUpdateStatusTask)
+	tasks.POST("/agent/update", r.agentUpdateStartTask)
 
 	// Application templates (WordPress, Laravel, etc.)
 	tasks.POST("/templates/wordpress", r.installWordPress)

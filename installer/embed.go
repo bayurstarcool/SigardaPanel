@@ -11,3 +11,9 @@ import _ "embed"
 //
 //go:embed install.sh
 var Script []byte
+
+// AgentScript is installer/agent-update.sh: the updater a remote agent runs
+// (signature check, binary backup, automatic restore).
+//
+//go:embed agent-update.sh
+var AgentScript []byte

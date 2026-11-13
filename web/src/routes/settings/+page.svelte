@@ -9,6 +9,7 @@
   import { toasts } from '$lib/toast.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import PanelUpdateCard from '$components/PanelUpdateCard.svelte';
+  import AgentUpdatesCard from '$components/AgentUpdatesCard.svelte';
 
   let version = $state('—');
   let serverInfo = $state<any>(null);
@@ -70,6 +71,7 @@
   <div class="grid gap-4 md:grid-cols-2">
     {#if isSuperAdmin}
       <PanelUpdateCard />
+      <AgentUpdatesCard />
     {/if}
 
     <!-- Shortcuts -->

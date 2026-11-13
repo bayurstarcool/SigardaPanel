@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -22,6 +23,16 @@ func (a *App) PanelUpdate(args []string) int {
 		return a.panelUpdateApply(args[1:])
 	case "auto":
 		return a.panelUpdateAuto(args[1:])
+	case "backups":
+		return a.panelUpdateBackups(args[1:])
+	case "rollback":
+		return a.panelUpdateRollback(args[1:])
+	case "agents":
+		return a.panelUpdateAgents(args[1:])
+	case "update-agents":
+		return a.panelUpdateAgentsApply(args[1:])
+	case "agents-auto":
+		return a.panelUpdateAgentsAuto(args[1:])
 	case "help", "--help", "-h":
 		a.printPanelUpdateHelp()
 		return exitOK
@@ -179,6 +190,20 @@ func (a *App) followPanelUpdate(tag string, timeout time.Duration) int {
 	for time.Now().Before(deadline) {
 		time.Sleep(panelUpdatePoll)
 		resp, status, err := client.Request(http.MethodGet, "/api/v1/system/panel-update", nil)
+		if err == nil && status == http.StatusNotFound {
+			// An older release without the update endpoint (after a rollback):
+			// the version alone tells whether it is running.
+			if v, vs, verr := client.Request(http.MethodGet, "/api/v1/version", nil); verr == nil && vs == http.StatusOK {
+				var ver struct {
+					Version string `json:"version"`
+				}
+				if json.Unmarshal(v.Data, &ver) == nil && "v"+strings.TrimPrefix(ver.Version, "v") == tag {
+					fmt.Fprintf(a.stdout, "SigardaPanel is now %s.\n", ver.Version)
+					return exitOK
+				}
+			}
+			continue
+		}
 		if err != nil || status != http.StatusOK {
 			continue // restarting
 		}
@@ -263,6 +288,243 @@ func (a *App) panelUpdateAuto(args []string) int {
 	return exitOK
 }
 
+func (a *App) panelUpdateBackups(args []string) int {
+	flags := a.newFlags("panel-update backups", "[-o FORMAT]")
+	output := addOutputFlag(flags)
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
+	}
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
+	}
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
+	}
+	resp, ok := a.call(client, http.MethodGet, "/api/v1/system/panel-update/backups", nil, http.StatusOK)
+	if !ok {
+		return exitError
+	}
+	var data struct {
+		Backups []struct {
+			Name        string `json:"name"`
+			Version     string `json:"version"`
+			Kind        string `json:"kind"`
+			HasDatabase bool   `json:"has_database"`
+			SizeBytes   int64  `json:"size_bytes"`
+		} `json:"backups"`
+	}
+	if !a.decode(resp, &data) {
+		return exitError
+	}
+	return a.render(mode, data, func() {
+		if len(data.Backups) == 0 {
+			fmt.Fprintln(a.stdout, "No update backups yet (one is made before every update).")
+			return
+		}
+		fmt.Fprintf(a.stdout, "%-18s %-10s %-13s %-9s %s\n", "BACKUP", "VERSION", "KIND", "DATABASE", "SIZE")
+		for _, b := range data.Backups {
+			db := "no"
+			if b.HasDatabase {
+				db = "yes"
+			}
+			fmt.Fprintf(a.stdout, "%-18s %-10s %-13s %-9s %.1f MB\n", b.Name, b.Version, b.Kind, db, float64(b.SizeBytes)/(1<<20))
+		}
+	})
+}
+
+func (a *App) panelUpdateRollback(args []string) int {
+	flags := a.newFlags("panel-update rollback", "BACKUP [--yes] [--no-wait]")
+	yes := flags.Bool("yes", false, "do not ask for confirmation")
+	noWait := flags.Bool("no-wait", false, "start the rollback and return without following it")
+	timeout := flags.Duration("timeout", 45*time.Minute, "how long to follow the rollback")
+	pos, code, ok := a.parseFlags(flags, args)
+	if !ok {
+		return code
+	}
+	if len(pos) != 1 {
+		fmt.Fprintln(a.stderr, "usage: sigardapanel panel-update rollback BACKUP [--yes]  (list them with: panel-update backups)")
+		return exitUsage
+	}
+	if !*yes && !a.confirm("Roll back to backup "+pos[0]+"? The binary, web app and DATABASE are restored: changes made since that backup are lost.") {
+		return exitError
+	}
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
+	}
+	resp, ok := a.call(client, http.MethodPost, "/api/v1/system/panel-update/rollback", map[string]string{"backup": pos[0]}, http.StatusAccepted)
+	if !ok {
+		return exitError
+	}
+	var started struct {
+		Tag string `json:"tag"`
+	}
+	a.decode(resp, &started)
+	fmt.Fprintf(a.stdout, "Rollback to %s started.\n", started.Tag)
+	if *noWait || started.Tag == "" {
+		return exitOK
+	}
+	return a.followPanelUpdate(started.Tag, *timeout)
+}
+
+func (a *App) panelUpdateAgents(args []string) int {
+	flags := a.newFlags("panel-update agents", "[-o FORMAT]")
+	output := addOutputFlag(flags)
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
+	}
+	mode, ok := a.outputMode(*output)
+	if !ok {
+		return exitUsage
+	}
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
+	}
+	resp, ok := a.call(client, http.MethodGet, "/api/v1/system/agent-updates", nil, http.StatusOK)
+	if !ok {
+		return exitError
+	}
+	var data struct {
+		Target     string `json:"target_version"`
+		AutoUpdate bool   `json:"auto_update"`
+		Servers    []struct {
+			ServerID        int64  `json:"server_id"`
+			Name            string `json:"name"`
+			IsLocal         bool   `json:"is_local"`
+			AgentVersion    string `json:"agent_version"`
+			UpdateAvailable bool   `json:"update_available"`
+			Error           string `json:"error"`
+			Update          *struct {
+				State   string `json:"state"`
+				Message string `json:"message"`
+			} `json:"update"`
+		} `json:"servers"`
+	}
+	if !a.decode(resp, &data) {
+		return exitError
+	}
+	return a.render(mode, data, func() {
+		auto := "off"
+		if data.AutoUpdate {
+			auto = "on"
+		}
+		fmt.Fprintf(a.stdout, "Target version: %s   automatic agent updates: %s\n\n", data.Target, auto)
+		fmt.Fprintf(a.stdout, "%-5s %-24s %-10s %s\n", "ID", "SERVER", "AGENT", "STATUS")
+		for _, r := range data.Servers {
+			status := "up to date"
+			switch {
+			case r.IsLocal:
+				status = "panel host (updated with the panel)"
+			case r.Update != nil && r.Update.State == "running":
+				status = "updating…"
+			case r.UpdateAvailable:
+				status = "update available"
+			}
+			if r.Error != "" {
+				status += " — " + r.Error
+			} else if r.Update != nil && r.Update.State == "failed" {
+				status += " — last update failed: " + r.Update.Message
+			}
+			fmt.Fprintf(a.stdout, "%-5d %-24s %-10s %s\n", r.ServerID, r.Name, r.AgentVersion, status)
+		}
+	})
+}
+
+func (a *App) panelUpdateAgentsApply(args []string) int {
+	flags := a.newFlags("panel-update update-agents", "--all | --server ID [--server ID...] [--yes]")
+	all := flags.Bool("all", false, "every remote server whose agent is older than the panel")
+	yes := flags.Bool("yes", false, "do not ask for confirmation")
+	var ids int64List
+	flags.Var(&ids, "server", "server ID (repeatable)")
+	if _, code, ok := a.parseFlags(flags, args); !ok {
+		return code
+	}
+	if !*all && len(ids) == 0 {
+		fmt.Fprintln(a.stderr, "usage: sigardapanel panel-update update-agents --all | --server ID [--server ID...]")
+		return exitUsage
+	}
+	if !*yes && !a.confirm("Update the selected agents to the panel's version? Each agent restarts for a few seconds.") {
+		return exitError
+	}
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
+	}
+	body := map[string]any{"all": *all}
+	if len(ids) > 0 {
+		body["server_ids"] = []int64(ids)
+	}
+	resp, ok := a.call(client, http.MethodPost, "/api/v1/system/agent-updates", body, http.StatusOK)
+	if !ok {
+		return exitError
+	}
+	var data struct {
+		Target  string `json:"target_version"`
+		Results []struct {
+			Name    string `json:"name"`
+			OK      bool   `json:"ok"`
+			Message string `json:"message"`
+		} `json:"results"`
+	}
+	if !a.decode(resp, &data) {
+		return exitError
+	}
+	if len(data.Results) == 0 {
+		fmt.Fprintln(a.stdout, "All agents are up to date.")
+		return exitOK
+	}
+	failed := 0
+	for _, r := range data.Results {
+		mark := "started"
+		if !r.OK {
+			mark, failed = "FAILED", failed+1
+		}
+		fmt.Fprintf(a.stdout, "  %-24s %s: %s\n", r.Name, mark, r.Message)
+	}
+	fmt.Fprintln(a.stdout, "Follow progress with: sigardapanel panel-update agents")
+	if failed > 0 {
+		return exitError
+	}
+	return exitOK
+}
+
+func (a *App) panelUpdateAgentsAuto(args []string) int {
+	flags := a.newFlags("panel-update agents-auto", "on|off")
+	pos, code, ok := a.parseFlags(flags, args)
+	if !ok {
+		return code
+	}
+	if len(pos) != 1 || (pos[0] != "on" && pos[0] != "off") {
+		fmt.Fprintln(a.stderr, "usage: sigardapanel panel-update agents-auto on|off")
+		return exitUsage
+	}
+	client, ok := a.apiClient()
+	if !ok {
+		return exitError
+	}
+	if _, ok := a.call(client, http.MethodPut, "/api/v1/system/agent-updates/settings", map[string]bool{"auto_update": pos[0] == "on"}, http.StatusOK); !ok {
+		return exitError
+	}
+	fmt.Fprintln(a.stdout, "Saved.")
+	return exitOK
+}
+
+// int64List is a repeatable int64 flag.
+type int64List []int64
+
+func (l *int64List) String() string { return fmt.Sprint(*l) }
+func (l *int64List) Set(v string) error {
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return fmt.Errorf("invalid server ID %q", v)
+	}
+	*l = append(*l, n)
+	return nil
+}
+
 func (a *App) printPanelUpdateHelp() {
 	fmt.Fprint(a.stdout, `Usage: sigardapanel panel-update <subcommand> [flags]   (super_admin)
 
@@ -275,5 +537,14 @@ Subcommands:
   auto on|off [--window START-END|any]
                         install new releases automatically, optionally only
                         between those hours (server time, e.g. --window 2-5)
+  backups [-o FORMAT]   the backups made before each update
+  rollback BACKUP [--yes] [--no-wait]
+                        restore binary, web app and database from a backup
+                        (changes since that backup are lost; the current state
+                        is backed up first)
+  agents [-o FORMAT]    agent version and update state of every server
+  update-agents --all | --server ID [--server ID...] [--yes]
+                        update remote agents to the panel's version
+  agents-auto on|off    update remote agents automatically after the panel
 `)
 }

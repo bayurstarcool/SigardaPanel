@@ -120,12 +120,17 @@ func panelAgentStatus(ctx context.Context) (map[string]any, error) {
 	return out, nil
 }
 
-func panelAgentStart(ctx context.Context, tag string) (int, map[string]any, error) {
+func panelAgentStart(ctx context.Context, tag string, auto bool) (int, map[string]any, error) {
+	return panelAgentCall(ctx, http.MethodPost, "/tasks/panel/update", map[string]any{"tag": tag, "auto": auto})
+}
+
+// panelAgentCall calls the panel host's own agent.
+func panelAgentCall(ctx context.Context, method, path string, body any) (int, map[string]any, error) {
 	base, token := panelUpdateAgent()
 	if !isLoopbackAgentURL(base) {
 		return 0, nil, fmt.Errorf("The panel's agent (%s) is not on this host; self-update needs the local agent.", base)
 	}
-	return stackAgentRequest(ctx, http.MethodPost, base+"/tasks/panel/update", token, map[string]string{"tag": tag}, 25*time.Second)
+	return stackAgentRequest(ctx, method, base+path, token, body, 25*time.Second)
 }
 
 func autoUpdateEnabled(ctx context.Context, db *sql.DB) bool {
@@ -188,7 +193,7 @@ func (h *panelUpdateHandler) start(c echo.Context) error {
 	if !selfupdate.Newer(rel.Tag, current) {
 		return echo.NewHTTPError(http.StatusConflict, "already on the latest release ("+current+")")
 	}
-	code, out, err := panelAgentStart(ctx, rel.Tag)
+	code, out, err := panelAgentStart(ctx, rel.Tag, false)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadGateway, err.Error())
 	}
@@ -283,6 +288,59 @@ func (h *panelUpdateHandler) summary(c echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{Data: data, RequestID: rid})
 }
 
+// backups answers GET /api/v1/system/panel-update/backups.
+func (h *panelUpdateHandler) backups(c echo.Context) error {
+	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+	code, out, err := panelAgentCall(c.Request().Context(), http.MethodGet, "/tasks/panel/backups", nil)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, err.Error())
+	}
+	if code == http.StatusNotFound {
+		return echo.NewHTTPError(http.StatusBadGateway, "the local agent does not support rollback yet; update the panel first")
+	}
+	if code != http.StatusOK {
+		return agentHTTPError(code, out)
+	}
+	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"backups": out["backups"]}, RequestID: rid})
+}
+
+// rollback answers POST /api/v1/system/panel-update/rollback {"backup": "..."}:
+// restore the binary, web app and database saved before an update.
+func (h *panelUpdateHandler) rollback(c echo.Context) error {
+	ctx := c.Request().Context()
+	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+	var body struct {
+		Backup string `json:"backup"`
+	}
+	if err := c.Bind(&body); err != nil || strings.TrimSpace(body.Backup) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "backup is required")
+	}
+	code, out, err := panelAgentCall(ctx, http.MethodPost, "/tasks/panel/rollback", map[string]string{"backup": strings.TrimSpace(body.Backup)})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, err.Error())
+	}
+	var uid int64
+	if sess := sessionFromEcho(c); sess != nil {
+		uid = sess.UserID
+	}
+	if code == http.StatusNotFound && agentMessage(out, "") == "Not Found" {
+		return echo.NewHTTPError(http.StatusBadGateway, "the local agent does not support rollback yet; update the panel first")
+	}
+	if code != http.StatusAccepted {
+		h.audit.RecordAction(ctx, uid, "panel.rollback_refused", "panel", 0, map[string]any{"backup": body.Backup, "reason": agentMessage(out, "agent error")})
+		return agentHTTPError(code, out)
+	}
+	st, _ := out["status"].(map[string]any)
+	tag, _ := st["tag"].(string)
+	h.audit.RecordAction(ctx, uid, "panel.rollback", "panel", 0, map[string]any{"from": panelVersion(), "to": tag, "backup": body.Backup})
+	watchPanelUpdate(h.store, h.db)
+	return c.JSON(http.StatusAccepted, httpjson.Success{Data: map[string]any{
+		"message": "Rolling back to " + tag + ". The panel restarts; this page reconnects by itself.",
+		"tag":     tag,
+		"status":  st,
+	}, RequestID: rid})
+}
+
 // notifySuperAdmins sends an in-app notification to every super_admin.
 func notifySuperAdmins(ctx context.Context, s *store.Store, title, message, severity string) {
 	users, err := s.Users.List(ctx, store.UserListFilter{})
@@ -316,12 +374,18 @@ func panelUpdateReport(ctx context.Context, s *store.Store, db *sql.DB) {
 	}
 	_ = store.SetSetting(ctx, db, settingPanelReportedRun, started)
 	tag, _ := st["tag"].(string)
-	if state == "succeeded" {
-		notifySuperAdmins(ctx, s, "SigardaPanel updated to "+tag, "The update finished and the panel is running "+panelVersion()+".", "success")
-		return
-	}
+	action, _ := st["action"].(string)
 	msg, _ := st["message"].(string)
-	notifySuperAdmins(ctx, s, "Update to "+tag+" failed", msg+" Details: Settings → Panel update.", "error")
+	switch {
+	case state == "succeeded" && action == "rollback":
+		notifySuperAdmins(ctx, s, "SigardaPanel rolled back to "+tag, "The panel is running "+panelVersion()+" again. Automatic updates skip the release it was rolled back from.", "warning")
+	case state == "succeeded":
+		notifySuperAdmins(ctx, s, "SigardaPanel updated to "+tag, "The update finished and the panel is running "+panelVersion()+".", "success")
+	case action == "rollback":
+		notifySuperAdmins(ctx, s, "Rollback to "+tag+" failed", msg+" Details: Settings → Panel update.", "error")
+	default:
+		notifySuperAdmins(ctx, s, "Update to "+tag+" failed", msg+" Details: Settings → Panel update.", "error")
+	}
 }
 
 // panelUpdateWatching is set while a goroutine follows a started update.
@@ -413,9 +477,14 @@ func panelUpdateTick(ctx context.Context, s *store.Store, db *sql.DB, rec *audit
 	if state, _ := st["state"].(string); state == "running" {
 		return
 	}
+	if hold, _ := st["hold_tag"].(string); hold != "" && !selfupdate.Newer(rel.Tag, hold) {
+		// The panel was rolled back from this release: wait for a newer one.
+		notify()
+		return
+	}
 	// Record the attempt first: the update restarts this process.
 	_ = store.SetSetting(ctx, db, settingPanelAutoTriedTag, rel.Tag)
-	code, out, err := panelAgentStart(ctx, rel.Tag)
+	code, out, err := panelAgentStart(ctx, rel.Tag, true)
 	if err != nil || code != http.StatusAccepted {
 		reason := agentMessage(out, fmt.Sprint(err))
 		slog.Warn("panel auto-update: start failed", "tag", rel.Tag, "reason", reason)
@@ -453,6 +522,7 @@ func StartPanelUpdateChecker(ctx context.Context, s *store.Store, db *sql.DB) {
 					tctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 					defer cancel()
 					panelUpdateTick(tctx, s, db, rec)
+					agentUpdateTick(tctx, s, db, rec)
 				}()
 				timer.Reset(time.Hour)
 			}

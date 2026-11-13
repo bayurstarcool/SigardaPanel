@@ -135,7 +135,7 @@ password is generated and printed once.
 | `/var/lib/sigardapanel/sigardapanel.db` | SQLite database (WAL mode) |
 | `/var/log/sigardapanel/`, `/var/backups/sigardapanel/` | Logs and panel-made backups |
 | `/var/backups/sigardapanel-updates/<timestamp>/` | Pre-update backups made by `install.sh update` |
-| `/var/lib/sigardapanel-update/` | State of the last update started from the panel (log, exit code, embedded installer) |
+| `/var/lib/sigardapanel-update/` | State of the last update or rollback started from the panel (log, exit code, embedded installer, history) |
 | `/etc/systemd/system/sigardapanel-{api,agent,web}.service` | systemd units, see [SYSTEMD.md](SYSTEMD.md) |
 | `/etc/nginx/sites-available/sigardapanel`, `/etc/nginx/conf.d/sigardapanel-limits.conf` | nginx site and rate-limit zones |
 | `/root/.sigardapanel_admin_cred` | First-login credentials (delete after the first login) |
@@ -329,6 +329,9 @@ log (`panel.update`, `panel.auto_update`).
 CLI (super_admin): `sigardapanel panel-update [status|check|apply|auto]`, see
 [CLI.md](CLI.md#panel-update).
 
+Rolling back: see [Rolling back](#rolling-back). Remote agents: see
+[Updating remote agents](#updating-remote-agents).
+
 API (super_admin, interactive session): `GET /api/v1/system/panel-update`
 (`?refresh=1` re-checks GitHub), `GET /api/v1/system/panel-update/summary`
 (cached, for the header badge), `POST /api/v1/system/panel-update` (install
@@ -374,25 +377,33 @@ Old update backups are not deleted automatically; remove the ones you no longer 
 
 ## Rolling back
 
-To return to the state before an update that succeeded but that you do not want
-to keep, restore its backup by hand (`<ts>` = the backup directory):
+Every update first saves the binary, web app and a consistent copy of the
+database to `/var/backups/sigardapanel-updates/<UTC timestamp>/`. To return to
+the state before an update you do not want to keep:
 
-```bash
-B=/var/backups/sigardapanel-updates/<ts>
-sudo systemctl stop sigardapanel-web sigardapanel-api sigardapanel-agent
-sudo install -m 755 "$B/sigardapanel.bin" /usr/local/bin/sigardapanel
-sudo rm -rf /opt/sigardapanel/web && sudo cp -a "$B/web" /opt/sigardapanel/web
-sudo rm -f /var/lib/sigardapanel/sigardapanel.db-wal /var/lib/sigardapanel/sigardapanel.db-shm
-sudo install -m 640 -o sigardapanel -g sigardapanel "$B/sigardapanel.db" /var/lib/sigardapanel/sigardapanel.db
-sudo systemctl start sigardapanel-agent sigardapanel-api sigardapanel-web
-sigardapanel version
-```
+- **Panel**: Settings → Panel update → **Backups & rollback** → **Roll back**
+  on the backup made before that update.
+- **CLI**: `sigardapanel panel-update backups`, then
+  `sigardapanel panel-update rollback <backup>`.
+- **Shell**: `sudo bash install.sh rollback list`, then
+  `sudo bash install.sh rollback <backup>` (without a name: the newest backup
+  made before an update).
 
-Everything changed in the panel after that update is lost with the database
-restore. Installing an older release with
+A rollback restores the binary, web app **and database** of that backup:
+everything changed in the panel after it was made is lost (sites created,
+users, settings, backup records; the sites' own files and databases on the
+servers are not touched). Before restoring, the current state is saved as
+another backup (kind `pre-rollback`, so a rollback can be undone the same way),
+and if the rolled-back panel does not pass the health checks that state is
+restored automatically. After a rollback from the panel, automatic updates skip
+the version you rolled back from (and older ones) until a newer release
+appears; **Update now** installs it anyway and clears that hold.
+
+Installing an older release with
 `sudo SIGARDA_VERSION=<older tag> FORCE=1 bash install.sh update` replaces only
-the binary and web bundle and keeps the newer database schema, so prefer the
-backup restore above.
+the binary and web bundle and keeps the newer database schema, so prefer
+`rollback`. Update backups are not deleted automatically; remove the ones you no
+longer need.
 
 ## Backing up the panel
 
@@ -548,6 +559,28 @@ from the panel's (see [Troubleshooting](#troubleshooting)).
 The agent can also serve HTTPS itself (`SIGARDAPANEL_AGENT_TLS_CERT` and
 `SIGARDAPANEL_AGENT_TLS_KEY` in `agent.env`, agent URL `https://...`). The panel
 verifies the certificate, so it must be valid for the host name in the agent URL.
+
+### Updating remote agents
+
+Remote agents should run the same version as the panel. Settings → **Server
+agents** lists every server with its agent version; **Update** (one server) or
+**Update N agents** (every outdated one) asks each agent to update itself to the
+panel's version. CLI: `sigardapanel panel-update agents` and
+`sigardapanel panel-update update-agents --all` (or `--server ID`). With
+**Update remote agents automatically** on, the panel does this by itself after
+it was updated (once per server and release).
+
+The agent runs the updater embedded in its binary (`agent-update.sh`) in the
+transient unit `sigardapanel-agent-update.service`: it downloads the release
+binary, verifies `SHA256SUMS` against the pinned minisign key (installing
+`minisign` if needed) and that the binary reports the expected version, backs
+up the current binary to `/var/backups/sigardapanel-agent-updates/` (newest 3
+kept), restarts `sigardapanel-agent` and waits for `/health` to report the new
+version; otherwise the previous binary is restored. Logs and history:
+`/var/lib/sigardapanel-agent-update/`. Agents installed before this feature
+existed must be updated once with the install command (Option A); after that
+they update from the panel. The panel host's own agent is the panel binary and
+is updated with the panel.
 
 ### After adding a server
 

@@ -101,3 +101,77 @@ func TestPanelUpdateAutoUsage(t *testing.T) {
 		t.Fatalf("sent %v", got)
 	}
 }
+
+func TestPanelUpdateRollbackFollowsToOlderRelease(t *testing.T) {
+	orig := panelUpdatePoll
+	panelUpdatePoll = time.Millisecond
+	t.Cleanup(func() { panelUpdatePoll = orig })
+	var rolled atomic.Int32
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/system/panel-update/rollback":
+			var body map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["backup"] != "20261101T020000Z" {
+				t.Errorf("backup = %v", body)
+			}
+			rolled.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+			w.Write([]byte(`{"data":{"tag":"v1.5.0"}}`))
+		case "/api/v1/system/panel-update":
+			// v1.5.0 predates the update endpoint.
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"code":"not_found","message":"Not Found"}}`))
+		case "/api/v1/version":
+			w.Write([]byte(`{"data":{"version":"1.5.0"}}`))
+		default:
+			t.Errorf("unexpected %s", r.URL.Path)
+		}
+	})
+	var out, errb bytes.Buffer
+	code := New(&out, &errb, strings.NewReader("")).Run([]string{"panel-update", "rollback", "20261101T020000Z", "--yes"})
+	if code != 0 || rolled.Load() != 1 || !strings.Contains(out.String(), "now 1.5.0") {
+		t.Fatalf("exit %d out=%s err=%s", code, out.String(), errb.String())
+	}
+	if code := New(&out, &errb, strings.NewReader("")).Run([]string{"panel-update", "rollback"}); code != 2 {
+		t.Fatalf("rollback without a backup = %d", code)
+	}
+}
+
+func TestPanelUpdateAgentsCommands(t *testing.T) {
+	var got map[string]any
+	setupMockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/system/agent-updates":
+			w.Write([]byte(`{"data":{"target_version":"v1.7.0","auto_update":true,"servers":[
+				{"server_id":1,"name":"panel","is_local":true,"agent_version":"1.7.0"},
+				{"server_id":2,"name":"web1","agent_version":"1.6.0","update_available":true},
+				{"server_id":3,"name":"legacy","agent_version":"1.4.0","update_available":true,"error":"this agent is too old"}]}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/system/agent-updates":
+			json.NewDecoder(r.Body).Decode(&got)
+			w.Write([]byte(`{"data":{"target_version":"v1.7.0","results":[{"name":"web1","ok":true,"message":"started"}]}}`))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	})
+	var out, errb bytes.Buffer
+	if code := New(&out, &errb, strings.NewReader("")).Run([]string{"panel-update", "agents"}); code != 0 {
+		t.Fatalf("agents exit %d: %s", code, errb.String())
+	}
+	for _, want := range []string{"v1.7.0", "panel host", "update available", "too old"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("agents output lacks %q:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	if code := New(&out, &errb, strings.NewReader("")).Run([]string{"panel-update", "update-agents", "--server", "2", "--server", "3", "--yes"}); code != 0 {
+		t.Fatalf("update-agents exit %d: %s", code, errb.String())
+	}
+	ids, _ := got["server_ids"].([]any)
+	if len(ids) != 2 || !strings.Contains(out.String(), "web1") {
+		t.Fatalf("sent %v, out=%s", got, out.String())
+	}
+	if code := New(&out, &errb, strings.NewReader("")).Run([]string{"panel-update", "update-agents"}); code != 2 {
+		t.Fatalf("update-agents without targets = %d", code)
+	}
+}

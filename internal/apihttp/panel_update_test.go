@@ -18,10 +18,11 @@ import (
 )
 
 type fakePanelAgent struct {
-	mu        sync.Mutex
-	started   []string
-	state     string
-	startedAt string
+	mu         sync.Mutex
+	started    []string
+	rolledBack []string
+	state      string
+	startedAt  string
 }
 
 func (f *fakePanelAgent) set(state, startedAt string) {
@@ -42,6 +43,24 @@ func (f *fakePanelAgent) handler(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != "Bearer agent-tok" {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"message":"invalid agent token"}`))
+		return
+	}
+	switch {
+	case r.URL.Path == "/tasks/panel/backups":
+		json.NewEncoder(w).Encode(map[string]any{"backups": []any{map[string]any{"name": "20261101T020000Z", "version": "1.6.0", "kind": "update", "has_database": true}}})
+		return
+	case r.URL.Path == "/tasks/panel/rollback":
+		var body struct{ Backup string }
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.Backup != "20261101T020000Z" {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"ok":false,"message":"backup not found"}`))
+			return
+		}
+		f.rolledBack = append(f.rolledBack, body.Backup)
+		f.state = "running"
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "status": map[string]any{"state": "running", "action": "rollback", "tag": "v1.6.0"}})
 		return
 	}
 	switch r.Method {
@@ -297,4 +316,32 @@ func TestPanelUpdateWatcherAnnouncesManualResult(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("the failed update was not announced")
+}
+
+func TestPanelRollbackEndpoints(t *testing.T) {
+	agent := setupPanelUpdate(t, "1.7.0", "v1.7.0")
+	e, s, ctx := newTestApp(t)
+	tok := roleToken(t, s, ctx, "boss", auth.RoleSuperAdmin)
+	admin := roleToken(t, s, ctx, "adm", auth.RoleAdmin)
+
+	rec := doRequest(t, e, http.MethodGet, "/api/v1/system/panel-update/backups", nil, tok)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "20261101T020000Z") {
+		t.Fatalf("backups: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, e, http.MethodPost, "/api/v1/system/panel-update/rollback", map[string]any{"backup": "20261101T020000Z"}, admin); rec.Code != http.StatusForbidden {
+		t.Fatalf("admin rollback = %d", rec.Code)
+	}
+	if rec := doRequest(t, e, http.MethodPost, "/api/v1/system/panel-update/rollback", map[string]any{"backup": "20990101T000000Z"}, tok); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown backup = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doRequest(t, e, http.MethodPost, "/api/v1/system/panel-update/rollback", map[string]any{"backup": "20261101T020000Z"}, tok)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "v1.6.0") {
+		t.Fatalf("rollback: %d %s", rec.Code, rec.Body.String())
+	}
+	agent.mu.Lock()
+	n := len(agent.rolledBack)
+	agent.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("agent rollbacks = %d", n)
+	}
 }

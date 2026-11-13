@@ -36,8 +36,13 @@ import (
 
 const (
 	panelUpdateUnit       = "sigardapanel-update"
+	agentUpdateUnit       = "sigardapanel-agent-update"
 	defaultPanelUpdateDir = "/var/lib/sigardapanel-update"
+	defaultAgentUpdateDir = "/var/lib/sigardapanel-agent-update"
 	defaultPanelEnvFile   = "/etc/sigardapanel/panel.env"
+	defaultAgentEnvFile   = "/etc/sigardapanel/agent.env"
+	defaultPanelBackupDir = "/var/backups/sigardapanel-updates"
+	defaultAgentBackupDir = "/var/backups/sigardapanel-agent-updates"
 	panelUpdateMaxRuntime = 45 * time.Minute
 	panelUpdateHistoryMax = 10
 	// Free space the installer needs: the backup holds the binary, the web
@@ -50,7 +55,18 @@ const (
 // panelUpdateRunFunc runs a command and returns its combined output.
 type panelUpdateRunFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
 
+// panelUpdater runs one kind of self-update in the background:
+//   - kind "panel": the panel host (install.sh update / rollback), and
+//   - kind "agent": a remote server's agent (agent-update.sh).
 type panelUpdater struct {
+	kind         string
+	unit         string
+	script       []byte
+	scriptName   string
+	agentEnvFile string // kind agent: written by the agent install command
+	// free space the preflight requires for backup, download and binary
+	minBackup, minTmp, minBin uint64
+
 	mu       sync.Mutex
 	stateDir string
 	envFile  string // present only on a panel host installed by install.sh
@@ -81,7 +97,10 @@ func denyPanelUpdateRun(context.Context, string, ...string) ([]byte, error) {
 }
 
 type panelUpdateMeta struct {
+	// Action is "update" (default) or "rollback".
+	Action      string    `json:"action,omitempty"`
 	Tag         string    `json:"tag"`
+	Backup      string    `json:"backup,omitempty"`
 	FromVersion string    `json:"from_version"`
 	StartedAt   time.Time `json:"started_at"`
 }
@@ -90,6 +109,9 @@ type panelUpdateMeta struct {
 type PanelUpdateStatus struct {
 	// State: idle (never ran), running, succeeded, failed.
 	State        string     `json:"state"`
+	Kind         string     `json:"kind"`
+	Action       string     `json:"action,omitempty"`
+	Backup       string     `json:"backup,omitempty"`
 	Tag          string     `json:"tag,omitempty"`
 	FromVersion  string     `json:"from_version,omitempty"`
 	StartedAt    *time.Time `json:"started_at,omitempty"`
@@ -106,6 +128,9 @@ type PanelUpdateStatus struct {
 	Preflight []PanelUpdateCheck `json:"preflight,omitempty"`
 	// History holds earlier runs, newest first (without their logs).
 	History []PanelUpdateRun `json:"history"`
+	// HoldTag: after a rollback from this version, automatic updates skip
+	// it (and older releases) until a manual update clears the hold.
+	HoldTag string `json:"hold_tag,omitempty"`
 }
 
 // PanelUpdateCheck is one preflight check.
@@ -117,6 +142,8 @@ type PanelUpdateCheck struct {
 
 // PanelUpdateRun is a finished update kept in the history.
 type PanelUpdateRun struct {
+	Action      string     `json:"action,omitempty"`
+	Backup      string     `json:"backup,omitempty"`
 	Tag         string     `json:"tag"`
 	FromVersion string     `json:"from_version"`
 	State       string     `json:"state"`
@@ -133,7 +160,15 @@ func (u *panelUpdater) unsupported() string {
 	if !selfupdate.IsRelease(u.version) {
 		return "This is a development build (version " + u.version + "); only release installs can update themselves."
 	}
-	if _, err := os.Stat(u.envFile); err != nil {
+	_, panelErr := os.Stat(u.envFile)
+	if u.kind == "agent" {
+		if panelErr == nil {
+			return "This is the panel host: its agent is updated together with the panel (Settings → Panel update)."
+		}
+		if _, err := os.Stat(u.agentEnvFile); err != nil {
+			return "This server was not set up with the agent install command (" + u.agentEnvFile + " not found); reinstall the agent to enable updates from the panel."
+		}
+	} else if panelErr != nil {
 		return "This server is not a panel host installed with install.sh (" + u.envFile + " not found)."
 	}
 	if u.euid() != 0 {
@@ -174,7 +209,7 @@ func (u *panelUpdater) logTail(max int64) string { return readLogTail(u.path("up
 func (u *panelUpdater) unitActive(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := u.run(ctx, "systemctl", "is-active", panelUpdateUnit+".service")
+	out, err := u.run(ctx, "systemctl", "is-active", u.unit+".service")
 	s := strings.TrimSpace(string(out))
 	return err == nil && (s == "active" || s == "activating" || s == "reloading")
 }
@@ -193,7 +228,10 @@ func (u *panelUpdater) status(ctx context.Context) PanelUpdateStatus {
 
 // current describes the latest run (state idle when there never was one).
 func (u *panelUpdater) current(ctx context.Context) PanelUpdateStatus {
-	st := PanelUpdateStatus{State: "idle", AgentVersion: u.version, History: []PanelUpdateRun{}}
+	st := PanelUpdateStatus{State: "idle", Kind: u.kind, AgentVersion: u.version, History: []PanelUpdateRun{}}
+	if raw, err := os.ReadFile(u.path("hold")); err == nil {
+		st.HoldTag = strings.TrimSpace(string(raw))
+	}
 	raw, err := os.ReadFile(u.path("meta.json"))
 	if err != nil {
 		return st
@@ -202,7 +240,17 @@ func (u *panelUpdater) current(ctx context.Context) PanelUpdateStatus {
 	if json.Unmarshal(raw, &meta) != nil {
 		return st
 	}
-	st.Tag, st.FromVersion = meta.Tag, meta.FromVersion
+	if meta.Action == "" {
+		meta.Action = "update"
+	}
+	st.Action, st.Backup, st.Tag, st.FromVersion = meta.Action, meta.Backup, meta.Tag, meta.FromVersion
+	what := "update to " + meta.Tag
+	if meta.Action == "rollback" {
+		what = "rollback to " + meta.Tag + " (backup " + meta.Backup + ")"
+	}
+	if u.kind == "agent" {
+		what = "agent " + what
+	}
 	started := meta.StartedAt
 	st.StartedAt = &started
 	st.Log = u.logTail(64 << 10)
@@ -219,10 +267,17 @@ func (u *panelUpdater) current(ctx context.Context) PanelUpdateStatus {
 		}
 		if code == 0 {
 			st.State = "succeeded"
-			st.Message = "Updated to " + meta.Tag
+			switch {
+			case meta.Action == "rollback":
+				st.Message = "Rolled back to " + meta.Tag
+			case u.kind == "agent":
+				st.Message = "Agent updated to " + meta.Tag
+			default:
+				st.Message = "Updated to " + meta.Tag
+			}
 		} else {
 			st.State = "failed"
-			st.Message = "The update to " + meta.Tag + " failed (exit code " + strconv.Itoa(code) + "); see the log. The installer restores the previous version automatically."
+			st.Message = "The " + what + " failed (exit code " + strconv.Itoa(code) + "); see the log. The previous version is restored automatically."
 		}
 		return st
 	}
@@ -236,12 +291,13 @@ func (u *panelUpdater) current(ctx context.Context) PanelUpdateStatus {
 		return st
 	}
 	st.State = "failed"
-	st.Message = "The update process stopped without reporting a result; see the log."
+	st.Message = "The " + what + " stopped without reporting a result; see the log."
 	return st
 }
 
-// start launches the update to tag in the background.
-func (u *panelUpdater) start(ctx context.Context, tag string) (int, string) {
+// start launches the update to tag in the background. auto marks a start
+// by the panel's automatic updater, which respects a rollback hold.
+func (u *panelUpdater) start(ctx context.Context, tag string, auto bool) (int, string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if reason := u.unsupported(); reason != "" {
@@ -253,9 +309,68 @@ func (u *panelUpdater) start(ctx context.Context, tag string) (int, string) {
 	if !selfupdate.Newer(tag, u.version) {
 		return http.StatusConflict, tag + " is not newer than the installed version " + u.version
 	}
+	if auto {
+		if raw, err := os.ReadFile(u.path("hold")); err == nil {
+			if hold := strings.TrimSpace(string(raw)); hold != "" && !selfupdate.Newer(tag, hold) {
+				return http.StatusConflict, "automatic updates skip " + tag + ": the panel was rolled back from " + hold + " (a manual update clears this)"
+			}
+		}
+	}
+	args := []string{"update"}
+	env := []string{"SIGARDA_VERSION=" + tag}
+	desc := "SigardaPanel update to " + tag
+	if u.kind == "agent" {
+		args, env, desc = []string{tag}, nil, "SigardaPanel agent update to "+tag
+	}
+	code, msg := u.launch(ctx, panelUpdateMeta{Action: "update", Tag: tag, FromVersion: u.version}, desc, args, env)
+	if code == http.StatusAccepted && !auto {
+		_ = os.Remove(u.path("hold"))
+	}
+	return code, msg
+}
+
+// rollback launches "install.sh rollback <backup>" (panel only).
+func (u *panelUpdater) rollback(ctx context.Context, backup string) (int, string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.kind != "panel" {
+		return http.StatusBadRequest, "rollback is only available for the panel"
+	}
+	if reason := u.unsupported(); reason != "" {
+		return http.StatusConflict, reason
+	}
+	if !panelBackupRe.MatchString(backup) {
+		return http.StatusBadRequest, "invalid backup name"
+	}
+	var target *PanelBackup
+	for _, b := range u.backups() {
+		if b.Name == backup {
+			b := b
+			target = &b
+		}
+	}
+	if target == nil {
+		return http.StatusNotFound, "backup " + backup + " not found (or incomplete)"
+	}
+	tag := target.Version
+	if selfupdate.IsRelease(tag) {
+		tag = selfupdate.Tag(tag)
+	}
+	code, msg := u.launch(ctx, panelUpdateMeta{Action: "rollback", Tag: tag, Backup: backup, FromVersion: u.version},
+		"SigardaPanel rollback to "+tag, []string{"rollback", backup}, nil)
+	if code == http.StatusAccepted && selfupdate.IsRelease(u.version) {
+		// Keep the automatic updater from installing this version again.
+		_ = os.WriteFile(u.path("hold"), []byte(selfupdate.Tag(u.version)+"\n"), 0o600)
+	}
+	return code, msg
+}
+
+// launch runs the embedded script with args in the transient unit. The
+// caller holds u.mu.
+func (u *panelUpdater) launch(ctx context.Context, meta panelUpdateMeta, desc string, args, env []string) (int, string) {
 	prev := u.current(ctx)
 	if prev.State == "running" {
-		return http.StatusConflict, "an update to " + prev.Tag + " is already running"
+		return http.StatusConflict, "an " + prev.Action + " to " + prev.Tag + " is already running"
 	}
 	for _, c := range u.preflight() {
 		if !c.OK {
@@ -270,42 +385,108 @@ func (u *panelUpdater) start(ctx context.Context, tag string) (int, string) {
 	for _, f := range []string{"exit", "exit.tmp", "update.log", "meta.json"} {
 		_ = os.Remove(u.path(f))
 	}
-	script := u.path("install.sh")
-	if err := os.WriteFile(script+".tmp", installer.Script, 0o700); err != nil {
-		return http.StatusInternalServerError, "cannot write the installer: " + err.Error()
+	script := u.path(u.scriptName)
+	if err := os.WriteFile(script+".tmp", u.script, 0o700); err != nil {
+		return http.StatusInternalServerError, "cannot write the updater script: " + err.Error()
 	}
 	if err := os.Rename(script+".tmp", script); err != nil {
-		return http.StatusInternalServerError, "cannot write the installer: " + err.Error()
+		return http.StatusInternalServerError, "cannot write the updater script: " + err.Error()
 	}
-	meta, _ := json.Marshal(panelUpdateMeta{Tag: tag, FromVersion: u.version, StartedAt: time.Now().UTC()})
-	if err := os.WriteFile(u.path("meta.json"), meta, 0o600); err != nil {
+	meta.StartedAt = time.Now().UTC()
+	raw, _ := json.Marshal(meta)
+	if err := os.WriteFile(u.path("meta.json"), raw, 0o600); err != nil {
 		return http.StatusInternalServerError, "cannot write the update state: " + err.Error()
 	}
 
 	// The exit code is written through a temp file + rename so a reader never
 	// sees a half-written value.
-	const wrapper = `bash "$1" update >"$2" 2>&1; rc=$?; echo "$rc" >"$3.tmp" && mv -f "$3.tmp" "$3"`
-	runCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	out, err := u.run(runCtx, "systemd-run",
-		"--unit="+panelUpdateUnit,
+	const wrapper = `s="$1"; l="$2"; x="$3"; shift 3; bash "$s" "$@" >"$l" 2>&1; rc=$?; echo "$rc" >"$x.tmp" && mv -f "$x.tmp" "$x"`
+	cmd := []string{
+		"--unit=" + u.unit,
 		"--collect",
 		"--quiet",
-		"--description=SigardaPanel update to "+tag,
-		"--setenv=SIGARDA_VERSION="+tag,
+		"--description=" + desc,
 		"--setenv=DEBIAN_FRONTEND=noninteractive",
-		"--property=RuntimeMaxSec="+strconv.Itoa(int(panelUpdateMaxRuntime.Seconds())),
-		"/bin/bash", "-c", wrapper, panelUpdateUnit, script, u.path("update.log"), u.path("exit"),
-	)
+		"--property=RuntimeMaxSec=" + strconv.Itoa(int(panelUpdateMaxRuntime.Seconds())),
+	}
+	for _, e := range env {
+		cmd = append(cmd, "--setenv="+e)
+	}
+	cmd = append(cmd, "/bin/bash", "-c", wrapper, u.unit, script, u.path("update.log"), u.path("exit"))
+	cmd = append(cmd, args...)
+	runCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	out, err := u.run(runCtx, "systemd-run", cmd...)
 	if err != nil {
 		_ = os.Remove(u.path("meta.json"))
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			msg = err.Error()
 		}
-		return http.StatusInternalServerError, "could not start the update: " + msg
+		return http.StatusInternalServerError, "could not start: " + msg
 	}
-	return http.StatusAccepted, "update to " + tag + " started"
+	return http.StatusAccepted, desc + " started"
+}
+
+// PanelBackup is a pre-update backup that "rollback" can restore.
+type PanelBackup struct {
+	Name        string    `json:"name"`
+	CreatedAt   time.Time `json:"created_at"`
+	Version     string    `json:"version"`
+	Target      string    `json:"target,omitempty"`
+	Kind        string    `json:"kind"`
+	HasDatabase bool      `json:"has_database"`
+	SizeBytes   int64     `json:"size_bytes"`
+}
+
+var panelBackupRe = regexp.MustCompile(`^20[0-9]{6}T[0-9]{6}Z$`)
+
+func readSmall(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil || len(raw) > 256 {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// backups lists the complete update backups, newest first (the same rules
+// as install.sh rollback list).
+func (u *panelUpdater) backups() []PanelBackup {
+	entries, err := os.ReadDir(u.backupDir)
+	if err != nil {
+		return []PanelBackup{}
+	}
+	out := []PanelBackup{}
+	for _, e := range entries {
+		if !e.IsDir() || !panelBackupRe.MatchString(e.Name()) {
+			continue
+		}
+		dir := filepath.Join(u.backupDir, e.Name())
+		bin, err1 := os.Stat(filepath.Join(dir, "sigardapanel.bin"))
+		_, err2 := os.Stat(filepath.Join(dir, "web", "index.js"))
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		created, _ := time.Parse("20060102T150405Z", e.Name())
+		b := PanelBackup{
+			Name: e.Name(), CreatedAt: created, Version: readSmall(filepath.Join(dir, "VERSION")),
+			Target: readSmall(filepath.Join(dir, "TARGET")), Kind: readSmall(filepath.Join(dir, "KIND")),
+			SizeBytes: bin.Size(),
+		}
+		if b.Version == "" {
+			b.Version = "unknown"
+		}
+		if b.Kind == "" {
+			b.Kind = "update"
+		}
+		if db, err := os.Stat(filepath.Join(dir, "sigardapanel.db")); err == nil {
+			b.HasDatabase = true
+			b.SizeBytes += db.Size()
+		}
+		out = append(out, b)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name > out[j].Name })
+	return out
 }
 
 // archive moves a finished run (meta, exit code, log) into history/ and
@@ -320,6 +501,7 @@ func (u *panelUpdater) archive(prev PanelUpdateStatus) {
 	}
 	base := fmt.Sprintf("%d-%s", prev.StartedAt.Unix(), prev.Tag)
 	run := PanelUpdateRun{
+		Action: prev.Action, Backup: prev.Backup,
 		Tag: prev.Tag, FromVersion: prev.FromVersion, State: prev.State, StartedAt: *prev.StartedAt,
 		FinishedAt: prev.FinishedAt, ExitCode: prev.ExitCode, Message: prev.Message,
 	}
@@ -390,9 +572,9 @@ func (u *panelUpdater) preflight() []PanelUpdateCheck {
 			checks = append(checks, PanelUpdateCheck{Name: name, OK: true, Detail: fmt.Sprintf("%s: %s free", path, humanBytes(free))})
 		}
 	}
-	space("backup space", u.backupDir, panelUpdateMinFreeBackup+dbSize)
-	space("download space", u.tmpDir, panelUpdateMinFreeTmp)
-	space("install space", u.binDir, panelUpdateMinFreeBin)
+	space("backup space", u.backupDir, u.minBackup+dbSize)
+	space("download space", u.tmpDir, u.minTmp)
+	space("install space", u.binDir, u.minBin)
 	return checks
 }
 
@@ -425,31 +607,59 @@ func panelDBPath(envFile string) string {
 }
 
 func newPanelUpdater(opts *RouterOptions) *panelUpdater {
+	return newUpdater("panel", opts)
+}
+
+func newAgentUpdater(opts *RouterOptions) *panelUpdater {
+	return newUpdater("agent", opts)
+}
+
+func newUpdater(kind string, opts *RouterOptions) *panelUpdater {
 	u := &panelUpdater{
-		stateDir:  defaultPanelUpdateDir,
-		envFile:   defaultPanelEnvFile,
-		version:   buildinfo.Version,
-		run:       hostPanelUpdateRun,
-		euid:      os.Geteuid,
-		lookPath:  exec.LookPath,
-		freeBytes: hostFreeBytes,
-		backupDir: "/var/backups/sigardapanel-updates",
-		tmpDir:    os.TempDir(),
-		binDir:    "/usr/local/bin",
+		kind:         kind,
+		unit:         panelUpdateUnit,
+		script:       installer.Script,
+		scriptName:   "install.sh",
+		stateDir:     defaultPanelUpdateDir,
+		envFile:      defaultPanelEnvFile,
+		agentEnvFile: defaultAgentEnvFile,
+		version:      buildinfo.Version,
+		run:          hostPanelUpdateRun,
+		euid:         os.Geteuid,
+		lookPath:     exec.LookPath,
+		freeBytes:    hostFreeBytes,
+		backupDir:    defaultPanelBackupDir,
+		tmpDir:       os.TempDir(),
+		binDir:       "/usr/local/bin",
+		minBackup:    panelUpdateMinFreeBackup,
+		minTmp:       panelUpdateMinFreeTmp,
+		minBin:       panelUpdateMinFreeBin,
+	}
+	if kind == "agent" {
+		u.unit, u.script, u.scriptName = agentUpdateUnit, installer.AgentScript, "agent-update.sh"
+		u.stateDir, u.backupDir = defaultAgentUpdateDir, defaultAgentBackupDir
+		u.minBackup, u.minTmp, u.minBin = 150<<20, 150<<20, 150<<20
 	}
 	if opts != nil {
 		// Injected routers (tests) never touch the real host.
 		u.run = denyPanelUpdateRun
-		u.stateDir = filepath.Join(os.TempDir(), "sigardapanel-agent-test-update")
+		u.stateDir = filepath.Join(os.TempDir(), "sigardapanel-agent-test-update-"+kind)
 		u.envFile = filepath.Join(os.TempDir(), "sigardapanel-agent-test-update-panel.env-not-configured")
+		u.agentEnvFile = filepath.Join(os.TempDir(), "sigardapanel-agent-test-update-agent.env-not-configured")
 		if opts.PanelUpdateRun != nil {
 			u.run = opts.PanelUpdateRun
 		}
 		if opts.PanelUpdateStateDir != "" {
 			u.stateDir = opts.PanelUpdateStateDir
+			if kind == "agent" {
+				u.stateDir += "-agent"
+			}
 		}
 		if opts.PanelUpdateEnvFile != "" {
 			u.envFile = opts.PanelUpdateEnvFile
+		}
+		if opts.AgentUpdateEnvFile != "" {
+			u.agentEnvFile = opts.AgentUpdateEnvFile
 		}
 		if opts.PanelUpdateVersion != "" {
 			u.version = opts.PanelUpdateVersion
@@ -461,8 +671,13 @@ func newPanelUpdater(opts *RouterOptions) *panelUpdater {
 			u.freeBytes = opts.PanelUpdateFreeBytes
 		}
 		u.backupDir, u.tmpDir, u.binDir = u.stateDir, u.stateDir, u.stateDir
+		if opts.PanelUpdateBackupDir != "" && kind == "panel" {
+			u.backupDir = opts.PanelUpdateBackupDir
+		}
 	}
-	u.dbPath = panelDBPath(u.envFile)
+	if kind == "panel" {
+		u.dbPath = panelDBPath(u.envFile)
+	}
 	return u
 }
 
@@ -471,15 +686,50 @@ func (r *Router) panelUpdateStatusTask(c echo.Context) error {
 	return c.JSON(http.StatusOK, r.panelUpdate.status(c.Request().Context()))
 }
 
-// panelUpdateStartTask answers POST /tasks/panel/update {"tag":"v1.2.3"}.
+// panelUpdateStartTask answers POST /tasks/panel/update {"tag":"v1.2.3","auto":false}.
 func (r *Router) panelUpdateStartTask(c echo.Context) error {
+	return startUpdateTask(c, r.panelUpdate)
+}
+
+// agentUpdateStatusTask answers GET /tasks/agent/update (remote servers).
+func (r *Router) agentUpdateStatusTask(c echo.Context) error {
+	return c.JSON(http.StatusOK, r.agentUpdate.status(c.Request().Context()))
+}
+
+// agentUpdateStartTask answers POST /tasks/agent/update {"tag":"v1.2.3"}.
+func (r *Router) agentUpdateStartTask(c echo.Context) error {
+	return startUpdateTask(c, r.agentUpdate)
+}
+
+func startUpdateTask(c echo.Context, u *panelUpdater) error {
 	var req struct {
-		Tag string `json:"tag"`
+		Tag  string `json:"tag"`
+		Auto bool   `json:"auto"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid payload"})
 	}
-	code, msg := r.panelUpdate.start(c.Request().Context(), strings.TrimSpace(req.Tag))
+	code, msg := u.start(c.Request().Context(), strings.TrimSpace(req.Tag), req.Auto)
+	if code != http.StatusAccepted {
+		return c.JSON(code, map[string]any{"ok": false, "message": msg})
+	}
+	return c.JSON(code, map[string]any{"ok": true, "message": msg, "status": u.status(c.Request().Context())})
+}
+
+// panelBackupsTask answers GET /tasks/panel/backups.
+func (r *Router) panelBackupsTask(c echo.Context) error {
+	return c.JSON(http.StatusOK, map[string]any{"backups": r.panelUpdate.backups()})
+}
+
+// panelRollbackTask answers POST /tasks/panel/rollback {"backup":"20261101T020000Z"}.
+func (r *Router) panelRollbackTask(c echo.Context) error {
+	var req struct {
+		Backup string `json:"backup"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid payload"})
+	}
+	code, msg := r.panelUpdate.rollback(c.Request().Context(), strings.TrimSpace(req.Backup))
 	if code != http.StatusAccepted {
 		return c.JSON(code, map[string]any{"ok": false, "message": msg})
 	}

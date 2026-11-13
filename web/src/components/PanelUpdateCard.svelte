@@ -7,15 +7,26 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
-  import { fmtDateTime, fmtRelative, parseDate } from '$lib/format';
+  import { fmtDateTime, fmtRelative, parseDate, fmtBytes } from '$lib/format';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import StatusPill from '$components/StatusPill.svelte';
   import {
-    ArrowUpCircle, RefreshCw, LoaderCircle, CheckCircle2, AlertTriangle, ExternalLink, ChevronDown, XCircle,
+    ArrowUpCircle, RefreshCw, LoaderCircle, CheckCircle2, AlertTriangle, ExternalLink, ChevronDown, XCircle, Undo2,
   } from 'lucide-svelte';
   import { onMount, onDestroy } from 'svelte';
 
+  type Backup = {
+    name: string;
+    created_at: string;
+    version: string;
+    target?: string;
+    kind: string;
+    has_database: boolean;
+    size_bytes: number;
+  };
   type Run = {
+    action?: 'update' | 'rollback';
+    backup?: string;
     tag: string;
     from_version?: string;
     state: 'succeeded' | 'failed' | 'running' | 'idle';
@@ -37,6 +48,9 @@
     repository: string;
     status?: {
       state: 'idle' | 'running' | 'succeeded' | 'failed';
+      action?: 'update' | 'rollback';
+      backup?: string;
+      hold_tag?: string;
       tag?: string;
       from_version?: string;
       started_at?: string;
@@ -73,10 +87,19 @@
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let destroyed = false;
   let logEl = $state<HTMLPreElement | null>(null);
+  // The version the followed update or rollback should end on.
+  let followTag = $state('');
+  let showBackups = $state(false);
+  let backups = $state<Backup[] | null>(null);
+  let backupsError = $state('');
+  let rollbackTarget = $state<Backup | null>(null);
+  let rollbackOpen = $state(false);
+  let rollingBack = $state(false);
   let winStart = $state('any');
   let winEnd = $state('6');
 
   const updState = $derived(info?.status?.state ?? 'idle');
+  const isRollback = $derived(info?.status?.action === 'rollback');
   const running = $derived(following || updState === 'running');
   const supported = $derived(info?.status?.supported ?? false);
   const failedChecks = $derived((info?.status?.preflight ?? []).filter((c) => !c.ok));
@@ -122,6 +145,12 @@
       if (e?.message === 'session expired') throw e;
       if (following) {
         unreachable = true; // the API restarts during the update
+        // After a rollback to a release without this endpoint, only the
+        // version tells that the rollback finished.
+        if (followTag) {
+          const v = await apiFetch(auth.token, 'GET', 'version').catch(() => null);
+          if (v?.version && sameVersion(v.version, followTag)) finishFollow(followTag);
+        }
         return null;
       }
       loadError = e?.message || 'Failed to load update status';
@@ -142,7 +171,16 @@
     else toasts.success('SigardaPanel is up to date');
   }
 
-  function startFollowing() {
+  function finishFollow(tag: string) {
+    if (!following) return;
+    following = false;
+    clearBadgeCache();
+    toasts.success(`SigardaPanel is now ${tag}. Reloading…`);
+    setTimeout(() => window.location.reload(), 2500);
+  }
+
+  function startFollowing(tag = '') {
+    followTag = tag;
     following = true;
     followSince = Date.now();
     showLog = true;
@@ -170,16 +208,13 @@
     const d = await load().catch(() => null);
     const st = d?.status?.state;
     if (d && st === 'succeeded' && sameVersion(d.current_version, d.status?.tag)) {
-      following = false;
-      clearBadgeCache();
-      toasts.success(`SigardaPanel updated to ${d.status?.tag}. Reloading…`);
-      setTimeout(() => window.location.reload(), 2500);
+      finishFollow(d.status?.tag ?? '');
       return;
     }
     if (d && st === 'failed') {
       following = false;
       showLog = true;
-      toasts.error(d.status?.message || 'The update failed');
+      toasts.error(d.status?.message || (isRollback ? 'The rollback failed' : 'The update failed'));
       return;
     }
     // running, or succeeded while the API still reports the old version
@@ -192,7 +227,7 @@
     try {
       await apiFetch(auth.token, 'POST', 'system/panel-update', {});
       toasts.success('Update started. The panel restarts for a moment during the update.');
-      startFollowing();
+      startFollowing(info?.latest?.tag ?? '');
     } catch (e: any) {
       if (e?.message !== 'session expired') toasts.error(e?.message || 'Could not start the update');
       load();
@@ -200,6 +235,52 @@
       starting = false;
     }
   }
+
+  async function loadBackups() {
+    backupsError = '';
+    try {
+      const d = await apiFetch(auth.token, 'GET', 'system/panel-update/backups');
+      backups = d?.backups ?? [];
+    } catch (e: any) {
+      backups = null;
+      if (e?.message !== 'session expired') backupsError = e?.message || 'Could not load the backups';
+    }
+  }
+
+  function toggleBackups() {
+    showBackups = !showBackups;
+    if (showBackups && backups === null) loadBackups();
+  }
+
+  function askRollback(b: Backup) {
+    rollbackTarget = b;
+    rollbackOpen = true;
+  }
+
+  async function doRollback() {
+    if (!rollbackTarget) return;
+    rollingBack = true;
+    try {
+      const d = await apiFetch(auth.token, 'POST', 'system/panel-update/rollback', { backup: rollbackTarget.name });
+      toasts.success(d?.message || 'Rollback started.');
+      startFollowing(d?.tag ?? '');
+    } catch (e: any) {
+      if (e?.message !== 'session expired') toasts.error(e?.message || 'Could not start the rollback');
+      load();
+    } finally {
+      rollingBack = false;
+    }
+  }
+
+  const rollbackMessage = $derived(
+    rollbackTarget
+      ? `The panel binary and web app go back to ${rollbackTarget.version}` +
+          (rollbackTarget.has_database
+            ? `, and the database is restored to its state of ${fmtDateTime(rollbackTarget.created_at)}: everything changed in the panel since then (sites, users, settings, backups records) is lost.`
+            : '. This backup has no database copy, so the current database is kept.') +
+          ' The current state is backed up first and restored automatically if the rolled-back panel is not healthy. Automatic updates will skip the version you roll back from.'
+      : '',
+  );
 
   async function saveSettings(body: Record<string, unknown>, okMsg: string) {
     savingAuto = true;
@@ -260,7 +341,7 @@
 
   onMount(async () => {
     const d = await load().catch(() => null);
-    if (d?.status?.state === 'running') startFollowing();
+    if (d?.status?.state === 'running') startFollowing(d.status.tag ?? '');
     if (window.location.hash === '#panel-update') {
       document.getElementById('panel-update')?.scrollIntoView({ block: 'start' });
     }
@@ -278,7 +359,7 @@
       <ArrowUpCircle size={16} class="text-subtle" /> Panel update
       {#if info && !loading}
         {#if running}
-          <span class="badge badge-info">Updating</span>
+          <span class="badge badge-info">{isRollback ? 'Rolling back' : 'Updating'}</span>
         {:else if info.update_available}
           <span class="badge badge-accent">Update available</span>
         {:else if info.latest}
@@ -292,7 +373,7 @@
       </button>
       {#if info?.update_available || running}
         <button class="btn btn-primary btn-sm" onclick={() => (confirmOpen = true)} disabled={!canUpdate || starting}>
-          {#if running || starting}<LoaderCircle size={14} class="animate-spin" /> Updating…{:else}<ArrowUpCircle size={14} /> Update now{/if}
+          {#if running || starting}<LoaderCircle size={14} class="animate-spin" /> {isRollback ? 'Rolling back…' : 'Updating…'}{:else}<ArrowUpCircle size={14} /> Update now{/if}
         </button>
       {/if}
     </div>
@@ -334,18 +415,20 @@
         <div class="rounded-lg border border-line bg-surface-2 p-3 text-[13px] text-muted" aria-live="polite">
           <p class="flex items-center gap-2 font-medium text-fg">
             <LoaderCircle size={14} class="animate-spin text-accent" />
-            Updating{info.status?.from_version ? ` from ${info.status.from_version}` : ''} to {info.status?.tag ?? info.latest?.tag}…
+            {isRollback ? 'Rolling back' : 'Updating'}{info.status?.from_version ? ` from ${info.status.from_version}` : ''} to {info.status?.tag || followTag || info.latest?.tag}…
           </p>
           <p class="mt-1">
             {#if unreachable}
               The panel is restarting. This page reconnects by itself — do not close it.
+            {:else if isRollback}
+              Backing up the current state, then restoring the binary, web app and database from backup {info.status?.backup}. If the rolled-back panel is not healthy, the current state is restored automatically.
             {:else}
               Downloading and verifying the signed release, backing up, then restarting the services. If the new version is not healthy, the previous one is restored automatically.
             {/if}
           </p>
         </div>
       {:else if updState === 'succeeded' && info.status?.tag}
-        <p class="flex items-center gap-1.5 text-[13px] text-success"><CheckCircle2 size={14} /> Last update: {info.status.message}{info.status.finished_at ? ` · ${fmtDateTime(info.status.finished_at)}` : ''}</p>
+        <p class="flex items-center gap-1.5 text-[13px] text-success"><CheckCircle2 size={14} /> {isRollback ? 'Last rollback' : 'Last update'}: {info.status.message}{info.status.finished_at ? ` · ${fmtDateTime(info.status.finished_at)}` : ''}</p>
       {:else if updState === 'failed'}
         <p class="flex items-start gap-1.5 text-[13px] text-danger"><XCircle size={14} class="mt-0.5 shrink-0" /> {info.status?.message}</p>
       {/if}
@@ -374,7 +457,7 @@
       {#if info.status?.log}
         <div>
           <button class="btn btn-ghost btn-xs" onclick={() => (showLog = !showLog)} aria-expanded={showLog}>
-            <ChevronDown size={14} class={showLog ? 'rotate-180' : ''} /> Update log{info.status.tag ? ` (${info.status.tag})` : ''}
+            <ChevronDown size={14} class={showLog ? 'rotate-180' : ''} /> {isRollback ? 'Rollback log' : 'Update log'}{info.status.tag ? ` (${info.status.tag})` : ''}
           </button>
           {#if showLog}
             <pre bind:this={logEl} class="mt-2 max-h-72 overflow-auto rounded-lg border border-line bg-bg p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted">{info.status.log}</pre>
@@ -395,7 +478,7 @@
                   {#each history as r (r.started_at + r.tag)}
                     <tr>
                       <td class="text-[13px] tabular-nums">{fmtDateTime(r.started_at)}</td>
-                      <td class="font-mono text-[13px]">{r.from_version ? `${r.from_version} → ` : ''}{r.tag}</td>
+                      <td class="font-mono text-[13px]">{r.action === 'rollback' ? '↩ ' : ''}{r.from_version ? `${r.from_version} → ` : ''}{r.tag}</td>
                       <td><span title={r.message}><StatusPill status={r.state === 'succeeded' ? 'success' : 'failed'} label={r.state} /></span></td>
                       <td class="text-[13px] text-muted tabular-nums max-sm:hidden">{duration(r)}</td>
                     </tr>
@@ -406,6 +489,56 @@
           {/if}
         </div>
       {/if}
+
+      {#if info.status?.hold_tag}
+        <p class="flex items-start gap-1.5 text-[13px] text-warning">
+          <Undo2 size={14} class="mt-0.5 shrink-0" />
+          The panel was rolled back from {info.status.hold_tag}: automatic updates skip it until a newer release appears. Update now installs it anyway.
+        </p>
+      {/if}
+
+      <div>
+        <button class="btn btn-ghost btn-xs" onclick={toggleBackups} aria-expanded={showBackups}>
+          <ChevronDown size={14} class={showBackups ? 'rotate-180' : ''} /> Backups &amp; rollback
+        </button>
+        {#if showBackups}
+          <div class="mt-2 space-y-2">
+            <p class="text-xs text-subtle">A backup of the binary, web app and database is made before every update (and before every rollback). Rolling back restores all three.</p>
+            {#if backupsError}
+              <p class="text-[13px] text-danger">{backupsError}</p>
+            {:else if backups === null}
+              <div class="skeleton h-16"></div>
+            {:else if backups.length === 0}
+              <p class="text-[13px] text-muted">No backups yet.</p>
+            {:else}
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th>Made</th><th>Version</th><th class="max-sm:hidden">Database</th><th class="max-sm:hidden">Size</th><th></th></tr></thead>
+                  <tbody>
+                    {#each backups as b (b.name)}
+                      <tr>
+                        <td class="text-[13px] tabular-nums">
+                          {fmtDateTime(b.created_at)}
+                          <span class="block text-xs text-subtle">{b.kind === 'pre-rollback' ? 'before a rollback' : b.target ? `before the update to ${b.target}` : 'before an update'}</span>
+                        </td>
+                        <td class="font-mono text-[13px]">{b.version}</td>
+                        <td class="text-[13px] max-sm:hidden">{b.has_database ? 'yes' : 'no'}</td>
+                        <td class="text-[13px] text-muted tabular-nums max-sm:hidden">{fmtBytes(b.size_bytes)}</td>
+                        <td class="text-right">
+                          <button class="btn btn-danger-ghost btn-xs" onclick={() => askRollback(b)} disabled={running || rollingBack || !supported || b.version === info.current_version}
+                            title={b.version === info.current_version ? 'This is the installed version' : `Roll back to ${b.version}`}>
+                            <Undo2 size={12} /> Roll back
+                          </button>
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
 
       <div class="space-y-3 border-t border-line pt-4">
         <div class="flex items-start gap-3">
@@ -435,6 +568,14 @@
     {/if}
   </div>
 </section>
+
+<ConfirmDialog
+  bind:open={rollbackOpen}
+  title={`Roll back to ${rollbackTarget?.version ?? ''}?`}
+  message={rollbackMessage}
+  confirmLabel="Roll back"
+  destructive
+  onconfirm={doRollback} />
 
 <ConfirmDialog
   bind:open={confirmOpen}
