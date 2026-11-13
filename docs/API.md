@@ -55,12 +55,19 @@ Service tokens (machine-to-machine) use the same header with scoped permissions.
 | POST | `/users` | admin | Create user |
 | PATCH | `/users/:id` | admin | Update user (role, password, limits) |
 | DELETE | `/users/:id` | admin | Delete user |
-| GET | `/users/:id/usage` | user | Disk/sites usage |
+| GET | `/users/:id/usage` | user | Disk/sites usage: owned sites, measured on their servers (`disk_unmeasured_sites` = not in the total) |
 | GET | `/users/:id/sites` | admin | List sites assigned |
 | POST | `/users/:id/sites` | admin | Assign site to user |
 | DELETE | `/users/:id/sites/:siteId` | admin | Unassign |
 | PATCH | `/users/:id/sites/:siteId` | admin | Update permission |
 | GET | `/sites/:id/users` | admin | List users on a site |
+
+Disk limits (`disk_limit`, GB; 0 = unlimited) apply to the sites a user owns.
+At or over the limit, actions that add data to those sites return 403: site
+create, file write/create/upload/compress, deploy (also by webhook), git
+checkout/rollback, backup restore, and transfer to that user. Usage is checked
+every 5 minutes; the user and admins are notified at 80% and 100%. Writes
+outside the panel (SSH/FTP, cron, PHP) are not blocked, only reported.
 | POST | `/users/:id/impersonate` | admin | Impersonate (requires `RequireUserSession`) |
 
 ## Servers

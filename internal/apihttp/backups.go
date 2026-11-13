@@ -205,6 +205,10 @@ func (h *backupHandler) restore(c echo.Context) error {
 	if backup.Status != "completed" {
 		return echo.NewHTTPError(http.StatusConflict, "backup not completed (status="+backup.Status+")")
 	}
+	if err := checkSiteDiskQuota(c.Request().Context(), h.store, site, 0); err != nil {
+		return err
+	}
+	siteDisk.grew(site.ID, 0)
 	// Build payload with optional S3 config
 	backupPath := backup.StoragePath.String
 	if backup.S3Path.Valid && backup.S3Path.String != "" {

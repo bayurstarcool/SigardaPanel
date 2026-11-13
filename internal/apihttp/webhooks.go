@@ -92,6 +92,18 @@ func (h *webhookHandler) deploy(c echo.Context) error {
 		}
 	}
 
+	// Over the owner's disk limit: refuse, and tell the site's users (the git
+	// host only shows the failed delivery).
+	if qerr := checkSiteDiskQuota(c.Request().Context(), h.store, site, 0); qerr != nil {
+		msg := "disk limit reached"
+		if he, ok := qerr.(*echo.HTTPError); ok {
+			msg = fmt.Sprint(he.Message)
+		}
+		h.store.NotifySiteUsers(c.Request().Context(), site.ID, "disk_quota", "Webhook deploy refused: "+site.Domain, msg, "error", "site", site.ID)
+		return c.JSON(http.StatusForbidden, map[string]any{"ok": false, "message": msg})
+	}
+	siteDisk.grew(site.ID, 0)
+
 	branch := site.GitBranch.String
 	if branch == "" {
 		branch = "main"

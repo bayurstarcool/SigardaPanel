@@ -16,7 +16,7 @@
   let users = $state<any[]>([]);
   let loading = $state(true);
   let showCreate = $state(false);
-  let form = $state({ username: '', email: '', password: '', role: 'user' });
+  let form = $state<{ username: string; email: string; password: string; role: string; disk_limit: number | null; max_sites: number | null }>({ username: '', email: '', password: '', role: 'user', disk_limit: null, max_sites: null });
   let busy = $state(false);
 
   // Search
@@ -63,9 +63,9 @@
     if (!form.username || !form.email || !form.password) return;
     busy = true;
     try {
-      await apiFetch(auth.token, 'POST', 'users', form);
+      await apiFetch(auth.token, 'POST', 'users', { ...form, disk_limit: form.disk_limit || 0, max_sites: form.max_sites || 0 });
       showCreate = false;
-      form = { username: '', email: '', password: '', role: 'user' };
+      form = { username: '', email: '', password: '', role: 'user', disk_limit: null, max_sites: null };
       const d = await apiFetch(auth.token, 'GET', 'users');
       users = d?.users || [];
       toasts.success('User created successfully');
@@ -287,6 +287,16 @@
             <option value="super_admin">Super Admin</option>
           {/if}
         </select>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label for="usr-disk" class="label">Disk limit (GB)</label>
+          <input id="usr-disk" type="number" min="0" step="1" bind:value={form.disk_limit} class="input" placeholder="Unlimited" />
+        </div>
+        <div>
+          <label for="usr-max" class="label">Max sites</label>
+          <input id="usr-max" type="number" min="0" step="1" bind:value={form.max_sites} class="input" placeholder="Unlimited" />
+        </div>
       </div>
     </div>
     {#snippet footer()}

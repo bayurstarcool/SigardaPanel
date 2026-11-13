@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -338,69 +336,33 @@ func (h *userHandler) usage(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "user not found")
 	}
 
-	isAdminUser := auth.HasRole(user.Role, auth.RoleAdmin)
-
-	// For admin/super_admin: show total server disk usage and all sites.
-	// For regular users: show only their owned + assigned sites.
-	var sitesToMeasure []store.Site
-	var totalSites int
-
-	if isAdminUser {
-		// Admin sees all sites
-		allSites, err := h.store.Sites.List(c.Request().Context(), store.SiteListFilter{Limit: 500})
-		if err == nil {
-			sitesToMeasure = allSites
-			totalSites = len(allSites)
-		}
-	} else {
-		// Regular user: owned + assigned
-		ownedSites, err := h.store.Sites.List(c.Request().Context(), store.SiteListFilter{OwnerID: id, Limit: 500})
-		if err == nil {
-			sitesToMeasure = append(sitesToMeasure, ownedSites...)
-		}
-		assignedSites, _ := h.store.UserSites.ListByUser(c.Request().Context(), id)
-		totalSites = len(ownedSites) + len(assignedSites)
-
-		// Add assigned sites to measure (avoid double-count)
-		countedIDs := make(map[int64]bool, len(ownedSites))
-		for _, s := range ownedSites {
-			countedIDs[s.ID] = true
-		}
-		for _, as := range assignedSites {
-			if countedIDs[as.SiteID] {
-				continue
-			}
-			site, err := h.store.Sites.GetByID(c.Request().Context(), as.SiteID)
-			if err != nil || site == nil {
-				continue
-			}
-			sitesToMeasure = append(sitesToMeasure, *site)
-			countedIDs[as.SiteID] = true
-		}
+	// Usage is what the limits apply to: the sites the user owns, measured on
+	// each site's server (cached briefly). Sites they are only assigned to
+	// count against their owners.
+	disk, ownedCount, err := ownedDiskUsage(c.Request().Context(), h.store, id, siteDiskWait)
+	if err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
-
-	// Calculate real disk usage from site root_path directories
-	var diskUsedBytes int64
-	for _, site := range sitesToMeasure {
-		if site.RootPath == "" {
-			continue
+	assigned := 0
+	if as, err := h.store.UserSites.ListByUser(c.Request().Context(), id); err == nil {
+		owned := map[int64]bool{}
+		if sites, err := h.store.Sites.List(c.Request().Context(), store.SiteListFilter{OwnerID: id, Limit: maxOwnedSites}); err == nil {
+			for _, s := range sites {
+				owned[s.ID] = true
+			}
 		}
-		out, err := execCommand("du", "-sb", site.RootPath)
-		if err == nil {
-			parts := strings.SplitN(out, "	", 2)
-			if len(parts) >= 1 {
-				if sz, parseErr := strconv.ParseInt(parts[0], 10, 64); parseErr == nil {
-					diskUsedBytes += sz
-				}
+		for _, a := range as {
+			if !owned[a.SiteID] {
+				assigned++
 			}
 		}
 	}
-
-	// Convert disk_limit from GB to bytes for the response
-	var diskLimitBytes int64
-	if user.DiskLimit.Valid && user.DiskLimit.Int64 > 0 {
-		diskLimitBytes = user.DiskLimit.Int64 * 1024 * 1024 * 1024
+	var measuredAt any
+	if !disk.MeasuredAt.IsZero() {
+		measuredAt = disk.MeasuredAt.UTC().Format(time.RFC3339)
 	}
+	limitBytes := diskLimitBytes(user)
 
 	var maxSites *int64
 	if user.MaxSites.Valid {
@@ -410,24 +372,19 @@ func (h *userHandler) usage(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
-			"user_id":          id,
-			"disk_used_bytes":  diskUsedBytes,
-			"disk_limit_bytes": diskLimitBytes,
-			"disk_limit_gb":    user.DiskLimit.Int64,
-			"disk_unlimited":   !user.DiskLimit.Valid || user.DiskLimit.Int64 == 0,
-			"site_count":       totalSites,
-			"max_sites":        maxSites,
+			"user_id":               id,
+			"disk_used_bytes":       disk.Bytes,
+			"disk_measured_sites":   disk.Measured,
+			"disk_unmeasured_sites": disk.Unmeasured,
+			"disk_measured_at":      measuredAt,
+			"disk_limit_bytes":      limitBytes,
+			"disk_limit_gb":         user.DiskLimit.Int64,
+			"disk_unlimited":        limitBytes == 0,
+			"disk_over_limit":       limitBytes > 0 && disk.Bytes >= limitBytes,
+			"site_count":            ownedCount,
+			"assigned_site_count":   assigned,
+			"max_sites":             maxSites,
 		},
 		RequestID: rid,
 	})
-}
-
-// execCommand runs a command and returns stdout as string.
-func execCommand(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
 }

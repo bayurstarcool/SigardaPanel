@@ -184,9 +184,14 @@ func (h *fileManagerHandler) writeFile(c echo.Context) error {
 	if err := c.Bind(&body); err != nil || body.Path == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "path required")
 	}
+	if err := checkSiteDiskQuota(c.Request().Context(), h.store, site, int64(len(body.Content))); err != nil {
+		return err
+	}
 	if _, err := h.fileOp(c, site, "write", map[string]any{"path": body.Path, "content": body.Content}); err != nil {
 		return err
 	}
+	siteDisk.grew(site.ID, 0) // a rewrite may shrink or grow the file
+
 	h.auditFile(c, site, map[string]any{"action": "file_write", "path": body.Path, "item_type": "file", "is_dir": false})
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "File saved"}, RequestID: rid})
 }
@@ -204,6 +209,9 @@ func (h *fileManagerHandler) createEntry(c echo.Context) error {
 	}
 	if err := c.Bind(&body); err != nil || body.Path == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "path required")
+	}
+	if err := checkSiteDiskQuota(c.Request().Context(), h.store, site, 0); err != nil {
+		return err
 	}
 	if _, err := h.fileOp(c, site, "create", map[string]any{"path": body.Path, "is_dir": body.IsDir}); err != nil {
 		return err
@@ -227,6 +235,9 @@ func (h *fileManagerHandler) deleteEntry(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	// Freed space should count at once: drop the cached value, so the next
+	// quota check or usage read measures again instead of using the old one.
+	siteDisk.forget(site.ID)
 	isDir, _ := out["is_dir"].(bool)
 	h.auditFile(c, site, map[string]any{"action": "file_delete", "path": relPath, "item_type": fileAuditItemType(isDir), "is_dir": isDir})
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Deleted"}, RequestID: rid})
@@ -270,6 +281,9 @@ func (h *fileManagerHandler) uploadFile(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "file field required")
 	}
+	if err := checkSiteDiskQuota(c.Request().Context(), h.store, site, src.Size); err != nil {
+		return err
+	}
 	fh, err := src.Open()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to open upload")
@@ -303,6 +317,7 @@ func (h *fileManagerHandler) uploadFile(c echo.Context) error {
 		}
 		return agentHTTPError(resp.StatusCode, out)
 	}
+	siteDisk.grew(site.ID, src.Size)
 	h.auditFile(c, site, map[string]any{"action": "file_upload", "path": out["path"], "size": out["size"], "item_type": "file", "is_dir": false})
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data:      map[string]any{"status": "success", "message": "Uploaded", "name": out["name"], "size": out["size"], "path": out["path"]},
@@ -401,10 +416,15 @@ func (h *fileManagerHandler) compressEntries(c echo.Context) error {
 	if len(body.Paths) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "paths required")
 	}
+	if err := checkSiteDiskQuota(c.Request().Context(), h.store, site, 0); err != nil {
+		return err
+	}
 	out, err := h.fileOp(c, site, "compress", map[string]any{"paths": body.Paths, "name": body.Name, "dest": body.Dest})
 	if err != nil {
 		return err
 	}
+	archiveSize, _ := out["size"].(float64)
+	siteDisk.grew(site.ID, int64(archiveSize))
 	h.auditFile(c, site, map[string]any{"action": "file_compress", "count": len(body.Paths), "archive": filepath.Join(body.Dest, fmt.Sprint(out["archive"])), "size": out["size"]})
 	return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"status": "success", "message": "Compressed", "archive": out["archive"], "size": out["size"]}, RequestID: rid})
 }
