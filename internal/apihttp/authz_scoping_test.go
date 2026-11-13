@@ -639,6 +639,10 @@ func TestSiteChildResources_ScopedToSite(t *testing.T) {
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "PRIVATE-KEY-B") {
 		t.Errorf("ssh listing must not include private keys: %d %s", rec.Code, rec.Body.String())
 	}
+	// Removing a cron job reinstalls the site's cron file through its agent.
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"ok":true}`)) }))
+	defer agent.Close()
+	f.s.DB().Exec(`UPDATE servers SET agent_url = ?, agent_token = 't' WHERE id = ?`, agent.URL, siteB.ServerID)
 	f.run([]authzCase{
 		{"owner deletes own cron", "DELETE", sitePath(siteB, "/cron/"+itoa(cron.ID)), nil, bTok, http.StatusOK},
 		{"owner deletes own ip rule", "DELETE", sitePath(siteB, "/ip-restrictions/"+itoa(rule.ID)), nil, bTok, http.StatusOK},
