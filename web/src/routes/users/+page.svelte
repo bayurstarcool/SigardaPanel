@@ -10,7 +10,6 @@
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import { Users, Search, Trash2, RefreshCw, X, Plus, Loader2, Check, Shield, Key, LogIn, Settings } from 'lucide-svelte';
   import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
   import { toasts } from '$lib/toast.svelte';
 
   let users = $state<any[]>([]);
@@ -114,7 +113,8 @@
     impersonateBusy = true;
     try {
       await auth.impersonateUser(u.id);
-      goto('/sites');
+      // Full load: menus, sidebar usage and caches belong to the new identity.
+      window.location.assign('/sites');
     } catch (e: any) {
       toasts.error(e.message || 'Impersonation failed');
       impersonateBusy = false;
