@@ -1725,7 +1725,7 @@ func (r *Router) dumpDatabase(ctx context.Context, dbType, dbUser, dbPassword, d
 	case "postgres":
 		env := []string{"PGPASSWORD=" + dbPassword}
 		return r.executor.RunToFileEnv(ctx, env, dumpFile, "pg_dump",
-			"-U"+dbUser, "-h", "localhost", "--no-owner", "--no-acl", dbName)
+			"-U"+dbUser, "-h", "localhost", "--no-owner", "--no-acl", "--clean", "--if-exists", dbName)
 	default:
 		return errUnsupportedDBType.Error(), errUnsupportedDBType
 	}
@@ -1773,11 +1773,12 @@ func normalizeS3Endpoint(endpoint string) string {
 func (r *Router) backupRestoreTask(c echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
-		BackupID   int64  `json:"backup_id"`
-		SiteID     int64  `json:"site_id"`
-		Domain     string `json:"domain"`
-		BackupPath string `json:"backup_path"`
-		RootPath   string `json:"root_path"`
+		BackupID   int64             `json:"backup_id"`
+		SiteID     int64             `json:"site_id"`
+		Domain     string            `json:"domain"`
+		BackupPath string            `json:"backup_path"`
+		RootPath   string            `json:"root_path"`
+		Databases  []restoreDatabase `json:"databases"`
 		S3Config   *struct {
 			Bucket    string `json:"bucket"`
 			Endpoint  string `json:"endpoint"`
@@ -1806,7 +1807,11 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, "ensure dir failed: "+err.Error())
 		}
 
-		localFile := filepath.Join(siteBackupDir, fmt.Sprintf("restore_%d.tar.gz", payload.BackupID))
+		ext := ".tar.gz"
+		if isSQLDump(backupPath) {
+			ext = ".sql"
+		}
+		localFile := filepath.Join(siteBackupDir, fmt.Sprintf("restore_%d%s", payload.BackupID, ext))
 		endpoint := normalizeS3Endpoint(payload.S3Config.Endpoint)
 		awsArgs := []string{
 			"s3", "cp", backupPath, localFile,
@@ -1837,6 +1842,19 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "backup file not found")
 	}
 
+	// A database backup is a single SQL dump: import it, files stay as they are.
+	if isSQLDump(backupPath) {
+		db, ok := pickDumpDatabase(payload.Databases, filepath.Base(backupPath))
+		if !ok {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "none of the site's databases matches this dump; recreate the database first")
+		}
+		if out, err := r.importDatabaseDump(ctx, db, backupPath); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "database import failed: "+strings.TrimSpace(out+" "+err.Error()))
+		}
+		slog.Info("agent: backup.restore (database)", "backup_id", payload.BackupID, "db", db.Name)
+		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "database " + db.Name + " restored", "databases_restored": []string{db.Name}})
+	}
+
 	tmpDir, err := os.MkdirTemp(r.backupDir, "restore-*")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "create restore temp dir failed: "+err.Error())
@@ -1852,6 +1870,13 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 	extractedRoot := filepath.Join(tmpDir, filepath.Base(payload.RootPath))
 	if exists, _ := r.executor.Stat(ctx, extractedRoot); !exists {
 		return echo.NewHTTPError(http.StatusInternalServerError, "backup archive missing expected site root")
+	}
+
+	// A full backup carries database dumps: import them before the files are
+	// swapped, so a failed import leaves the site's files untouched.
+	dbsRestored, dbsSkipped, err := r.importBundleDumps(ctx, filepath.Join(tmpDir, "database_dumps"), payload.Databases)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "database "+err.Error()+" (site files left unchanged)")
 	}
 	if err := os.MkdirAll(filepath.Dir(payload.RootPath), 0755); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "create parent dir failed: "+err.Error())
@@ -1926,11 +1951,20 @@ func (r *Router) backupRestoreTask(c echo.Context) error {
 
 	slog.Info("agent: backup.restore", "backup_id", payload.BackupID, "site_id", payload.SiteID)
 
+	msg := "backup restored"
+	if len(dbsRestored) > 0 {
+		msg += "; databases imported: " + strings.Join(dbsRestored, ", ")
+	}
+	if len(dbsSkipped) > 0 {
+		msg += "; dumps without a matching database skipped: " + strings.Join(dbsSkipped, ", ")
+	}
 	return c.JSON(http.StatusOK, map[string]any{
-		"ok":              true,
-		"files_extracted": filesExtracted,
-		"message":         "backup restored",
-		"root_path":       payload.RootPath,
+		"ok":                 true,
+		"files_extracted":    filesExtracted,
+		"message":            msg,
+		"root_path":          payload.RootPath,
+		"databases_restored": dbsRestored,
+		"databases_skipped":  dbsSkipped,
 	})
 }
 

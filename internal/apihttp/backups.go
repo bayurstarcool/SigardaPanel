@@ -217,6 +217,22 @@ func (h *backupHandler) restore(c echo.Context) error {
 		"backup_path": backupPath,
 		"root_path":   site.RootPath,
 	}
+	// The site's databases, so the agent can import the dumps of a full
+	// backup or a database backup (MySQL imports run as root on the server;
+	// PostgreSQL needs the database's own account).
+	if dbs, err := h.store.Databases.ListBySite(c.Request().Context(), site.ID); err == nil && len(dbs) > 0 {
+		list := make([]map[string]string, 0, len(dbs))
+		for _, d := range dbs {
+			entry := map[string]string{"name": d.Name, "type": d.Type}
+			if !strings.EqualFold(d.Type, "mysql") && !strings.EqualFold(d.Type, "mariadb") {
+				if u, pw, err := h.store.DatabaseBackupCredentials(c.Request().Context(), d); err == nil {
+					entry["user"], entry["password"] = u, pw
+				}
+			}
+			list = append(list, entry)
+		}
+		payloadMap["databases"] = list
+	}
 	// If backup is on S3, include s3_config so agent can download first
 	if strings.HasPrefix(backupPath, "s3://") && backup.StorageType != "local" {
 		provider := h.store.BackupProviderFor(c.Request().Context(), backup, site)
