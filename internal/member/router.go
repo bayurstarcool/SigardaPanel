@@ -1,4 +1,5 @@
 package member
+
 import "sigardapanel/internal/auth"
 
 import (

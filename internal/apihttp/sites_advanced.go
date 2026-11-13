@@ -486,7 +486,7 @@ func (h *siteHandler) createSshFtp(c *echo.Context) error {
 	code, out, err := h.siteAgentCall(ctx, site, http.MethodPost, "/tasks/sshftp/create", map[string]any{
 		"username": body.Username, "site_root": site.RootPath, "ssh_keys": body.SSHKeys,
 		"system_user": site.SystemUser.String,
-		"accounts": h.sshAccountsOnServer(ctx, site.ServerID, "", body.Username),
+		"accounts":    h.sshAccountsOnServer(ctx, site.ServerID, "", body.Username),
 	}, 3*time.Minute)
 	if err != nil && code == 0 {
 		return echo.NewHTTPError(http.StatusBadGateway, "the site's agent is unreachable")

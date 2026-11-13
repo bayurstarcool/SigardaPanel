@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
-	"golang.org/x/crypto/bcrypt"
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/httpjson"
@@ -99,11 +99,11 @@ func (h *Handler) Register(c *echo.Context) error {
 
 	return c.JSON(http.StatusCreated, httpjson.Success{
 		Data: map[string]any{
-			"id":       m.ID,
-			"name":     m.Name,
-			"email":    m.Email,
-			"plan":     m.Plan,
-			"message":  "account created successfully",
+			"id":      m.ID,
+			"name":    m.Name,
+			"email":   m.Email,
+			"plan":    m.Plan,
+			"message": "account created successfully",
 		},
 		RequestID: rid,
 	})
@@ -163,12 +163,12 @@ func (h *Handler) Login(c *echo.Context) error {
 		Data: map[string]any{
 			"token": token,
 			"member": map[string]any{
-				"id":       m.ID,
-				"name":     m.Name,
-				"email":    m.Email,
-				"plan":     m.Plan,
-				"company":  m.Company,
-				"status":   m.Status,
+				"id":      m.ID,
+				"name":    m.Name,
+				"email":   m.Email,
+				"plan":    m.Plan,
+				"company": m.Company,
+				"status":  m.Status,
 			},
 		},
 		RequestID: rid,
@@ -187,12 +187,12 @@ func (h *Handler) Me(c *echo.Context) error {
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
-			"id":       m.ID,
-			"name":     m.Name,
-			"email":    m.Email,
-			"plan":     m.Plan,
-			"company":  m.Company,
-			"status":   m.Status,
+			"id":      m.ID,
+			"name":    m.Name,
+			"email":   m.Email,
+			"plan":    m.Plan,
+			"company": m.Company,
+			"status":  m.Status,
 		},
 		RequestID: rid,
 	})
