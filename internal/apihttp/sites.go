@@ -507,7 +507,9 @@ func (h *siteHandler) delete(c echo.Context) error {
 	// SSH/FTP jails bind-mount the site root: remove them on the server
 	// first (their rows used to vanish with the site while the Linux users,
 	// mounts and keys stayed, and lost their chroot on the next sshd sync).
-	h.removeSiteSSHAccounts(c.Request().Context(), site)
+	if err := h.removeSiteSSHAccounts(c.Request().Context(), site); err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, err.Error()+"; the site was not deleted")
+	}
 	// Its cron jobs would otherwise keep running from a deleted root.
 	if jobs, _ := h.store.Cron.ListBySiteID(c.Request().Context(), id); len(jobs) > 0 {
 		if err := h.syncSiteCron(c.Request().Context(), site, nil); err != nil {
