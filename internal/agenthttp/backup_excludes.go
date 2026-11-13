@@ -1,6 +1,7 @@
 package agenthttp
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -70,7 +71,22 @@ func matchesExclude(rel string, patterns []string) bool {
 
 // carryExcluded moves excluded paths from the previous root into the
 // restored one (unless the archive brought its own copy).
+//
+// The restored tree comes from an archive the site owner controls and may
+// contain symlinks (e.g. logs -> /etc/cron.d): every move goes through an
+// os.Root on the shared parent directory, which refuses any path that
+// leaves it, so nothing can be written outside the site's own directory.
 func carryExcluded(oldRoot, newRoot string, patterns []string) {
+	parent := filepath.Dir(newRoot)
+	if filepath.Dir(oldRoot) != parent {
+		return
+	}
+	pr, err := os.OpenRoot(parent)
+	if err != nil {
+		return
+	}
+	defer pr.Close()
+	oldBase, newBase := filepath.Base(oldRoot), filepath.Base(newRoot)
 	_ = filepath.WalkDir(oldRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || p == oldRoot {
 			return nil
@@ -79,15 +95,18 @@ func carryExcluded(oldRoot, newRoot string, patterns []string) {
 		if rerr != nil || !matchesExclude(filepath.ToSlash(rel), patterns) {
 			return nil
 		}
-		dst := filepath.Join(newRoot, rel)
-		if _, err := os.Lstat(dst); err == nil {
+		dst := filepath.Join(newBase, rel)
+		if _, err := pr.Lstat(dst); err == nil {
+			return nil // the archive has it (a directory: descend for missing parts)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			// Unreachable beneath the parent (e.g. through a symlink out).
 			if d.IsDir() {
-				return nil // descend: parts of it may be missing
+				return filepath.SkipDir
 			}
 			return nil
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err == nil {
-			if err := movePath(p, dst); err != nil {
+		if err := pr.MkdirAll(filepath.Dir(dst), 0o755); err == nil {
+			if err := pr.Rename(filepath.Join(oldBase, rel), dst); err != nil {
 				slog.Warn("agent: backup.restore could not keep excluded path", "path", rel, "error", err)
 			}
 		}

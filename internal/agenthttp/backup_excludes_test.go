@@ -31,7 +31,10 @@ func TestExcludePatterns(t *testing.T) {
 }
 
 func TestCarryExcludedKeepsWhatTheArchiveLeftOut(t *testing.T) {
-	old, restored := t.TempDir(), t.TempDir()
+	parent := t.TempDir()
+	old, restored := filepath.Join(parent, "site.restore-old-1"), filepath.Join(parent, "site")
+	os.MkdirAll(old, 0o755)
+	os.MkdirAll(restored, 0o755)
 	os.MkdirAll(filepath.Join(old, "app", "node_modules", "pkg"), 0o755)
 	os.WriteFile(filepath.Join(old, "app", "node_modules", "pkg", "i.js"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(old, "debug.log"), []byte("log"), 0o644)
@@ -75,5 +78,19 @@ func TestBackupCreateHonoursExcludePatterns(t *testing.T) {
 	if strings.Contains(list, "node_modules") || strings.Contains(list, "debug.log") ||
 		!strings.Contains(list, "ex.example.com/index.php") || !strings.Contains(list, excludeManifest) {
 		t.Fatalf("archive contents:\n%s", list)
+	}
+}
+
+// A symlink in the (user-controlled) archive must not redirect the move.
+func TestCarryExcludedNeverWritesThroughArchiveSymlinks(t *testing.T) {
+	parent, outside := t.TempDir(), t.TempDir()
+	old, restored := filepath.Join(parent, "site.restore-old-1"), filepath.Join(parent, "site")
+	os.MkdirAll(filepath.Join(old, "logs"), 0o755)
+	os.WriteFile(filepath.Join(old, "logs", "a.log"), []byte("* * * * * root evil"), 0o644)
+	os.MkdirAll(restored, 0o755)
+	os.Symlink(outside, filepath.Join(restored, "logs"))
+	carryExcluded(old, restored, []string{"*.log"})
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("file written outside the site through a symlink: %v", entries)
 	}
 }
