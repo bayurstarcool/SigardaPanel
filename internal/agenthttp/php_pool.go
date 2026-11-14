@@ -67,9 +67,29 @@ func (r *Router) poolUser(name string) (*poolSiteUser, bool) {
 	return defaultPoolUserLookup(name)
 }
 
-// poolDir is where a PHP version keeps its pool definitions.
+// canonicalPHPVersion rebuilds "<major>.<minor>" from its numbers, so a
+// version from a request never reaches a path or command name as given.
+func canonicalPHPVersion(version string) (string, bool) {
+	major, minor, ok := strings.Cut(version, ".")
+	if !ok {
+		return "", false
+	}
+	a, err1 := strconv.Atoi(major)
+	b, err2 := strconv.Atoi(minor)
+	if err1 != nil || err2 != nil || a < 5 || a > 99 || b < 0 || b > 99 {
+		return "", false
+	}
+	return fmt.Sprintf("%d.%d", a, b), true
+}
+
+// poolDir is where a PHP version keeps its pool definitions (a directory
+// that never exists for an invalid version).
 func (r *Router) poolDir(version string) string {
-	return filepath.Join(r.phpEtcDir, version, "fpm", "pool.d")
+	v, ok := canonicalPHPVersion(version)
+	if !ok {
+		return filepath.Join(r.phpEtcDir, ".invalid-version", "fpm", "pool.d")
+	}
+	return filepath.Join(r.phpEtcDir, v, "fpm", "pool.d")
 }
 
 // poolVersion picks the PHP version a site's pool uses: the requested one
@@ -230,7 +250,8 @@ func (r *Router) ensurePHPPool(ctx context.Context, siteID int64, requestedVersi
 		if err := writeFileAtomic(file, []byte(content), 0o644); err != nil {
 			return "", echo.NewHTTPError(http.StatusInternalServerError, "write PHP-FPM pool: "+err.Error())
 		}
-		if out, err := r.executor.RunShell(ctx, "php-fpm"+version, "-t"); err != nil {
+		fpmVersion, _ := canonicalPHPVersion(version)
+		if out, err := r.executor.RunShell(ctx, "php-fpm"+fpmVersion, "-t"); err != nil {
 			if hadPrevious {
 				_ = writeFileAtomic(file, previous, 0o644)
 			} else {

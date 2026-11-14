@@ -69,9 +69,11 @@ func Normalize(fp string) string {
 	return s
 }
 
-// Config returns a TLS config that accepts only a leaf certificate whose
-// fingerprint equals pin (chain and name are not used: the pin is the trust).
-func Config(serverName, pin string) *tls.Config {
+// PinVerifiedConfig returns a TLS config that accepts only a leaf
+// certificate whose fingerprint equals pin. Chain and name checks are off
+// (InsecureSkipVerify) because the agent's certificate is self-signed: the
+// exact fingerprint check in VerifyConnection is the verification.
+func PinVerifiedConfig(serverName, pin string) *tls.Config {
 	want := Normalize(pin)
 	return &tls.Config{
 		ServerName:         serverName,
@@ -126,7 +128,7 @@ func DialTLS(dial DialFunc) DialFunc {
 		if err != nil {
 			return nil, err
 		}
-		conn := tls.Client(raw, Config(host, pin))
+		conn := tls.Client(raw, PinVerifiedConfig(host, pin))
 		if err := conn.HandshakeContext(ctx); err != nil {
 			raw.Close()
 			return nil, err

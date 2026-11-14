@@ -80,7 +80,7 @@ func (r *Router) ensureSiteUser(ctx context.Context, name string) (*siteOwner, e
 			return &siteOwner{name: name, home: home}, nil
 		}
 	}
-	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	uid, err := strconv.ParseUint(u.Uid, 10, 31)
 	if err == nil && uid >= minSiteUserUID && uid != 65534 {
 		// An existing account is adopted only when it is an ordinary
 		// account: never one with sudo/docker/... or an SFTP jail account

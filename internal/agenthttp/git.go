@@ -290,8 +290,8 @@ func siteUserIDs(name string) (uid, gid uint32, ok bool) {
 	if err != nil || u.Uid == "0" {
 		return 0, 0, false
 	}
-	a, err1 := strconv.ParseUint(u.Uid, 10, 32)
-	b, err2 := strconv.ParseUint(u.Gid, 10, 32)
+	a, err1 := strconv.ParseUint(u.Uid, 10, 31)
+	b, err2 := strconv.ParseUint(u.Gid, 10, 31)
 	if err1 != nil || err2 != nil || a < minSiteUserUID || a == 65534 {
 		return 0, 0, false
 	}

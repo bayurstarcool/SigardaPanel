@@ -17,8 +17,8 @@ func (r *Router) postgresAdmin(ctx context.Context, db, sql string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("PostgreSQL is not installed on this server (no postgres account)")
 	}
-	uid, err1 := strconv.ParseUint(u.Uid, 10, 32)
-	gid, err2 := strconv.ParseUint(u.Gid, 10, 32)
+	uid, err1 := strconv.ParseUint(u.Uid, 10, 31)
+	gid, err2 := strconv.ParseUint(u.Gid, 10, 31)
 	if err1 != nil || err2 != nil || uid == 0 {
 		return "", fmt.Errorf("unexpected postgres account")
 	}
