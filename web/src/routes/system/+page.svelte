@@ -7,7 +7,9 @@
   import StatCard from '$components/StatCard.svelte';
   import EmptyState from '$components/EmptyState.svelte';
   import { HardDrive, Cpu, MemoryStick, RefreshCw, Package, ArrowUpCircle, Activity, ArrowDown, ArrowUp, Server, LoaderCircle, MonitorCog } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
+  import ServerRequired from '$components/ServerRequired.svelte';
 
   let servers = $state<any[]>([]);
   let serversLoaded = $state(false);
@@ -23,17 +25,17 @@
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    try {
-      const d: any = await apiFetch(auth.token, 'GET', 'servers');
-      servers = d?.servers ?? [];
-    } catch (e: any) {
-      if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load servers');
-    }
+    await serverCtx.ensure();
+    servers = serverCtx.servers;
     serversLoaded = true;
-    if (servers.length > 0) {
-      selectedServer = servers[0].id;
-      refresh();
-    }
+  });
+
+  // The server comes from the header switcher (serverCtx); 0 = not chosen yet.
+  $effect(() => {
+    const id = serverCtx.pageServerId;
+    if (!serversLoaded || id === selectedServer) return;
+    selectedServer = id;
+    if (id) untrack(() => changeServer());
   });
 
   function refresh() {
@@ -126,16 +128,15 @@
 <DashboardLayout active="System">
   <PageHeader title="System" description={loading ? 'Loading…' : 'Server resources and hardware'}>
     {#snippet actions()}
-      {#if servers.length > 1}
-        <select bind:value={selectedServer} onchange={changeServer} class="input h-8 w-auto min-w-40 text-[13px]" aria-label="Server">
-          {#each servers as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
-        </select>
-      {/if}
       <button onclick={refresh} class="btn btn-secondary btn-sm" disabled={loading || !selectedServer}>
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
     {/snippet}
   </PageHeader>
+
+  {#if serversLoaded && !selectedServer && servers.length > 1}
+    <ServerRequired feature="System" />
+  {:else}
 
   {#if serversLoaded && servers.length === 0}
     <div class="card">
@@ -215,5 +216,6 @@
         </div>
       </div>
     {/if}
+  {/if}
   {/if}
 </DashboardLayout>

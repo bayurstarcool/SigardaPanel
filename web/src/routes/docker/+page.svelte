@@ -10,7 +10,9 @@
   import CreateContainerModal from './CreateContainerModal.svelte';
   import ImagePuller from './ImagePuller.svelte';
   import { Box, Play, Square, RotateCcw, Trash2, ScrollText, RefreshCw, HardDrive, Network, Layers, Info, Plus, Search, LoaderCircle, Server } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
+  import ServerRequired from '$components/ServerRequired.svelte';
 
   type Tab = 'containers' | 'images' | 'volumes' | 'networks' | 'system';
   type Pending = { kind: 'container' | 'image' | 'volume' | 'network'; id: string; label: string };
@@ -47,17 +49,20 @@
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    try {
-      const d: any = await apiFetch(auth.token, 'GET', 'servers');
-      servers = d?.servers ?? [];
-    } catch (e: any) {
-      if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load servers');
-    }
+    await serverCtx.ensure();
+    servers = serverCtx.servers;
     serversLoaded = true;
-    if (servers.length > 0) {
-      selectedServer = servers[0].id;
-      loadAll();
-    }
+  });
+
+  // Named in confirmations of destructive actions.
+  const serverName = $derived(serverCtx.nameOf(selectedServer));
+
+  // The server comes from the header switcher (serverCtx); 0 = not chosen yet.
+  $effect(() => {
+    const id = serverCtx.pageServerId;
+    if (!serversLoaded || id === selectedServer) return;
+    selectedServer = id;
+    if (id) untrack(() => changeServer());
   });
 
   // Generic loader: tracks loading + error per resource so each tab can render its own state.
@@ -198,11 +203,6 @@
 <DashboardLayout active="Docker">
   <PageHeader title="Docker" description={servers.length ? description : ''}>
     {#snippet actions()}
-      {#if servers.length > 1}
-        <select bind:value={selectedServer} onchange={changeServer} class="input h-8 w-auto min-w-40 text-[13px]" aria-label="Server">
-          {#each servers as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
-        </select>
-      {/if}
       {#if servers.length > 0}
         <button onclick={loadAll} class="btn btn-secondary btn-sm" disabled={loading.containers}>
           <RefreshCw size={14} class={loading.containers ? 'animate-spin' : ''} /> Refresh
@@ -213,6 +213,10 @@
       {/if}
     {/snippet}
   </PageHeader>
+
+  {#if serversLoaded && !selectedServer && servers.length > 1}
+    <ServerRequired feature="Docker" />
+  {:else}
 
   {#if serversLoaded && servers.length === 0}
     <div class="card">
@@ -486,10 +490,11 @@
 
   <ConfirmDialog
     bind:open={confirmOpen}
-    title={confirmTarget ? `Remove ${confirmTarget.kind}?` : 'Remove?'}
+    title={`Remove ${confirmTarget?.kind ?? 'item'} on ${serverName}?`}
     message={confirmMessage}
     confirmLabel="Remove"
     destructive
     onconfirm={doRemove}
   />
+  {/if}
 </DashboardLayout>

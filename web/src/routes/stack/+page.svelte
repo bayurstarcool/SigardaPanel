@@ -1,6 +1,5 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
-  import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import EmptyState from '$components/EmptyState.svelte';
@@ -8,20 +7,22 @@
   import { Server, ChevronRight } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
 
   let servers = $state<any[]>([]);
   let loading = $state(true);
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    try {
-      const d: any = await apiFetch(auth.token, 'GET', 'servers');
-      servers = d?.servers ?? [];
-    } catch (e: any) {
-      if (e.message === 'session expired') return;
-    } finally {
-      loading = false;
-    }
+    await serverCtx.ensure();
+    servers = serverCtx.servers;
+    loading = false;
+  });
+
+  // A server chosen in the header (or the only one) opens its stack directly.
+  $effect(() => {
+    const id = serverCtx.pageServerId;
+    if (!loading && id) goto(`/stack/${id}`, { replaceState: true });
   });
 
   function agentState(s: any): { label: string; cls: string } {

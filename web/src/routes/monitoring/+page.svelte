@@ -10,8 +10,11 @@
   import MetricsGauge from '$components/MetricsGauge.svelte';
   import { Activity, Server, Clock, Copy, Check, Globe, Cpu, HardDrive, MemoryStick, Wifi, Database, BarChart3 } from 'lucide-svelte';
   import { onMount, untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
+  import ServerRequired from '$components/ServerRequired.svelte';
 
   let servers = $state<any[]>([]);
+  let serversLoaded = $state(false);
   let selectedServer = $state<number | null>(null);
   let latest = $state<any>(null);
   let history = $state<any[]>([]);
@@ -33,16 +36,19 @@
 
   async function fetchServers() {
     if (stopped || !auth.user) return;
-    try {
-      const data = await apiFetch(auth.token, 'GET', 'servers');
-      servers = data?.servers || [];
-      if (servers.length > 0 && !selectedServer) {
-        selectedServer = servers[0].id;
-      }
-    } catch (e: any) {
-      if (e.message === 'session expired') { stopped = true; stopAutoRefresh(); }
-    }
+    await serverCtx.ensure();
+    servers = serverCtx.servers;
+    serversLoaded = true;
   }
+
+  // The server comes from the header switcher (serverCtx).
+  $effect(() => {
+    const id = serverCtx.pageServerId;
+    if (!serversLoaded || id === (selectedServer ?? 0)) return;
+    untrack(() => { latest = null; history = []; latestError = ''; });
+    selectedServer = id || null;
+    if (!id) loading = false;
+  });
 
   async function fetchLatest() {
     if (stopped || !selectedServer || !auth.user) return;
@@ -168,14 +174,6 @@
 <DashboardLayout active="Monitoring">
   <PageHeader title="Monitoring" description="Real-time system metrics and historical data">
     {#snippet actions()}
-      {#if servers.length > 1}
-        <label for="mon-server" class="sr-only">Server</label>
-        <select id="mon-server" bind:value={selectedServer} class="input h-8 w-auto text-[13px]">
-          {#each servers as s (s.id)}
-            <option value={s.id}>{s.name}</option>
-          {/each}
-        </select>
-      {/if}
       <div class="segmented" role="group" aria-label="Range">
         {#each ranges as r (r.value)}
           <button onclick={() => (range = r.value)} class="segment {range === r.value ? 'segment-active' : ''}">{r.label}</button>
@@ -192,6 +190,10 @@
       </button>
     {/snippet}
   </PageHeader>
+
+  {#if serversLoaded && !selectedServer && servers.length > 1}
+    <ServerRequired feature="Monitoring" />
+  {:else}
 
   {#if loading && !latest}
     <div class="skeleton mb-6 h-28 rounded-xl"></div>
@@ -327,4 +329,5 @@
   <p class="mt-8 text-center text-xs text-subtle">
     Auto-refresh {autoRefresh ? 'on (10s, paused while the tab is hidden)' : 'off'} · Range {range}
   </p>
+  {/if}
 </DashboardLayout>

@@ -9,7 +9,9 @@
   import Modal from '$components/Modal.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import { Play, Square, RotateCcw, Trash2, ScrollText, RefreshCw, Save, Zap, Plus, Server, Layers, Activity, RotateCw, LoaderCircle, Search } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
+  import ServerRequired from '$components/ServerRequired.svelte';
 
   let servers = $state<any[]>([]);
   let serversLoaded = $state(false);
@@ -46,17 +48,25 @@
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    try {
-      const d: any = await apiFetch(auth.token, 'GET', 'servers');
-      servers = d?.servers ?? [];
-    } catch (e: any) {
-      if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load servers');
-    }
+    await serverCtx.ensure();
+    servers = serverCtx.servers;
     serversLoaded = true;
-    if (servers.length > 0) {
-      selectedServer = servers[0].id;
-      loadProcesses();
-    }
+  });
+
+  // Named in confirmations of destructive actions.
+  const serverName = $derived(serverCtx.nameOf(selectedServer));
+
+  // A new server: nothing of the previous one stays on screen.
+  function switchServer() {
+    processes = []; loadProcesses();
+  }
+
+  // The server comes from the header switcher (serverCtx); 0 = not chosen yet.
+  $effect(() => {
+    const id = serverCtx.pageServerId;
+    if (!serversLoaded || id === selectedServer) return;
+    selectedServer = id;
+    if (id) untrack(() => switchServer());
   });
 
   function loadProcesses() {
@@ -188,11 +198,6 @@
 <DashboardLayout active="PM2">
   <PageHeader title="PM2 processes" description={loading ? 'Loading…' : `${totalProcesses} process(es) · ${runningProcesses} online`}>
     {#snippet actions()}
-      {#if servers.length > 1}
-        <select bind:value={selectedServer} onchange={loadProcesses} class="input h-8 w-auto min-w-40 text-[13px]" aria-label="Server">
-          {#each servers as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
-        </select>
-      {/if}
       <button onclick={loadProcesses} class="btn btn-secondary btn-sm" disabled={loading || !selectedServer}>
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
@@ -207,6 +212,10 @@
       {/if}
     {/snippet}
   </PageHeader>
+
+  {#if serversLoaded && !selectedServer && servers.length > 1}
+    <ServerRequired feature="PM2" />
+  {:else}
 
   {#if serversLoaded && servers.length === 0}
     <div class="card">
@@ -349,10 +358,11 @@
 
   <ConfirmDialog
     bind:open={confirmOpen}
-    title="Delete process?"
+    title={`Delete process on ${serverName}?`}
     message={`Process "${confirmName}" will be removed from PM2. This cannot be undone.`}
     confirmLabel="Delete"
     destructive
     onconfirm={() => pm2Action(confirmName, 'delete')}
   />
+  {/if}
 </DashboardLayout>

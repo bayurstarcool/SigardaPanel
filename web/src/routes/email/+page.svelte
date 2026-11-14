@@ -8,7 +8,9 @@
   import Modal from '$components/Modal.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import { Mail, Server, Plus, Trash2, RefreshCw, Download, LoaderCircle, Users, Lock, WifiOff, Search, KeyRound } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
+  import ServerRequired from '$components/ServerRequired.svelte';
 
   let servers = $state<any[]>([]);
   let serversLoaded = $state(false);
@@ -40,17 +42,20 @@
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    try {
-      const d: any = await apiFetch(auth.token, 'GET', 'servers');
-      servers = d?.servers ?? [];
-    } catch (e: any) {
-      if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load servers');
-    }
+    await serverCtx.ensure();
+    servers = serverCtx.servers;
     serversLoaded = true;
-    if (servers.length > 0) {
-      selectedServer = servers[0].id;
-      loadStatus();
-    }
+  });
+
+  // Named in confirmations of destructive actions.
+  const serverName = $derived(serverCtx.nameOf(selectedServer));
+
+  // The server comes from the header switcher (serverCtx); 0 = not chosen yet.
+  $effect(() => {
+    const id = serverCtx.pageServerId;
+    if (!serversLoaded || id === selectedServer) return;
+    selectedServer = id;
+    if (id) untrack(() => changeServer());
   });
 
   function friendlyError(e: any, fallback: string): string {
@@ -178,11 +183,6 @@
 <DashboardLayout active="Email">
   <PageHeader title="Email" description="Postfix, Dovecot and mail accounts">
     {#snippet actions()}
-      {#if servers.length > 1}
-        <select bind:value={selectedServer} onchange={changeServer} class="input h-8 w-auto min-w-40 text-[13px]" aria-label="Server">
-          {#each servers as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
-        </select>
-      {/if}
       <button onclick={loadStatus} disabled={statusLoading || !selectedServer} class="btn btn-secondary btn-sm">
         <RefreshCw size={14} class={statusLoading ? 'animate-spin' : ''} /> Refresh
       </button>
@@ -191,6 +191,10 @@
       {/if}
     {/snippet}
   </PageHeader>
+
+  {#if serversLoaded && !selectedServer && servers.length > 1}
+    <ServerRequired feature="Email" />
+  {:else}
 
   {#if serversLoaded && servers.length === 0}
     <div class="card">
@@ -360,7 +364,7 @@
 
   <ConfirmDialog
     bind:open={confirmInstall}
-    title="Install email server?"
+    title={`Install email server on ${serverName}?`}
     message="Postfix, Dovecot and Roundcube will be installed on this server. This may take a few minutes."
     confirmLabel="Install"
     onconfirm={installEmail}
@@ -368,10 +372,11 @@
 
   <ConfirmDialog
     bind:open={confirmDelete}
-    title="Delete email account?"
+    title={`Delete email account on ${serverName}?`}
     message={`${deleteTarget} and its mailbox will be deleted. This cannot be undone.`}
     confirmLabel="Delete"
     destructive
     onconfirm={() => deleteAccount(deleteTarget)}
   />
+  {/if}
 </DashboardLayout>

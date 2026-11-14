@@ -7,9 +7,12 @@
   import EmptyState from '$components/EmptyState.svelte';
   import Modal from '$components/Modal.svelte';
   import { Bot, Shield, ShieldCheck, ShieldOff, Trash2, LoaderCircle, Ban, RefreshCw, FileCode, Server, ChevronRight } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
+  import ServerRequired from '$components/ServerRequired.svelte';
 
   let servers = $state<any[]>([]);
+  let serversLoaded = $state(false);
   let selectedServer = $state<number>(0);
   let enabled = $state(false);
   let loading = $state(true);
@@ -28,18 +31,23 @@
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    try {
-      const d: any = await apiFetch(auth.token, 'GET', 'servers');
-      servers = d?.servers ?? [];
-    } catch (e: any) {
-      if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load servers');
-    }
-    if (servers.length > 0) {
-      selectedServer = servers[0].id;
-      loadRules();
-    } else {
-      loading = false;
-    }
+    await serverCtx.ensure();
+    servers = serverCtx.servers;
+    serversLoaded = true;
+  });
+
+  // A new server: nothing of the previous one stays on screen.
+  function switchServer() {
+    enabled = false; rawConfig = ''; blockedAgents = []; blockedIPs = []; loadRules();
+  }
+
+  // The server comes from the header switcher (serverCtx); 0 = not chosen yet.
+  $effect(() => {
+    const id = serverCtx.pageServerId;
+    if (!serversLoaded || id === selectedServer) return;
+    selectedServer = id;
+    if (id) untrack(() => switchServer());
+    if (!id) { loading = false; }
   });
 
   function loadRules() {
@@ -111,11 +119,6 @@
       {/if}
     {/snippet}
     {#snippet actions()}
-      {#if servers.length > 1}
-        <select bind:value={selectedServer} onchange={loadRules} class="input h-8 w-auto min-w-40 text-[13px]" aria-label="Server">
-          {#each servers as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
-        </select>
-      {/if}
       <button onclick={loadRules} class="btn btn-secondary btn-sm" disabled={loading || !selectedServer}>
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
@@ -125,6 +128,10 @@
       {/if}
     {/snippet}
   </PageHeader>
+
+  {#if serversLoaded && !selectedServer && servers.length > 1}
+    <ServerRequired feature="The bot blocker" />
+  {:else}
 
   {#if !loading && servers.length === 0}
     <div class="card">
@@ -245,4 +252,5 @@
       </button>
     {/snippet}
   </Modal>
+  {/if}
 </DashboardLayout>

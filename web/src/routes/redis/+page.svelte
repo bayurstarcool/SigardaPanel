@@ -9,7 +9,9 @@
   import Modal from '$components/Modal.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import { Zap, Database, RefreshCw, Trash2, FileText, Users, MemoryStick, Target, Clock, Server, LoaderCircle } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
+  import ServerRequired from '$components/ServerRequired.svelte';
 
   let servers = $state<any[]>([]);
   let serversLoaded = $state(false);
@@ -27,17 +29,25 @@
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }
-    try {
-      const d: any = await apiFetch(auth.token, 'GET', 'servers');
-      servers = d?.servers ?? [];
-    } catch (e: any) {
-      if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load servers');
-    }
+    await serverCtx.ensure();
+    servers = serverCtx.servers;
     serversLoaded = true;
-    if (servers.length > 0) {
-      selectedServer = servers[0].id;
-      loadStats();
-    }
+  });
+
+  // Named in confirmations of destructive actions.
+  const serverName = $derived(serverCtx.nameOf(selectedServer));
+
+  // A new server: nothing of the previous one stays on screen.
+  function switchServer() {
+    stats = null; info = ''; loadStats();
+  }
+
+  // The server comes from the header switcher (serverCtx); 0 = not chosen yet.
+  $effect(() => {
+    const id = serverCtx.pageServerId;
+    if (!serversLoaded || id === selectedServer) return;
+    selectedServer = id;
+    if (id) untrack(() => switchServer());
   });
 
   function loadStats() {
@@ -107,11 +117,6 @@
 <DashboardLayout active="Redis">
   <PageHeader title="Redis" description={loading ? 'Loading…' : 'In-memory data store'}>
     {#snippet actions()}
-      {#if servers.length > 1}
-        <select bind:value={selectedServer} onchange={loadStats} class="input h-8 w-auto min-w-40 text-[13px]" aria-label="Server">
-          {#each servers as srv (srv.id)}<option value={srv.id}>{srv.name}</option>{/each}
-        </select>
-      {/if}
       <button onclick={loadStats} class="btn btn-secondary btn-sm" disabled={loading || !selectedServer}>
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
@@ -126,6 +131,10 @@
       {/if}
     {/snippet}
   </PageHeader>
+
+  {#if serversLoaded && !selectedServer && servers.length > 1}
+    <ServerRequired feature="Redis" />
+  {:else}
 
   {#if serversLoaded && servers.length === 0}
     <div class="card">
@@ -175,10 +184,11 @@
 
   <ConfirmDialog
     bind:open={confirmOpen}
-    title={confirmKind === 'all' ? 'Flush all Redis data?' : 'Flush database 0?'}
+    title={confirmKind === 'all' ? `Flush all Redis data on ${serverName}?` : `Flush database 0 on ${serverName}?`}
     message={confirmKind === 'all' ? 'Every key in every Redis database on this server is deleted. Caches and sessions stored in Redis will be lost.' : 'Every key in Redis database 0 is deleted.'}
     confirmLabel={confirmKind === 'all' ? 'Flush all' : 'Flush DB 0'}
     destructive
     onconfirm={doFlush}
   />
+  {/if}
 </DashboardLayout>
