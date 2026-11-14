@@ -12,7 +12,6 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
 	"sigardapanel/internal/audit"
-	"sigardapanel/internal/auth"
 	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/member"
@@ -104,6 +103,15 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	}
 
 	e.GET("/api/v1/auth/me", ah.me, RequireAuth(s))
+
+	// RBAC: permission registry and roles. Listing roles is for whoever
+	// assigns them (user.manage); custom roles are changed with role.manage.
+	roleH := newRoleHandler(s, auditRec)
+	e.GET("/api/v1/rbac/permissions", roleH.permissions, RequireAuth(s))
+	e.GET("/api/v1/roles", roleH.list, RequireAuth(s), RequirePermission(s, "user.manage"))
+	e.POST("/api/v1/roles", roleH.create, RequireAuth(s), RequireUserSession, RequirePermission(s, "role.manage"))
+	e.PATCH("/api/v1/roles/:id", roleH.update, RequireAuth(s), RequireUserSession, RequirePermission(s, "role.manage"))
+	e.DELETE("/api/v1/roles/:id", roleH.delete, RequireAuth(s), RequireUserSession, RequirePermission(s, "role.manage"))
 	// Email/password changes: the account holder's own interactive session
 	// only (not an API key, not an impersonating admin).
 	e.PUT("/api/v1/auth/profile", ah.updateProfile, RequireAuth(s), RequireUserSession, rejectImpersonation)
@@ -114,35 +122,35 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// User management (admin only). Real user sessions only: a service token
 	// carries no user, so it must not be able to manage (super) admins.
-	e.GET("/api/v1/users", uh.list, RequireAuth(s), RequireUserSession, RequireAdmin(s))
-	e.POST("/api/v1/users", uh.create, RequireAuth(s), RequireUserSession, RequireAdmin(s))
-	e.DELETE("/api/v1/users/:id", uh.delete, RequireAuth(s), RequireUserSession, RequireAdmin(s))
-	e.PATCH("/api/v1/users/:id", uh.update, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.GET("/api/v1/users", uh.list, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
+	e.POST("/api/v1/users", uh.create, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
+	e.DELETE("/api/v1/users/:id", uh.delete, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
+	e.PATCH("/api/v1/users/:id", uh.update, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
 
 	// User usage/quota (authenticated users can check their own)
 	e.GET("/api/v1/users/:id/usage", uh.usage, RequireAuth(s), RequireUserSession)
 
 	// User ↔ Site access mappings (admin only; assign/unassign/permission
 	// changes additionally require site owner or super_admin)
-	e.GET("/api/v1/users/:id/sites", uh.listUserSites, RequireAuth(s), RequireUserSession, RequireAdmin(s))
-	e.POST("/api/v1/users/:id/sites", uh.assignUserSite, RequireAuth(s), RequireUserSession, RequireAdmin(s))
-	e.DELETE("/api/v1/users/:id/sites/:siteId", uh.unassignUserSite, RequireAuth(s), RequireUserSession, RequireAdmin(s))
-	e.PATCH("/api/v1/users/:id/sites/:siteId", uh.updateSitePermission, RequireAuth(s), RequireUserSession, RequireAdmin(s))
-	e.GET("/api/v1/sites/:id/users", uh.listSiteUsers, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.GET("/api/v1/users/:id/sites", uh.listUserSites, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
+	e.POST("/api/v1/users/:id/sites", uh.assignUserSite, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
+	e.DELETE("/api/v1/users/:id/sites/:siteId", uh.unassignUserSite, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
+	e.PATCH("/api/v1/users/:id/sites/:siteId", uh.updateSitePermission, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
+	e.GET("/api/v1/sites/:id/users", uh.listSiteUsers, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
 
 	// Impersonation (admin only)
-	e.POST("/api/v1/users/:id/impersonate", ah.impersonate, RequireAuth(s), RequireAdmin(s), RequireUserSession)
+	e.POST("/api/v1/users/:id/impersonate", ah.impersonate, RequireAuth(s), RequirePermission(s, "user.impersonate"), RequireUserSession)
 
 	// Protected endpoints
 	sh := newServerHandler(s, auditRec)
 	e.GET("/api/v1/servers", sh.list, RequireAuth(s))
-	e.POST("/api/v1/servers", sh.create, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/servers", sh.create, RequireAuth(s), RequirePermission(s, "server.manage"))
 	e.GET("/api/v1/servers/:id", sh.get, RequireAuth(s))
-	e.PATCH("/api/v1/servers/:id", sh.update, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.DELETE("/api/v1/servers/:id", sh.delete, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.PATCH("/api/v1/servers/:id", sh.update, RequireAuth(s), RequirePermission(s, "server.manage"))
+	e.DELETE("/api/v1/servers/:id", sh.delete, RequireAuth(s), RequirePermission(s, "server.manage"))
 	e.GET("/api/v1/servers/health", sh.getHealthAll, RequireAuth(s))
 	e.GET("/api/v1/servers/:id/health", sh.getHealth, RequireAuth(s))
-	e.POST("/api/v1/servers/:id/token", sh.regenerateToken, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/servers/:id/token", sh.regenerateToken, RequireAuth(s), RequireUserSession, RequirePermission(s, "server.manage"))
 
 	sitesH := newSiteHandler(s, auditRec)
 	termH := newTerminalHandler(s, auditRec, sitesH)
@@ -158,8 +166,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/sites/:id/webhook", sitesH.webhookSecret, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/webhook/rotate", sitesH.webhookSecret, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/reload-nginx", sitesH.reloadNginx, RequireAuth(s))
-	e.POST("/api/v1/sites/:id/suspend", sitesH.suspend, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/sites/:id/resume", sitesH.resume, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/sites/:id/suspend", sitesH.suspend, RequireAuth(s), RequirePermission(s, "site.suspend"))
+	e.POST("/api/v1/sites/:id/resume", sitesH.resume, RequireAuth(s), RequirePermission(s, "site.suspend"))
 	e.POST("/api/v1/sites/:id/transfer", sitesH.transfer, RequireAuth(s))
 
 	// Public webhook endpoints (no auth)
@@ -174,14 +182,14 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	jobLogH := newJobLogHandler(s)
 	// Appending log lines is for the worker side (admin-scoped service
 	// tokens) and admins only.
-	e.POST("/api/v1/jobs/:id/logs", jobLogH.append, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/jobs/:id/logs", jobLogH.append, RequireAuth(s), RequirePermission(s, "job.logs.write"))
 	e.GET("/api/v1/jobs/:id/logs", jobLogH.getSince, RequireAuth(s))
 
 	sslH := newSSLHandler(s, auditRec)
 	e.GET("/api/v1/sites/:id/ssl", sslH.status, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/ssl/issue", sslH.issue, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/ssl/renew", sslH.renew, RequireAuth(s))
-	e.POST("/api/v1/ssl/renew-all", sslH.renewAll, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin)) // acts on every tenant's sites
+	e.POST("/api/v1/ssl/renew-all", sslH.renewAll, RequireAuth(s), RequireUserSession, RequirePermission(s, "ssl.renew_all")) // acts on every tenant's sites
 
 	// App process management (node/go/python runtimes)
 	e.GET("/api/v1/sites/:id/app/status", sitesH.appStatus, RequireAuth(s))
@@ -207,8 +215,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// Raw vhost text is accepted when nginx -t passes: include, access_log or
 	// proxy_pass in it read files, write files as root or reach the agent, so
 	// writing (and validating) it is super_admin only, like server management.
-	e.PUT("/api/v1/sites/:id/vhost", sitesH.updateVhost, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/sites/:id/vhost/validate", sitesH.validateVhost, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.PUT("/api/v1/sites/:id/vhost", sitesH.updateVhost, RequireAuth(s), RequirePermission(s, "site.vhost.raw"))
+	e.POST("/api/v1/sites/:id/vhost/validate", sitesH.validateVhost, RequireAuth(s), RequirePermission(s, "site.vhost.raw"))
 	e.GET("/api/v1/sites/:id/varnish", sitesH.getVarnish, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/varnish/purge", sitesH.purgeVarnish, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/security", sitesH.getSecurity, RequireAuth(s))
@@ -226,8 +234,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.DELETE("/api/v1/sites/:id/ssh-ftp/:ssh_id", sitesH.deleteSshFtp, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/ssh-ftp/:ssh_id/key", sitesH.getSSHPrivateKey, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/cron", sitesH.listCron, RequireAuth(s))
-	e.POST("/api/v1/sites/:id/cron", sitesH.createCron, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/sites/:id/cron/:cron_id", sitesH.deleteCron, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/sites/:id/cron", sitesH.createCron, RequireAuth(s), RequirePermission(s, "site.cron"))
+	e.DELETE("/api/v1/sites/:id/cron/:cron_id", sitesH.deleteCron, RequireAuth(s), RequirePermission(s, "site.cron"))
 	e.GET("/api/v1/sites/:id/logs", logsH.tail, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/usage", sitesH.usage, RequireAuth(s))
 
@@ -250,15 +258,15 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// Providers are global (the default one receives every tenant's
 	// backups): only a super_admin may change them.
 	bpH := newBackupProviderHandler(s, auditRec)
-	e.GET("/api/v1/backup-providers", bpH.list, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/backup-providers", bpH.create, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.PATCH("/api/v1/backup-providers/:id", bpH.update, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.DELETE("/api/v1/backup-providers/:id", bpH.delete, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/backup-providers/:id/usage", bpH.usage, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/backup-providers/:id/test", bpH.testConnection, RequireAuth(s), RequireAdmin(s))
+	e.GET("/api/v1/backup-providers", bpH.list, RequireAuth(s), RequirePermission(s, "backup.provider.view"))
+	e.POST("/api/v1/backup-providers", bpH.create, RequireAuth(s), RequireUserSession, RequirePermission(s, "backup.provider.manage"))
+	e.PATCH("/api/v1/backup-providers/:id", bpH.update, RequireAuth(s), RequireUserSession, RequirePermission(s, "backup.provider.manage"))
+	e.DELETE("/api/v1/backup-providers/:id", bpH.delete, RequireAuth(s), RequireUserSession, RequirePermission(s, "backup.provider.manage"))
+	e.GET("/api/v1/backup-providers/:id/usage", bpH.usage, RequireAuth(s), RequirePermission(s, "backup.provider.view"))
+	e.POST("/api/v1/backup-providers/:id/test", bpH.testConnection, RequireAuth(s), RequirePermission(s, "backup.provider.view"))
 
 	backupH := newBackupHandler(s, auditRec)
-	e.POST("/api/v1/backups/bulk", backupH.bulkCreate, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/backups/bulk", backupH.bulkCreate, RequireAuth(s), RequirePermission(s, "backup.bulk"))
 	e.POST("/api/v1/sites/:id/backups", backupH.createWithProvider, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/backups", backupH.list, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/backups/database", backupH.createDatabaseBackup, RequireAuth(s))
@@ -280,52 +288,52 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// ─── Backup Configs ────────────────────────────────────
 	bcfgH := newBackupConfigHandler(s, auditRec)
-	e.GET("/api/v1/backup-configs", bcfgH.list, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/backup-configs", bcfgH.create, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.PATCH("/api/v1/backup-configs/:id", bcfgH.update, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.DELETE("/api/v1/backup-configs/:id", bcfgH.delete, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/backup-configs/:id/run", bcfgH.run, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/backup-configs", bcfgH.list, RequireAuth(s), RequireUserSession, RequirePermission(s, "backup.config.manage"))
+	e.POST("/api/v1/backup-configs", bcfgH.create, RequireAuth(s), RequireUserSession, RequirePermission(s, "backup.config.manage"))
+	e.PATCH("/api/v1/backup-configs/:id", bcfgH.update, RequireAuth(s), RequireUserSession, RequirePermission(s, "backup.config.manage"))
+	e.DELETE("/api/v1/backup-configs/:id", bcfgH.delete, RequireAuth(s), RequireUserSession, RequirePermission(s, "backup.config.manage"))
+	e.POST("/api/v1/backup-configs/:id/run", bcfgH.run, RequireAuth(s), RequireUserSession, RequirePermission(s, "backup.config.manage"))
 
 	// ─── Retention Settings ─────────────────────────────────
 	// Panel self-update (super_admin, interactive session)
 	puH := &panelUpdateHandler{store: s, db: db, audit: auditRec}
-	e.GET("/api/v1/system/panel-update", puH.status, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/system/panel-update", puH.start, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/system/panel-update/summary", puH.summary, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/system/panel-update/backups", puH.backups, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/system/panel-update/rollback", puH.rollback, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/system/panel-update", puH.status, RequireAuth(s), RequireUserSession, RequirePermission(s, "panel.update"))
+	e.POST("/api/v1/system/panel-update", puH.start, RequireAuth(s), RequireUserSession, RequirePermission(s, "panel.update"))
+	e.GET("/api/v1/system/panel-update/summary", puH.summary, RequireAuth(s), RequireUserSession, RequirePermission(s, "panel.update"))
+	e.GET("/api/v1/system/panel-update/backups", puH.backups, RequireAuth(s), RequireUserSession, RequirePermission(s, "panel.update"))
+	e.POST("/api/v1/system/panel-update/rollback", puH.rollback, RequireAuth(s), RequireUserSession, RequirePermission(s, "panel.update"))
 	// Remote agent updates (super_admin, interactive session)
 	auH := &agentUpdateHandler{store: s, db: db, audit: auditRec}
-	e.GET("/api/v1/system/agent-updates", auH.list, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/system/agent-updates", auH.startMany, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.PUT("/api/v1/system/agent-updates/settings", auH.settings, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/agent-update", auH.startOne, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/agent-tls", auH.enableAgentTLS, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.PUT("/api/v1/system/panel-update/settings", puH.settings, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/system/agent-updates", auH.list, RequireAuth(s), RequireUserSession, RequirePermission(s, "agent.update"))
+	e.POST("/api/v1/system/agent-updates", auH.startMany, RequireAuth(s), RequireUserSession, RequirePermission(s, "agent.update"))
+	e.PUT("/api/v1/system/agent-updates/settings", auH.settings, RequireAuth(s), RequireUserSession, RequirePermission(s, "agent.update"))
+	e.POST("/api/v1/servers/:id/agent-update", auH.startOne, RequireAuth(s), RequireUserSession, RequirePermission(s, "agent.update"))
+	e.POST("/api/v1/servers/:id/agent-tls", auH.enableAgentTLS, RequireAuth(s), RequireUserSession, RequirePermission(s, "server.manage"))
+	e.PUT("/api/v1/system/panel-update/settings", puH.settings, RequireAuth(s), RequireUserSession, RequirePermission(s, "panel.update"))
 
-	e.GET("/api/v1/settings/retention", getRetention(db), RequireAuth(s), RequireAdmin(s))
+	e.GET("/api/v1/settings/retention", getRetention(db), RequireAuth(s), RequirePermission(s, "settings.view"))
 	// Global retention deletes every tenant's backups: super_admin only.
-	e.PUT("/api/v1/settings/retention", setRetention(db), RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.PUT("/api/v1/settings/retention", setRetention(db), RequireAuth(s), RequireUserSession, RequirePermission(s, "settings.global"))
 
 	metricH := newMetricHandler(s)
 	// POST metrics — admins and admin-scoped service tokens only
-	e.POST("/api/v1/servers/:id/metrics", metricH.ingest, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/metrics", metricH.ingest, RequireAuth(s), RequirePermission(s, "metrics.ingest"))
 	// GET metrics = user-facing dashboard
 	e.GET("/api/v1/servers/:id/metrics/latest", metricH.latest, RequireAuth(s))
 	e.GET("/api/v1/servers/:id/metrics", metricH.range_, RequireAuth(s))
 	e.GET("/api/v1/servers/:id/gpu", metricH.gpu, RequireAuth(s))
 	// Service Tokens (admin only)
 	stH := newServiceTokenHandler(s)
-	e.GET("/api/v1/service-tokens", stH.list, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/service-tokens", stH.create, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
-	e.DELETE("/api/v1/service-tokens/:id", stH.revoke, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/service-tokens", stH.list, RequireAuth(s), RequireUserSession, RequirePermission(s, "service_token.manage"))
+	e.POST("/api/v1/service-tokens", stH.create, RequireAuth(s), RequireUserSession, RequirePermission(s, "service_token.manage"))
+	e.DELETE("/api/v1/service-tokens/:id", stH.revoke, RequireAuth(s), RequireUserSession, RequirePermission(s, "service_token.manage"))
 
 	// Alert endpoints (admin only)
 	alertH := newAlertHandler(s, auditRec)
-	e.POST("/api/v1/alert-channels", alertH.createChannel, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/alert-channels", alertH.listChannels, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.DELETE("/api/v1/alert-channels/:id", alertH.deleteChannel, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/alerts", alertH.listAlerts, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/alert-channels", alertH.createChannel, RequireAuth(s), RequirePermission(s, "alert.manage"))
+	e.GET("/api/v1/alert-channels", alertH.listChannels, RequireAuth(s), RequirePermission(s, "alert.manage"))
+	e.DELETE("/api/v1/alert-channels/:id", alertH.deleteChannel, RequireAuth(s), RequirePermission(s, "alert.manage"))
+	e.GET("/api/v1/alerts", alertH.listAlerts, RequireAuth(s), RequirePermission(s, "alert.manage"))
 	// In-app notifications (per-user)
 	notifH := newNotificationHandler(s)
 	e.GET("/api/v1/notifications", notifH.list, RequireAuth(s))
@@ -360,16 +368,16 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/databases/:id/viewer/tables", dbH.viewerTables, RequireAuth(s))
 	e.GET("/api/v1/databases/:id/viewer/columns", dbH.viewerColumns, RequireAuth(s))
 	e.GET("/api/v1/databases/:id/viewer/rows", dbH.viewerRows, RequireAuth(s))
-	e.POST("/api/v1/databases/exec-sql", dbH.execSQL, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/databases/exec-sql", dbH.execSQL, RequireAuth(s), RequireUserSession, RequirePermission(s, "database.exec_sql"))
 
 	// Reset passwords for imported users (admin only)
-	e.POST("/api/v1/databases/phpmyadmin-reset-passwords", dbH.phpMyAdminResetPasswords, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/databases/phpmyadmin-reset-passwords", dbH.phpMyAdminResetPasswords, RequireAuth(s), RequireUserSession, RequirePermission(s, "database.admin"))
 
 	// Database server management
 	dbServerH := newDBServerHandler(s, auditRec)
 	// Server-wide MySQL management: super_admin only.
-	e.GET("/api/v1/database-server", dbServerH.getDBServer, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/database-server/import", dbServerH.importDatabases, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/database-server", dbServerH.getDBServer, RequireAuth(s), RequirePermission(s, "database.admin"))
+	e.POST("/api/v1/database-server/import", dbServerH.importDatabases, RequireAuth(s), RequirePermission(s, "database.admin"))
 
 	// Audit log endpoint (admin only)
 	auditH := audit.NewHandler(s.AuditLogs, scopeAuditLogs(s))
@@ -377,7 +385,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	auditH.Register(auditGroup)
 	// Purging old audit entries is global and destructive: super_admin with
 	// an interactive session only.
-	e.DELETE("/api/v1/audit-logs", purgeAuditLogs(s, auditRec), RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.DELETE("/api/v1/audit-logs", purgeAuditLogs(s, auditRec), RequireAuth(s), RequireUserSession, RequirePermission(s, "audit.purge"))
 
 	// ─── Personal API keys (scoped to the calling user) ─────
 	// Managed from interactive sessions only, so a leaked key cannot mint
@@ -392,7 +400,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/agents/register", agH.registerAgent)
 	e.GET("/api/v1/agents/install", agH.installScript)
 	e.GET("/api/v1/agents/status-dashboard", agH.statusDashboard)
-	e.POST("/api/v1/agents/tokens", agH.createRegistrationToken, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/agents/tokens", agH.createRegistrationToken, RequireAuth(s), RequireUserSession, RequirePermission(s, "agent.register"))
 
 	// ─── Cloudflare Integration ──────────────────────────────
 	cfH := newCloudflareHandler(s, auditRec)
@@ -419,42 +427,42 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	licH := newLicenseHandler(s)
 	e.GET("/api/v1/license", licH.getLicense, RequireAuth(s))
 	// The license applies to the whole panel: super_admin only.
-	e.POST("/api/v1/license/activate", licH.activateLicense, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.DELETE("/api/v1/license", licH.deactivateLicense, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/license/activate", licH.activateLicense, RequireAuth(s), RequirePermission(s, "license.manage"))
+	e.DELETE("/api/v1/license", licH.deactivateLicense, RequireAuth(s), RequirePermission(s, "license.manage"))
 	e.GET("/api/v1/license/features", licH.getFeatures, RequireAuth(s))
 
 	// ─── Stack Management (install/manage software on servers) ──
 	stackH := newStackHandler(s, auditRec)
 	e.GET("/api/v1/servers/:id/stack", stackH.stackInfo, RequireAuth(s))
-	e.POST("/api/v1/servers/:id/stack/action", stackH.stackAction, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/stack/restart", stackH.stackRestart, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/servers/:id/stack/ops/:op", stackH.stackOp, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/servers/:id/stack/action", stackH.stackAction, RequireAuth(s), RequirePermission(s, "server.stack"))
+	e.POST("/api/v1/servers/:id/stack/restart", stackH.stackRestart, RequireAuth(s), RequirePermission(s, "server.stack"))
+	e.GET("/api/v1/servers/:id/stack/ops/:op", stackH.stackOp, RequireAuth(s), RequirePermission(s, "server.stack"))
 	e.GET("/api/v1/servers/:id/php-versions", stackH.phpVersions, RequireAuth(s))
-	e.POST("/api/v1/servers/:id/command", stackH.commandExec, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/servers/:id/command", stackH.commandExec, RequireAuth(s), RequirePermission(s, "server.command"))
 
 	// ─── Docker Container Management ──
 	e.GET("/api/v1/servers/:id/docker/containers", stackH.dockerContainers, RequireAuth(s))
-	e.POST("/api/v1/servers/:id/docker/container/start", stackH.dockerContainerStart, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/container/stop", stackH.dockerContainerStop, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/container/restart", stackH.dockerContainerRestart, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/servers/:id/docker/container/remove", stackH.dockerContainerRemove, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/docker/container/create", stackH.dockerContainerCreate, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/container/start", stackH.dockerContainerStart, RequireAuth(s), RequirePermission(s, "docker.control"))
+	e.POST("/api/v1/servers/:id/docker/container/stop", stackH.dockerContainerStop, RequireAuth(s), RequirePermission(s, "docker.control"))
+	e.POST("/api/v1/servers/:id/docker/container/restart", stackH.dockerContainerRestart, RequireAuth(s), RequirePermission(s, "docker.control"))
+	e.POST("/api/v1/servers/:id/docker/container/remove", stackH.dockerContainerRemove, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/container/create", stackH.dockerContainerCreate, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 	e.GET("/api/v1/servers/:id/docker/container/logs", stackH.dockerContainerLogs, RequireAuth(s))
-	e.POST("/api/v1/servers/:id/docker/container/exec", stackH.dockerContainerExec, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.GET("/api/v1/servers/:id/docker/images", stackH.dockerImages, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/servers/:id/docker/images/search", stackH.dockerSearchImages, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/docker/compose/up", stackH.dockerComposeUp, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/docker/compose/down", stackH.dockerComposeDown, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/docker/image/pull", stackH.dockerImagePull, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/docker/image/remove", stackH.dockerImageRemove, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.GET("/api/v1/servers/:id/docker/volumes", stackH.dockerVolumes, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/docker/volume/create", stackH.dockerVolumeCreate, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/docker/volume/remove", stackH.dockerVolumeRemove, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.GET("/api/v1/servers/:id/docker/networks", stackH.dockerNetworks, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/docker/network/create", stackH.dockerNetworkCreate, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/docker/network/remove", stackH.dockerNetworkRemove, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.GET("/api/v1/servers/:id/docker/info", stackH.dockerInfo, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/servers/:id/docker/disk-usage", stackH.dockerDiskUsage, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/servers/:id/docker/container/exec", stackH.dockerContainerExec, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.GET("/api/v1/servers/:id/docker/images", stackH.dockerImages, RequireAuth(s), RequirePermission(s, "docker.manage"))
+	e.GET("/api/v1/servers/:id/docker/images/search", stackH.dockerSearchImages, RequireAuth(s), RequirePermission(s, "docker.manage"))
+	e.POST("/api/v1/servers/:id/docker/compose/up", stackH.dockerComposeUp, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/compose/down", stackH.dockerComposeDown, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/image/pull", stackH.dockerImagePull, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/image/remove", stackH.dockerImageRemove, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.GET("/api/v1/servers/:id/docker/volumes", stackH.dockerVolumes, RequireAuth(s), RequirePermission(s, "docker.manage"))
+	e.POST("/api/v1/servers/:id/docker/volume/create", stackH.dockerVolumeCreate, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/volume/remove", stackH.dockerVolumeRemove, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.GET("/api/v1/servers/:id/docker/networks", stackH.dockerNetworks, RequireAuth(s), RequirePermission(s, "docker.manage"))
+	e.POST("/api/v1/servers/:id/docker/network/create", stackH.dockerNetworkCreate, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/docker/network/remove", stackH.dockerNetworkRemove, RequireAuth(s), RequirePermission(s, "docker.manage"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.GET("/api/v1/servers/:id/docker/info", stackH.dockerInfo, RequireAuth(s), RequirePermission(s, "docker.manage"))
+	e.GET("/api/v1/servers/:id/docker/disk-usage", stackH.dockerDiskUsage, RequireAuth(s), RequirePermission(s, "docker.manage"))
 
 	// ─── Git Deploy v2 ──
 	e.GET("/api/v1/sites/:id/git/branches", sitesH.gitBranches, RequireAuth(s))
@@ -463,56 +471,56 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/sites/:id/git/checkout", sitesH.gitCheckout, RequireAuth(s))
 
 	// ─── Firewall (UFW) Management ──
-	e.GET("/api/v1/servers/:id/firewall/status", stackH.firewallStatus, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/firewall/enable", stackH.firewallEnable, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/firewall/disable", stackH.firewallDisable, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/firewall/allow", stackH.firewallAllow, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/firewall/deny", stackH.firewallDeny, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/firewall/delete", stackH.firewallDelete, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.GET("/api/v1/servers/:id/firewall/rules", stackH.firewallRules, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/firewall/reset", stackH.firewallReset, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.GET("/api/v1/servers/:id/firewall/status", stackH.firewallStatus, RequireAuth(s), RequirePermission(s, "server.firewall"))
+	e.POST("/api/v1/servers/:id/firewall/enable", stackH.firewallEnable, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/disable", stackH.firewallDisable, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/allow", stackH.firewallAllow, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/deny", stackH.firewallDeny, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/firewall/delete", stackH.firewallDelete, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.GET("/api/v1/servers/:id/firewall/rules", stackH.firewallRules, RequireAuth(s), RequirePermission(s, "server.firewall"))
+	e.POST("/api/v1/servers/:id/firewall/reset", stackH.firewallReset, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── PM2 Process Management ──
-	e.POST("/api/v1/servers/:id/pm2/manage", stackH.pm2Manage, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/pm2/manage", stackH.pm2Manage, RequireAuth(s), RequirePermission(s, "server.services"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Mail server (proxied to the agent) ──
-	e.POST("/api/v1/servers/:id/email/manage", stackH.emailManage, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/email/manage", stackH.emailManage, RequireAuth(s), RequirePermission(s, "server.services"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Redis Management ──
-	e.GET("/api/v1/servers/:id/redis/stats", stackH.redisStats, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/redis/flush", stackH.redisFlush, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.GET("/api/v1/servers/:id/redis/info", stackH.redisInfo, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/redis/flushdb", stackH.redisFlushDB, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.GET("/api/v1/servers/:id/redis/stats", stackH.redisStats, RequireAuth(s), RequirePermission(s, "server.services"))
+	e.POST("/api/v1/servers/:id/redis/flush", stackH.redisFlush, RequireAuth(s), RequirePermission(s, "server.services"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.GET("/api/v1/servers/:id/redis/info", stackH.redisInfo, RequireAuth(s), RequirePermission(s, "server.services"))
+	e.POST("/api/v1/servers/:id/redis/flushdb", stackH.redisFlushDB, RequireAuth(s), RequirePermission(s, "server.services"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Threat Monitor (admin only) ──
 	smH := newSecurityMonitorHandler(s, auditRec)
-	e.GET("/api/v1/servers/:id/security/monitor", smH.monitor, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/servers/:id/security/baseline", smH.getBaseline, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/security/baseline", smH.saveBaseline, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/servers/:id/security/monitor", smH.monitor, RequireAuth(s), RequirePermission(s, "server.firewall"))
+	e.GET("/api/v1/servers/:id/security/baseline", smH.getBaseline, RequireAuth(s), RequirePermission(s, "server.firewall"))
+	e.POST("/api/v1/servers/:id/security/baseline", smH.saveBaseline, RequireAuth(s), RequirePermission(s, "server.firewall"))
 
 	// ─── Fail2ban Management ──
-	e.GET("/api/v1/servers/:id/fail2ban/status", stackH.fail2banStatus, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/servers/:id/security/overview", stackH.securityOverview, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.GET("/api/v1/servers/:id/fail2ban/jail", stackH.fail2banJail, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.POST("/api/v1/servers/:id/fail2ban/unban", stackH.fail2banUnban, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/fail2ban/ban", stackH.fail2banBan, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/fail2ban/enable", stackH.fail2banEnable, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
-	e.POST("/api/v1/servers/:id/fail2ban/disable", stackH.fail2banDisable, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.GET("/api/v1/servers/:id/fail2ban/status", stackH.fail2banStatus, RequireAuth(s), RequirePermission(s, "server.firewall"))
+	e.GET("/api/v1/servers/:id/security/overview", stackH.securityOverview, RequireAuth(s), RequirePermission(s, "server.firewall"))
+	e.GET("/api/v1/servers/:id/fail2ban/jail", stackH.fail2banJail, RequireAuth(s), RequirePermission(s, "server.firewall"))
+	e.POST("/api/v1/servers/:id/fail2ban/unban", stackH.fail2banUnban, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/fail2ban/ban", stackH.fail2banBan, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/fail2ban/enable", stackH.fail2banEnable, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/fail2ban/disable", stackH.fail2banDisable, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Bot Blocker Management ──
-	e.POST("/api/v1/servers/:id/bot-blocker/manage", stackH.botBlockerManage, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
+	e.POST("/api/v1/servers/:id/bot-blocker/manage", stackH.botBlockerManage, RequireAuth(s), RequirePermission(s, "server.firewall"), requireSuperAdminOnPanelHost(s), auditServerAction(auditRec))
 
 	// ─── Server Specs & Benchmarks ─────────────────────────────
 	e.GET("/api/v1/servers/:id/specs", stackH.serverSpecs, RequireAuth(s))
-	e.GET("/api/v1/servers/:id/benchmark", stackH.serverBenchmark, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/servers/:id/benchmark", stackH.serverBenchmark, RequireAuth(s), RequirePermission(s, "server.manage"))
 
 	// ─── Plans ─────────────────────────────────────────────────
 	planH := newPlanHandler(s)
 	e.GET("/api/v1/plans", planH.listPlans, RequireAuth(s))
-	e.POST("/api/v1/plans", planH.createPlan, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/plans", planH.createPlan, RequireAuth(s), RequirePermission(s, "plan.manage"))
 	e.GET("/api/v1/plans/:id", planH.getPlan, RequireAuth(s))
-	e.PATCH("/api/v1/plans/:id", planH.updatePlan, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
-	e.DELETE("/api/v1/plans/:id", planH.deletePlan, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.PATCH("/api/v1/plans/:id", planH.updatePlan, RequireAuth(s), RequirePermission(s, "plan.manage"))
+	e.DELETE("/api/v1/plans/:id", planH.deletePlan, RequireAuth(s), RequirePermission(s, "plan.manage"))
 
 	// ─── License Orders ────────────────────────────────────────
 	orderH := newOrderHandler(s)
@@ -520,10 +528,10 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/orders", orderH.createOrder, RequireAuth(s))
 	e.GET("/api/v1/orders/:id", orderH.getOrder, RequireAuth(s))
 	// Approving or rejecting orders (plans are global): super_admin only.
-	e.PATCH("/api/v1/orders/:id", orderH.updateOrderStatus, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.PATCH("/api/v1/orders/:id", orderH.updateOrderStatus, RequireAuth(s), RequireUserSession, RequirePermission(s, "order.manage"))
 
 	// ─── Assign Plan to User ──────────────────────────────────
-	e.POST("/api/v1/users/:id/assign-plan", uh.assignPlan, RequireAuth(s), RequireUserSession, RequireAdmin(s))
+	e.POST("/api/v1/users/:id/assign-plan", uh.assignPlan, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
 
 	// Example: feature-gated route (uncomment when ready to gate specific endpoints)
 	// e.GET("/api/v1/servers", sh.list, RequireAuth(s), RequireFeature(s, "multi_server"))

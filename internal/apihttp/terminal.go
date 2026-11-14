@@ -17,8 +17,8 @@ import (
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/audit"
-	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/rbac"
 	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
@@ -115,7 +115,7 @@ func (h *terminalHandler) createTicket(c *echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "site has no valid system user")
 		}
 		serverID, runAs = site.ServerID, site.SystemUser.String
-	} else if user.Role != auth.RoleSuperAdmin {
+	} else if !userCan(ctx, h.store, user, rbac.ServerTerminal) {
 		// A server terminal is a root shell on that server, which may host
 		// other tenants' sites: super_admin only.
 		return echo.NewHTTPError(http.StatusForbidden, "server terminal requires a super admin")
@@ -129,7 +129,7 @@ func (h *terminalHandler) createTicket(c *echo.Context) error {
 	}
 	// A root shell on the panel host is super_admin power (the panel's
 	// database and keys live there), like the command endpoint.
-	if runAs == "" && isLocalServer(*server) && user.Role != auth.RoleSuperAdmin {
+	if runAs == "" && isLocalServer(*server) && !userCan(ctx, h.store, user, rbac.ServerPanelHost) {
 		return echo.NewHTTPError(http.StatusForbidden, "a root terminal on the panel host requires a super admin")
 	}
 

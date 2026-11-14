@@ -34,9 +34,6 @@ func (ah *authHandler) impersonate(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid user id")
 	}
 
-	// Fetch caller role from context
-	callerRole := c.Get(roleKey).(string)
-
 	// Fetch target user
 	targetUser, err := ah.store.Users.GetByID(c.Request().Context(), targetID)
 	if err != nil {
@@ -47,20 +44,10 @@ func (ah *authHandler) impersonate(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "user not found")
 	}
 
-	// Permission checks
-	if callerRole == auth.RoleSuperAdmin {
-		// Super admin can impersonate anyone
-	} else if callerRole == auth.RoleAdmin {
-		// Admin can only impersonate users they created
-		if !targetUser.CreatedBy.Valid || targetUser.CreatedBy.Int64 != sess.UserID {
-			return echo.NewHTTPError(http.StatusForbidden, "you can only impersonate users you created")
-		}
-		// Admin cannot impersonate other admins or super_admins
-		if targetUser.Role == auth.RoleAdmin || targetUser.Role == auth.RoleSuperAdmin {
-			return echo.NewHTTPError(http.StatusForbidden, "cannot impersonate admin or super admin")
-		}
-	} else {
-		return echo.NewHTTPError(http.StatusForbidden, "insufficient permissions")
+	// Permission checks (canImpersonate): super_admin anyone; an admin only
+	// the "user" accounts it created; custom roles per their permissions.
+	if !canImpersonate(c.Request().Context(), ah.store, sessionUser(c.Request().Context(), ah.store, sess), targetUser) {
+		return echo.NewHTTPError(http.StatusForbidden, "you can only impersonate users you created (never admins or super admins)")
 	}
 
 	// Generate a new token for the impersonation session

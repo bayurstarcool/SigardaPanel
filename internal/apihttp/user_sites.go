@@ -7,8 +7,8 @@ import (
 	"strconv"
 
 	"github.com/labstack/echo/v5"
-	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/rbac"
 	"sigardapanel/internal/store"
 )
 
@@ -24,12 +24,12 @@ func (h *userHandler) listUserSites(c *echo.Context) error {
 
 	// Only admin/super_admin can see other users' site mappings
 	sess := sessionFromEcho(c)
-	role := c.Get(roleKey).(string)
-	if !auth.HasRole(role, auth.RoleAdmin) {
+	ctxu := c.Request().Context()
+	if !sessionCan(ctxu, h.store, sess, rbac.UserManage) {
 		if sess == nil || sess.UserID != userID {
 			return echo.NewHTTPError(http.StatusForbidden, "access denied")
 		}
-	} else if role != auth.RoleSuperAdmin && sess != nil && sess.UserID != userID {
+	} else if !sessionCan(ctxu, h.store, sess, rbac.UserManageAll) && sess != nil && sess.UserID != userID {
 		// Admins see the mappings of users they created, not other tenants'.
 		target, err := h.store.Users.GetByID(c.Request().Context(), userID)
 		if err != nil || target == nil || !target.CreatedBy.Valid || target.CreatedBy.Int64 != sess.UserID {

@@ -35,6 +35,7 @@ type Store struct {
 	Cron               CronRepository
 	Cloudflare         *CloudflareStore
 	UserSites          *SQLiteUserSiteStore
+	Roles              *SQLiteRoleStore
 	BackupProviders    *SQLiteBackupStorageProviderStore
 	BackupSchedules    BackupScheduleRepository
 	BackupConfigs      BackupConfigRepository
@@ -75,6 +76,7 @@ func New(db *sql.DB) *Store {
 		Cron:               NewCronStore(db),
 		Cloudflare:         NewCloudflareStore(db),
 		UserSites:          NewUserSiteStore(db),
+		Roles:              NewRoleStore(db),
 		BackupProviders:    NewBackupStorageProviderStore(db),
 		BackupSchedules:    NewBackupScheduleStore(db),
 		BackupConfigs:      NewBackupConfigStore(db),

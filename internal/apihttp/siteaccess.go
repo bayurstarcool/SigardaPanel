@@ -6,6 +6,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/auth"
+	"sigardapanel/internal/rbac"
 	"sigardapanel/internal/store"
 )
 
@@ -70,10 +71,13 @@ func hasSitePermission(ctx context.Context, s *store.Store, sess *store.Session,
 	if user == nil {
 		return false
 	}
-	if user.Role == auth.RoleSuperAdmin {
+	if userCan(ctx, s, user, rbac.SiteManageAll) {
 		return true
 	}
 	if site.OwnerID.Valid && site.OwnerID.Int64 == user.ID {
+		return true
+	}
+	if required == sitePermRead && userCan(ctx, s, user, rbac.SiteViewAll) {
 		return true
 	}
 	need := sitePermissionRank(required)
@@ -97,7 +101,7 @@ func isSiteOwnerOrSuperAdmin(ctx context.Context, s *store.Store, sess *store.Se
 	if user == nil {
 		return false
 	}
-	if user.Role == auth.RoleSuperAdmin {
+	if userCan(ctx, s, user, rbac.SiteManageAll) {
 		return true
 	}
 	return site.OwnerID.Valid && site.OwnerID.Int64 == user.ID
@@ -146,7 +150,7 @@ func sitePermissionOf(ctx context.Context, s *store.Store, sess *store.Session, 
 	if user == nil || site == nil {
 		return ""
 	}
-	if user.Role == auth.RoleSuperAdmin {
+	if userCan(ctx, s, user, rbac.SiteManageAll) {
 		return "super_admin"
 	}
 	if site.OwnerID.Valid && site.OwnerID.Int64 == user.ID {
@@ -165,7 +169,7 @@ func siteCapabilities(ctx context.Context, s *store.Store, sess *store.Session, 
 	user := sessionUser(ctx, s, sess)
 	full := perm == "super_admin" || perm == "owner"
 	canTransfer := full
-	if !canTransfer && user != nil && user.Role == auth.RoleAdmin && site.OwnerID.Valid {
+	if !canTransfer && userCan(ctx, s, user, rbac.UserManage) && site.OwnerID.Valid {
 		if owner, err := s.Users.GetByID(ctx, site.OwnerID.Int64); err == nil && owner != nil && owner.CreatedBy.Valid && owner.CreatedBy.Int64 == user.ID {
 			canTransfer = true
 		}
@@ -176,6 +180,6 @@ func siteCapabilities(ctx context.Context, s *store.Store, sess *store.Session, 
 		"can_delete":       full,
 		"can_manage_users": full,
 		"can_transfer":     canTransfer,
-		"is_admin":         user != nil && auth.HasRole(user.Role, auth.RoleAdmin),
+		"is_admin":         userCan(ctx, s, user, rbac.UserManage),
 	}
 }

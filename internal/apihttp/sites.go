@@ -22,6 +22,7 @@ import (
 	"sigardapanel/internal/dbserver"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
+	"sigardapanel/internal/rbac"
 	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
@@ -89,7 +90,7 @@ func (h *siteHandler) list(c *echo.Context) error {
 	// Site isolation: only super_admin sees all sites. Everyone else sees the
 	// sites they own plus the ones assigned to them; both are resolved in SQL
 	// so filters, pagination and total_count apply to the combined set.
-	isSuperAdmin := h.isSuperAdmin(c)
+	isSuperAdmin := sessionCan(c.Request().Context(), h.store, sess, rbac.SiteViewAll)
 	if !isSuperAdmin && sess != nil {
 		filter.AccessibleTo = sess.UserID
 	}
@@ -232,7 +233,8 @@ func (h *siteHandler) create(c *echo.Context) error {
 			requester = u
 		}
 	}
-	privileged := requester != nil && auth.HasRole(requester.Role, auth.RoleAdmin)
+	ctxc := c.Request().Context()
+	privileged := userCan(ctxc, h.store, requester, rbac.SiteChooseOwner) || userCan(ctxc, h.store, requester, rbac.SiteAnyRoot)
 	if privileged {
 		if body.SystemUser == "" {
 			body.SystemUser = requester.Username
@@ -248,7 +250,7 @@ func (h *siteHandler) create(c *echo.Context) error {
 		// (their files, terminal) or a path like /var/lib/sigardapanel (the
 		// panel database) must stay out of reach. super_admin is the host
 		// operator and keeps the choice.
-		if requester.Role != auth.RoleSuperAdmin {
+		if !userCan(ctxc, h.store, requester, rbac.SiteAnyRoot) {
 			if !h.adminManagesSystemUser(c.Request().Context(), requester, body.SystemUser) {
 				return echo.NewHTTPError(http.StatusForbidden, "system_user must be your own account or one of the users you created")
 			}
@@ -273,8 +275,7 @@ func (h *siteHandler) create(c *echo.Context) error {
 		if err := siteinput.ProxyPassURL(body.ProxyPassURL); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
-		superAdmin := requester != nil && requester.Role == auth.RoleSuperAdmin
-		if err := siteinput.ProxyPassTarget(c.Request().Context(), body.ProxyPassURL, superAdmin); err != nil {
+		if err := siteinput.ProxyPassTarget(c.Request().Context(), body.ProxyPassURL, userCan(ctxc, h.store, requester, rbac.SiteProxyInternal)); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 	}
@@ -290,7 +291,7 @@ func (h *siteHandler) create(c *echo.Context) error {
 		// A container runs as root with the site root (and volumes) mounted:
 		// it can leave setuid-root files there or mount the host through a
 		// symlink. Docker sites are therefore a super_admin feature.
-		if requester == nil || requester.Role != auth.RoleSuperAdmin {
+		if !userCan(ctxc, h.store, requester, rbac.SiteDocker) {
 			return echo.NewHTTPError(http.StatusForbidden, "docker sites can only be created by a super admin")
 		}
 		if err := siteinput.DockerOptions(body.DockerImage, body.DockerName, body.DockerPorts, body.DockerEnv,
@@ -764,7 +765,7 @@ func (h *siteHandler) updateConfig(c *echo.Context) error {
 			if err := siteinput.ProxyPassURL(*body.ProxyPassURL); err != nil {
 				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 			}
-			if err := siteinput.ProxyPassTarget(c.Request().Context(), *body.ProxyPassURL, h.isSuperAdminSession(c.Request().Context(), sess)); err != nil {
+			if err := siteinput.ProxyPassTarget(c.Request().Context(), *body.ProxyPassURL, sessionCan(c.Request().Context(), h.store, sess, rbac.SiteProxyInternal)); err != nil {
 				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 			}
 		}
@@ -888,8 +889,8 @@ func (h *siteHandler) canAccess(ctx context.Context, sess *store.Session, site *
 	if user == nil {
 		return false
 	}
-	// Only super_admin bypasses ownership check
-	if user.Role == auth.RoleSuperAdmin {
+	// site.view_all (super_admin) bypasses the ownership check
+	if userCan(ctx, h.store, user, rbac.SiteManageAll) || userCan(ctx, h.store, user, rbac.SiteViewAll) {
 		return true
 	}
 	// Owner can always access
@@ -911,8 +912,9 @@ func (h *siteHandler) checkSitePermission(ctx context.Context, sess *store.Sessi
 	if user == nil {
 		return false
 	}
-	// Only super_admin bypasses permission check
-	if user.Role == auth.RoleSuperAdmin {
+	// site.manage_all (super_admin) bypasses the permission check;
+	// site.view_all grants read.
+	if userCan(ctx, h.store, user, rbac.SiteManageAll) || (required == "read" && userCan(ctx, h.store, user, rbac.SiteViewAll)) {
 		return true
 	}
 	// Owner can do anything with their own site
@@ -945,7 +947,7 @@ func (h *siteHandler) isSiteOwnerOrSuperAdmin(ctx context.Context, sess *store.S
 		return true
 	}
 	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
-	return user != nil && user.Role == auth.RoleSuperAdmin
+	return userCan(ctx, h.store, user, rbac.SiteManageAll)
 }
 
 func (h *siteHandler) isAdmin(c *echo.Context) bool {
@@ -984,7 +986,6 @@ func (h *siteHandler) transfer(c *echo.Context) error {
 	if err != nil || caller == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "user session required")
 	}
-	role := caller.Role
 
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -1018,10 +1019,10 @@ func (h *siteHandler) transfer(c *echo.Context) error {
 	}
 
 	// Access check: only super_admin, site owner, or admin who created the owner can transfer
-	isSuperAdmin := role == auth.RoleSuperAdmin
+	isSuperAdmin := userCan(c.Request().Context(), h.store, caller, rbac.SiteManageAll)
 	isOwner := site.OwnerID.Valid && site.OwnerID.Int64 == sess.UserID
 	isAdminOfOwner := false
-	if role == auth.RoleAdmin && site.OwnerID.Valid {
+	if userCan(c.Request().Context(), h.store, caller, rbac.UserManage) && site.OwnerID.Valid {
 		owner, err := h.store.Users.GetByID(c.Request().Context(), site.OwnerID.Int64)
 		if err == nil && owner != nil && owner.CreatedBy.Valid && owner.CreatedBy.Int64 == sess.UserID {
 			isAdminOfOwner = true

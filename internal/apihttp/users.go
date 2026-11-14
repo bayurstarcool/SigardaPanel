@@ -12,6 +12,7 @@ import (
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/rbac"
 	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
@@ -28,12 +29,10 @@ func newUserHandler(s *store.Store, a *audit.Recorder) *userHandler {
 func (h *userHandler) list(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
-	role := c.Get(roleKey).(string)
-
 	var filter store.UserListFilter
-	// Admin sees only users they created; super_admin sees all. Anything that
-	// is not a super_admin (including service tokens) gets the restricted view.
-	if role != auth.RoleSuperAdmin {
+	// user.manage_all (super_admin) sees every user; anyone else only the
+	// users they created.
+	if !sessionCan(c.Request().Context(), h.store, sess, rbac.UserManageAll) {
 		filter.CreatedBy = sess.UserID
 	}
 
@@ -81,7 +80,6 @@ func (h *userHandler) list(c *echo.Context) error {
 func (h *userHandler) create(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
-	callerRole := c.Get(roleKey).(string)
 
 	var body struct {
 		Username  string `json:"username"`
@@ -122,12 +120,14 @@ func (h *userHandler) create(c *echo.Context) error {
 		body.Role = "user"
 	}
 
-	// Permission: admin can only create "user" role; super_admin can create any
-	if body.Role == auth.RoleSuperAdmin && callerRole != auth.RoleSuperAdmin {
-		return echo.NewHTTPError(http.StatusForbidden, "cannot create super admin")
+	// No escalation: a caller may only give a role whose permissions it
+	// holds itself; without user.manage_all (super_admin) never a role with
+	// user management or dangerous permissions (an admin creates users).
+	if ok, _ := h.store.Roles.Exists(c.Request().Context(), body.Role); !ok {
+		return echo.NewHTTPError(http.StatusBadRequest, "unknown role "+body.Role)
 	}
-	if callerRole != auth.RoleSuperAdmin && body.Role != auth.RoleUser {
-		return echo.NewHTTPError(http.StatusForbidden, "admins can only create users")
+	if !assignableRole(c.Request().Context(), h.store, sessionUser(c.Request().Context(), h.store, sess), body.Role) {
+		return echo.NewHTTPError(http.StatusForbidden, "you cannot assign the role "+body.Role)
 	}
 
 	user := &store.User{
@@ -179,7 +179,6 @@ func (h *userHandler) create(c *echo.Context) error {
 func (h *userHandler) delete(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
-	callerRole := c.Get(roleKey).(string)
 
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -189,15 +188,16 @@ func (h *userHandler) delete(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "cannot delete yourself")
 	}
 
-	// Only super_admin may delete arbitrary users; everyone else (admins and,
-	// defensively, service tokens) may only delete users they created.
-	if callerRole != auth.RoleSuperAdmin {
+	// Only user.manage_all (super_admin) may delete arbitrary users; everyone
+	// else only users they created whose role they could assign.
+	caller := sessionUser(c.Request().Context(), h.store, sess)
+	if !userCan(c.Request().Context(), h.store, caller, rbac.UserManageAll) {
 		u, err := h.store.Users.GetByID(c.Request().Context(), id)
 		if err != nil || u == nil || !u.CreatedBy.Valid || u.CreatedBy.Int64 != sess.UserID {
 			return echo.NewHTTPError(http.StatusNotFound, "user not found")
 		}
 		// A user the admin created may have been promoted since.
-		if u.Role != auth.RoleUser {
+		if !assignableRole(c.Request().Context(), h.store, caller, u.Role) {
 			return echo.NewHTTPError(http.StatusForbidden, "only a super admin can delete admin accounts")
 		}
 	}
@@ -233,7 +233,6 @@ func (h *userHandler) delete(c *echo.Context) error {
 func (h *userHandler) update(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
 	sess := sessionFromEcho(c)
-	callerRole := c.Get(roleKey).(string)
 
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -249,22 +248,28 @@ func (h *userHandler) update(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 
-	// Only super_admin may update arbitrary users; everyone else (admins and,
-	// defensively, service tokens) may only update users they created.
-	if callerRole != auth.RoleSuperAdmin {
+	// Only user.manage_all (super_admin) may update arbitrary users; everyone
+	// else only users they created whose role they could assign.
+	caller := sessionUser(c.Request().Context(), h.store, sess)
+	if !userCan(c.Request().Context(), h.store, caller, rbac.UserManageAll) {
 		u, err := h.store.Users.GetByID(c.Request().Context(), id)
 		if err != nil || u == nil || !u.CreatedBy.Valid || u.CreatedBy.Int64 != sess.UserID {
 			return echo.NewHTTPError(http.StatusNotFound, "user not found")
 		}
 		// A user the admin created may have been promoted since: resetting
 		// their password would hand the admin that role.
-		if u.Role != auth.RoleUser {
+		if !assignableRole(c.Request().Context(), h.store, caller, u.Role) {
 			return echo.NewHTTPError(http.StatusForbidden, "only a super admin can change admin accounts")
 		}
 	}
 
-	// Permission: only super_admin can promote to admin/super_admin
-	if callerRole != auth.RoleSuperAdmin && body.Role != "" && (body.Role == auth.RoleAdmin || body.Role == auth.RoleSuperAdmin) {
+	// No escalation (see create).
+	if body.Role != "" {
+		if ok, _ := h.store.Roles.Exists(c.Request().Context(), body.Role); !ok {
+			return echo.NewHTTPError(http.StatusBadRequest, "unknown role "+body.Role)
+		}
+	}
+	if body.Role != "" && !assignableRole(c.Request().Context(), h.store, caller, body.Role) {
 		return echo.NewHTTPError(http.StatusForbidden, "only super admin can assign admin role")
 	}
 
@@ -373,7 +378,7 @@ func (h *userHandler) usage(c *echo.Context) error {
 	//     of the servers those sites are on.
 	scope := "owned"
 	sites := ownedSites
-	if limitBytes == 0 && auth.HasRole(user.Role, auth.RoleAdmin) {
+	if limitBytes == 0 && userCan(ctx, h.store, user, rbac.QuotaUnlimited) {
 		all, err := h.store.Sites.List(ctx, store.SiteListFilter{Limit: maxOwnedSites})
 		if err != nil {
 			slog.Error("api: request failed", "route", c.Path(), "error", err)

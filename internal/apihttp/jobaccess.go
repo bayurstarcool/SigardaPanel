@@ -4,6 +4,7 @@ import (
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/jobmodel"
+	"sigardapanel/internal/rbac"
 	"sigardapanel/internal/store"
 )
 
@@ -37,12 +38,12 @@ func jobVisibilityFor(c *echo.Context, s *store.Store) jobVisibility {
 	if user == nil {
 		return jobVisibility{}
 	}
-	if user.Role == auth.RoleSuperAdmin {
+	if userCan(ctx, s, user, rbac.JobViewAll) {
 		return jobVisibility{all: true}
 	}
 	return jobVisibility{scope: store.JobScope{
 		UserID:            user.ID,
-		IncludeServerJobs: auth.HasRole(user.Role, auth.RoleAdmin),
+		IncludeServerJobs: userCan(ctx, s, user, rbac.JobViewServer),
 	}}
 }
 
@@ -56,15 +57,15 @@ func canSeeJob(c *echo.Context, s *store.Store, job *jobmodel.Job, required stri
 		return false
 	}
 	if !job.SiteID.Valid || job.SiteID.Int64 == 0 {
-		return isAdminServiceToken(c) || isSessionAdmin(ctx, s, sess)
+		return isAdminServiceToken(c) || sessionCan(ctx, s, sess, rbac.JobViewServer)
 	}
 	if sess == nil || sess.UserID == 0 {
 		return false
 	}
 	site, err := s.Sites.GetByID(ctx, job.SiteID.Int64)
 	if err != nil || site == nil {
-		// Orphaned job (site deleted): only super_admin.
-		return isSessionSuperAdmin(ctx, s, sess)
+		// Orphaned job (site deleted): only job.view_all (super_admin).
+		return sessionCan(ctx, s, sess, rbac.JobViewAll)
 	}
 	return hasSitePermission(ctx, s, sess, site, required)
 }
