@@ -45,3 +45,29 @@ export function authHeaders(request: Request): Record<string, string> {
   const tok = impersonationToken(request) ?? sessionToken(request);
   return tok ? { Authorization: `Bearer ${tok}` } : {};
 }
+
+/**
+ * True unless the browser says the request comes from another origin. A
+ * cookie-authenticated unsafe request from a sibling subdomain carries the
+ * SameSite=Strict cookie (same site) but a different Origin: refusing it here
+ * is the CSRF check, since the API's own guard skips requests that carry an
+ * Authorization header (which this server adds from the cookie). Clients that
+ * send neither header (curl, the CLI) are not browsers and carry no cookie
+ * set by a victim's browser.
+ */
+export function sameOrigin(request: Request, url: URL): boolean {
+  const origin = request.headers.get("origin");
+  if (origin) {
+    if (origin === url.origin) return true;
+    // The panel may be opened by IP as well as by its configured ORIGIN:
+    // the Host the browser addressed (nginx passes it) is the same origin too.
+    const host = request.headers.get("host");
+    try {
+      return !!host && new URL(origin).host === host;
+    } catch {
+      return false;
+    }
+  }
+  const site = request.headers.get("sec-fetch-site");
+  return !site || site === "same-origin" || site === "none";
+}

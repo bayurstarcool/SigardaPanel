@@ -5,19 +5,13 @@ import {
   IMPERSONATION_COOKIE,
   clientIpHeaders,
   impersonationToken,
+  sameOrigin,
   sessionToken,
 } from "$lib/server/upstream";
 
 // Impersonation sessions are kept in an HttpOnly cookie (like sp_session) so
 // they survive page reloads without the token ever reaching page JavaScript.
 // The proxy prefers it over sp_session while it is set.
-
-function sameOrigin(request: Request, url: URL): boolean {
-  const origin = request.headers.get("origin");
-  if (origin) return origin === url.origin;
-  const site = request.headers.get("sec-fetch-site");
-  return !site || site === "same-origin" || site === "none";
-}
 
 // POST {user_id}: start impersonating with the admin's own session.
 export const POST: RequestHandler = async ({ request, cookies, url }) => {

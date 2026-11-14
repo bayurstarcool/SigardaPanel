@@ -2182,16 +2182,27 @@ func (r *Router) databaseCreateTask(c *echo.Context) error {
 	if !isValidDBIdentifier(payload.Name) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid database name")
 	}
+	if siteinput.ReservedDatabaseName(payload.Name) {
+		return echo.NewHTTPError(http.StatusBadRequest, "reserved database name")
+	}
 
+	// Never adopt an existing database (another tenant's, or the server's):
+	// plain CREATE fails when it exists, and the panel drops its record.
 	switch payload.Type {
 	case "mysql":
-		sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`;\n", payload.Name)
+		sql := fmt.Sprintf("CREATE DATABASE `%s`;\n", payload.Name)
 		if output, err := r.executor.RunWithInput(ctx, sql, "mysql"); err != nil {
+			if strings.Contains(output, "database exists") || strings.Contains(output, "1007") {
+				return echo.NewHTTPError(http.StatusConflict, "database already exists on the server")
+			}
 			return echo.NewHTTPError(http.StatusFailedDependency, "mysql create database failed: "+strings.TrimSpace(output))
 		}
 	case "postgres":
-		sql := fmt.Sprintf("SELECT 'CREATE DATABASE %s' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = %s)\\gexec\n", payload.Name, sqlQuote(payload.Name))
+		sql := fmt.Sprintf("CREATE DATABASE %s;\n", payload.Name)
 		if output, err := r.postgresAdmin(ctx, "postgres", sql); err != nil {
+			if strings.Contains(output, "already exists") {
+				return echo.NewHTTPError(http.StatusConflict, "database already exists on the server")
+			}
 			return echo.NewHTTPError(http.StatusFailedDependency, "postgres create database failed: "+pgErr(output, err))
 		}
 	default:
@@ -2217,6 +2228,9 @@ func (r *Router) databaseDeleteTask(c *echo.Context) error {
 	}
 	if !isValidDBIdentifier(payload.Name) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid database name")
+	}
+	if siteinput.ReservedDatabaseName(payload.Name) {
+		return echo.NewHTTPError(http.StatusBadRequest, "reserved database name")
 	}
 
 	switch payload.Type {
@@ -2256,6 +2270,9 @@ func (r *Router) dbUserCreateTask(c *echo.Context) error {
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+	}
+	if siteinput.ReservedDatabaseName(payload.DatabaseName) {
+		return echo.NewHTTPError(http.StatusBadRequest, "reserved database name")
 	}
 	if !isValidDBIdentifier(payload.DatabaseName) || !isValidDBIdentifier(payload.Username) || payload.Password == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid database user payload")

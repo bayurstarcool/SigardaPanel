@@ -197,6 +197,10 @@ func (h *userHandler) delete(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
+	if err := h.store.Sessions.DeleteImpersonationsBy(c.Request().Context(), id); err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
 	if err := h.store.Users.Delete(c.Request().Context(), id); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
@@ -258,11 +262,9 @@ func (h *userHandler) update(c *echo.Context) error {
 		}
 		ctx := c.Request().Context()
 		if id == sess.UserID {
-			// Your own password, chosen by you.
-			if err := h.store.Users.UpdatePassword(ctx, id, hash); err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
-			}
-			_ = h.store.Sessions.RevokeAllForUser(ctx, id, sess.ID)
+			// A stolen session must not take the account over: your own
+			// password changes through Profile, which asks for the current one.
+			return echo.NewHTTPError(http.StatusBadRequest, "change your own password in Profile (it asks for the current password)")
 		} else {
 			// Chosen by an admin: the user must replace it at the next
 			// login, and nobody keeps a session opened with the old one.

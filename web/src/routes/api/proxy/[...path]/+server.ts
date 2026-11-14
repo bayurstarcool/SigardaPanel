@@ -1,6 +1,6 @@
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
-import { API_URL, authHeaders, clientIpHeaders } from "$lib/server/upstream";
+import { API_URL, authHeaders, clientIpHeaders, sameOrigin } from "$lib/server/upstream";
 
 // Generic pass-through to the Go API. Bodies and responses are forwarded
 // as bytes with their own content type, so JSON calls, multipart uploads
@@ -16,6 +16,10 @@ const forwardedResponseHeaders = [
 ];
 
 async function forward(method: string, params: { path: string }, request: Request): Promise<Response> {
+  // CSRF: unsafe methods only from this origin (see sameOrigin).
+  if (method !== "GET" && !sameOrigin(request, new URL(request.url))) {
+    return json({ error: { message: "cross-site request refused" } }, { status: 403 });
+  }
   const url = `${API_URL}/api/v1/${params.path}${new URL(request.url).search}`;
   const headers: Record<string, string> = { ...authHeaders(request), ...clientIpHeaders(request) };
   let body: ArrayBuffer | undefined;

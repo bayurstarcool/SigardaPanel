@@ -289,13 +289,20 @@ func (m *MySQLConn) CreateDatabase(ctx context.Context, name string, charset, co
 	if collation == "" {
 		collation = "utf8mb4_unicode_ci"
 	}
-	q := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET %s COLLATE %s", safeIdent(name), safeIdent(charset), safeIdent(collation))
+	if siteinput.ReservedDatabaseName(name) {
+		return fmt.Errorf("reserved database name %q", name)
+	}
+	// No IF NOT EXISTS: an existing database is never adopted.
+	q := fmt.Sprintf("CREATE DATABASE `%s` CHARACTER SET %s COLLATE %s", safeIdent(name), safeIdent(charset), safeIdent(collation))
 	_, err := m.db.ExecContext(ctx, q)
 	return err
 }
 
 // DropDatabase drops a database.
 func (m *MySQLConn) DropDatabase(ctx context.Context, name string) error {
+	if siteinput.ReservedDatabaseName(name) {
+		return fmt.Errorf("reserved database name %q", name)
+	}
 	q := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", safeIdent(name))
 	_, err := m.db.ExecContext(ctx, q)
 	return err
@@ -471,6 +478,9 @@ func scanServer(row *sql.Row) (*Server, error) {
 
 // GrantPrivileges grants privileges on a database to an existing user.
 func (m *MySQLConn) GrantPrivileges(ctx context.Context, username, host, dbName, privileges string) error {
+	if siteinput.ReservedDatabaseName(dbName) {
+		return fmt.Errorf("reserved database name %q", dbName)
+	}
 	q := fmt.Sprintf("GRANT %s ON `%s`.* TO '%s'@'%s'", privileges, safeIdent(dbName), safeIdent(username), safeIdent(host))
 	if _, err := m.db.ExecContext(ctx, q); err != nil {
 		return err

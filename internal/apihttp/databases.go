@@ -92,6 +92,9 @@ func (h *dbHandler) createDatabase(c *echo.Context) error {
 	if !dbNameRegex.MatchString(body.Name) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid name (alphanumeric + underscore, 1-64)")
 	}
+	if siteinput.ReservedDatabaseName(body.Name) {
+		return echo.NewHTTPError(http.StatusBadRequest, "this name belongs to the database server; choose another")
+	}
 	if body.Type != "mysql" && body.Type != "postgres" {
 		return echo.NewHTTPError(http.StatusBadRequest, "type must be mysql or postgres")
 	}
@@ -131,6 +134,16 @@ func (h *dbHandler) createDatabase(c *echo.Context) error {
 	// Try direct MySQL first
 	mysqlOK := false
 	if body.Type == "mysql" && h.panelMySQL(c.Request().Context(), site) {
+		// A database that already exists on the server (another tenant's,
+		// or one the panel does not manage) is never adopted.
+		var exists bool
+		if err := h.execMySQL(func(conn *dbserver.MySQLConn) error {
+			var err error
+			exists, err = conn.HasDatabase(c.Request().Context(), body.Name)
+			return err
+		}); err == nil && exists {
+			return echo.NewHTTPError(http.StatusConflict, "a database with this name already exists on the server")
+		}
 		if err := h.execMySQL(func(conn *dbserver.MySQLConn) error {
 			return conn.CreateDatabase(c.Request().Context(), body.Name, body.Charset, body.Collation)
 		}); err == nil {

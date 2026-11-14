@@ -284,3 +284,17 @@ func DBHost(s string) error {
 	}
 	return nil
 }
+
+// ReservedDatabaseName reports names that belong to the database server
+// itself (MySQL/MariaDB system schemas, PostgreSQL maintenance and template
+// databases, phpMyAdmin's storage). A tenant who could register one would get
+// GRANT ALL on it, which on mysql.* means every account on the server.
+func ReservedDatabaseName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch n {
+	case "mysql", "sys", "information_schema", "performance_schema", "phpmyadmin",
+		"postgres", "template0", "template1":
+		return true
+	}
+	return strings.HasPrefix(n, "template") || strings.HasPrefix(n, "pg_")
+}

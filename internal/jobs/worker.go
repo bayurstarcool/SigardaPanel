@@ -247,6 +247,19 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	} else {
 		slog.Warn("worker: decrypt job payload failed", "job_id", job.ID, "error", derr)
 	}
+	// A database whose creation failed (e.g. the name already existed on
+	// the server) has no record any more: never grant on that name.
+	if job.Type == jobmodel.TypeDBUserCreate {
+		var p struct {
+			DatabaseID int64 `json:"database_id"`
+		}
+		if json.Unmarshal([]byte(job.Payload), &p) == nil && p.DatabaseID > 0 {
+			if d, err := w.store.Databases.GetByID(ctx, p.DatabaseID); err == nil && d == nil {
+				_ = w.store.Jobs.MarkCompleted(ctx, job.ID, false, "", "database record no longer exists")
+				return
+			}
+		}
+	}
 	// site.create is also how a site's vhost is regenerated (PHP, app port,
 	// security changes): the site's stored settings complete the payload,
 	// and the site's status before the job decides what success means.
@@ -291,6 +304,20 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 		if job.Type == jobmodel.TypeSiteCreate && job.SiteID.Valid && siteIsNew(siteBefore) {
 			if err := w.store.Sites.UpdateStatus(ctx, job.SiteID.Int64, "failed"); err != nil {
 				slog.Error("worker: mark site failed", "id", job.SiteID.Int64, "error", err)
+			}
+		}
+
+		// A database that could not be created must not stay recorded: its
+		// name may belong to someone else on the server (grants, backups and
+		// delete would then act on that database).
+		if job.Type == jobmodel.TypeDatabaseCreate {
+			var p struct {
+				DatabaseID int64 `json:"database_id"`
+			}
+			if json.Unmarshal([]byte(job.Payload), &p) == nil && p.DatabaseID > 0 {
+				if err := w.store.Databases.Delete(ctx, p.DatabaseID); err != nil {
+					slog.Error("worker: drop failed database record", "id", p.DatabaseID, "error", err)
+				}
 			}
 		}
 
