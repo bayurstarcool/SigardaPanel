@@ -58,13 +58,16 @@ func TestSiteCreate_CreatesOwnerAndChownsNewRoot(t *testing.T) {
 		t.Fatalf("expected 200, got %d %s", rec.Code, rec.Body.String())
 	}
 	calls, _ := os.ReadFile(log)
-	for _, want := range []string{
-		"fake-useradd -m -s /bin/bash " + testSiteOwner,
-		"chown -R " + testSiteOwner + ": " + root,
-	} {
-		if !strings.Contains(string(calls), want) {
-			t.Fatalf("expected %q in calls:\n%s", want, calls)
-		}
+	if want := "fake-useradd -m -s /bin/bash " + testSiteOwner; !strings.Contains(string(calls), want) {
+		t.Fatalf("expected %q in calls:\n%s", want, calls)
+	}
+	// Ownership is handed over in-process (sitefs.ChownTree, links never
+	// followed), not by a chown command; the fake account has no uid here.
+	if strings.Contains(string(calls), "chown -R") {
+		t.Fatalf("chown -R must not run on a path the site user controls:\n%s", calls)
+	}
+	if _, err := os.Stat(filepath.Join(root, "index.html")); err != nil {
+		t.Fatalf("starter file missing: %v", err)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"sigardapanel/internal/sitefs"
 	"sigardapanel/internal/siteinput"
 )
 
@@ -106,20 +107,35 @@ func allowTraverse(dir string) {
 // files in it) to the owner, plus the owner's htdocs directory when the root
 // sits directly in it (Mkdir created that as root). A root that already
 // existed keeps its ownership: it may hold files deliberately owned by others.
-func (r *Router) chownNewSiteRoot(ctx context.Context, owner *siteOwner, rootPath string, rootExisted bool) {
+//
+// The site user can rename and replace entries in its own home at any time,
+// so nothing here goes through a path the user could swap: the root is the
+// pinned directory, entries are Lchown'ed (links are never followed) and
+// htdocs is changed through its own pinned descriptor.
+func (r *Router) chownNewSiteRoot(ctx context.Context, owner *siteOwner, root *sitefs.PinnedDir, rootPath string, rootExisted bool) {
 	if rootExisted {
 		slog.Info("agent: site root already existed; ownership left unchanged", "root", rootPath, "user", owner.name)
 		return
 	}
-	spec := owner.name + ":" // the user and its login group
-	if out, err := r.executor.RunShell(ctx, "chown", "-R", spec, rootPath); err != nil {
-		slog.Warn("agent: chown site root", "root", rootPath, "user", owner.name, "error", err, "output", strings.TrimSpace(out))
+	uid, gid, ok := siteUserIDs(owner.name)
+	if !ok {
+		slog.Warn("agent: chown site root: owner account not usable", "root", rootPath, "user", owner.name)
+		return
+	}
+	if err := sitefs.ChownTree(root, int(uid), int(gid)); err != nil {
+		slog.Warn("agent: chown site root", "root", rootPath, "user", owner.name, "error", err)
 		return
 	}
 	htdocs := filepath.Join(owner.home, "htdocs")
 	if filepath.Dir(filepath.Clean(rootPath)) == htdocs {
-		if out, err := r.executor.RunShell(ctx, "chown", spec, htdocs); err != nil {
-			slog.Warn("agent: chown htdocs", "dir", htdocs, "error", err, "output", strings.TrimSpace(out))
+		pin, err := sitefs.PinDir(htdocs)
+		if err != nil {
+			slog.Warn("agent: chown htdocs", "dir", htdocs, "error", err)
+			return
+		}
+		defer pin.Close()
+		if err := pin.Chown(int(uid), int(gid)); err != nil {
+			slog.Warn("agent: chown htdocs", "dir", htdocs, "error", err)
 		}
 	}
 }
@@ -173,7 +189,12 @@ func (r *Router) siteTransferTask(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "move files failed: "+err.Error())
 	}
 	if owner != nil {
-		r.chownNewSiteRoot(ctx, owner, p.NewRoot, false)
+		pin, err := sitefs.PinDir(p.NewRoot)
+		if err != nil {
+			return echo.NewHTTPError(sitefs.StatusOf(err), "new root: "+err.Error())
+		}
+		r.chownNewSiteRoot(ctx, owner, pin, p.NewRoot, false)
+		pin.Close()
 	}
 	slog.Info("agent: site.transfer", "site_id", p.SiteID, "from", p.OldRoot, "to", p.NewRoot, "user", p.SystemUser)
 	return c.JSON(http.StatusOK, map[string]any{"ok": true, "root_path": p.NewRoot})

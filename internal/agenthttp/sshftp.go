@@ -10,9 +10,11 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"sigardapanel/internal/sitefs"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/labstack/echo/v5"
 )
@@ -178,13 +180,30 @@ func (r *Router) sshCreateTask(c *echo.Context) error {
 	}
 	home := r.sshHome(p.Username)
 
+	// The jail is created here, as root:root 0755, before the account exists
+	// (useradd -M). useradd -m used to create it owned by the site user's
+	// uid (the account shares it) and it was handed to root only later, so
+	// the site user could plant symlinks in it (tmp -> /etc made the agent
+	// chmod /etc 1777; .ssh/authorized_keys -> /root/... got the tenant's
+	// keys). Mkdir fails on anything already there, a symlink included, and
+	// nothing inside the jail is writable by the account until the site is
+	// bind-mounted at the very end.
+	if err := os.Mkdir(home, 0o755); err != nil {
+		return c.JSON(http.StatusConflict, map[string]any{"ok": false, "message": "the jail directory " + home + " already exists on this server"})
+	}
+	if err := os.Chown(home, 0, 0); err != nil {
+		_ = os.Remove(home)
+		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "prepare jail failed"})
+	}
+	_ = os.Chmod(home, 0o755) // not subject to the umask
+
 	// The account shares the uid/gid of the site's owner (a second name for
 	// the same Linux user), so it can edit the site's files and what it
 	// uploads belongs to the site user. As a separate user it could read the
 	// site but not write it. The chroot keeps it inside this site.
 	// The ids come from the site user's account (siteUserIDs refuses root and
 	// service accounts), never from a path in the request.
-	useradd := []string{"-m", "-d", home, "-s", "/bin/bash"}
+	useradd := []string{"-M", "-d", home, "-s", "/bin/bash"}
 	if uid, gid, ok := siteUserIDs(p.SystemUser); ok && uid >= 1000 {
 		useradd = append(useradd, "-o", "-u", strconv.FormatUint(uint64(uid), 10), "-g", strconv.FormatUint(uint64(gid), 10))
 	}
@@ -193,6 +212,7 @@ func (r *Router) sshCreateTask(c *echo.Context) error {
 	out, err := r.executor.RunShell(ctx, r.useraddCmd, useradd...)
 	siteUserMu.Unlock()
 	if err != nil {
+		_ = os.Remove(home)
 		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "create user failed: " + strings.TrimSpace(out)})
 	}
 	cleanup := func() { r.removeSSHAccount(ctx, p.Username, home) }
@@ -219,18 +239,20 @@ func (r *Router) sshCreateTask(c *echo.Context) error {
 	priv, _ := os.ReadFile(keyFile)
 	pub, _ := os.ReadFile(keyFile + ".pub")
 
+	// Everything below is created fresh in the root-owned jail: Mkdir and
+	// O_EXCL|O_NOFOLLOW fail on an entry that already exists.
+	// .ssh and authorized_keys stay root-owned (sshd's StrictModes accepts
+	// that); the keys are managed by the panel.
 	sshDir := filepath.Join(home, ".ssh")
-	_ = os.MkdirAll(sshDir, 0o700)
 	keys := append([]string{strings.TrimSpace(string(pub))}, extraKeys...)
-	if err := os.WriteFile(filepath.Join(sshDir, "authorized_keys"), []byte(strings.Join(keys, "\n")+"\n"), 0o600); err != nil {
+	if err := jailMkdir(sshDir, 0o755); err != nil {
+		cleanup()
+		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "prepare jail failed: " + err.Error()})
+	}
+	if err := jailWriteFile(filepath.Join(sshDir, "authorized_keys"), []byte(strings.Join(keys, "\n")+"\n"), 0o644); err != nil {
 		cleanup()
 		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "write authorized_keys failed"})
 	}
-	_, _ = r.executor.RunShell(ctx, "chown", "-R", u.Uid+":"+u.Gid, sshDir)
-
-	// The chroot directory itself must be root-owned and not group/world writable.
-	_ = os.Chown(home, 0, 0)
-	_ = os.Chmod(home, 0o755)
 
 	fstab := r.readFstabLines()
 	for _, d := range []string{"/bin", "/lib", "/lib64", "/usr"} {
@@ -238,42 +260,74 @@ func (r *Router) sshCreateTask(c *echo.Context) error {
 			continue
 		}
 		dst := filepath.Join(home, d)
-		_ = os.MkdirAll(dst, 0o755)
+		if err := jailMkdir(dst, 0o755); err != nil {
+			cleanup()
+			return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "prepare jail failed: " + err.Error()})
+		}
 		_, _ = r.hostMount(ctx, "mount", "--bind", d, dst)
 		_, _ = r.hostMount(ctx, "mount", "-o", "remount,bind,ro", dst)
 		fstab = append(fstab, fmt.Sprintf("%s %s none bind,ro 0 0  %s", d, dst, sshMarker(p.Username)))
 	}
 	// Shells and tools (git, composer, php) need a few devices and /tmp.
 	devDir := filepath.Join(home, "dev")
-	_ = os.MkdirAll(devDir, 0o755)
+	if err := jailMkdir(devDir, 0o755); err != nil {
+		cleanup()
+		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "prepare jail failed: " + err.Error()})
+	}
 	for _, dev := range []string{"null", "zero", "urandom", "random", "tty"} {
 		src := filepath.Join("/dev", dev)
 		if _, err := os.Stat(src); err != nil {
 			continue
 		}
 		dst := filepath.Join(devDir, dev)
-		if f, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-			f.Close()
+		if err := jailWriteFile(dst, nil, 0o644); err != nil {
+			continue
 		}
 		_, _ = r.hostMount(ctx, "mount", "--bind", src, dst)
 		fstab = append(fstab, fmt.Sprintf("%s %s none bind 0 0  %s", src, dst, sshMarker(p.Username)))
 	}
 	tmpDir := filepath.Join(home, "tmp")
-	_ = os.MkdirAll(tmpDir, 0o1777)
-	_ = os.Chmod(tmpDir, 0o1777|os.ModeSticky)
+	if err := jailMkdir(tmpDir, 0o1777|os.ModeSticky); err != nil {
+		cleanup()
+		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "prepare jail failed: " + err.Error()})
+	}
 	etc := filepath.Join(home, "etc")
-	_ = os.MkdirAll(etc, 0o755)
-	_ = os.WriteFile(filepath.Join(etc, "passwd"), []byte(fmt.Sprintf("root:x:0:0:root:/root:/sbin/nologin\n%s:x:%s:%s::/:/bin/bash\n", p.Username, u.Uid, u.Gid)), 0o644)
-	_ = os.WriteFile(filepath.Join(etc, "group"), []byte(fmt.Sprintf("root:x:0:\n%s:x:%s:\n", p.Username, u.Gid)), 0o644)
+	if err := jailMkdir(etc, 0o755); err != nil {
+		cleanup()
+		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "prepare jail failed: " + err.Error()})
+	}
+	_ = jailWriteFile(filepath.Join(etc, "passwd"), []byte(fmt.Sprintf("root:x:0:0:root:/root:/sbin/nologin\n%s:x:%s:%s::/:/bin/bash\n", p.Username, u.Uid, u.Gid)), 0o644)
+	_ = jailWriteFile(filepath.Join(etc, "group"), []byte(fmt.Sprintf("root:x:0:\n%s:x:%s:\n", p.Username, u.Gid)), 0o644)
 	if resolv, err := os.ReadFile("/etc/resolv.conf"); err == nil {
-		_ = os.WriteFile(filepath.Join(etc, "resolv.conf"), resolv, 0o644)
+		_ = jailWriteFile(filepath.Join(etc, "resolv.conf"), resolv, 0o644)
 	}
 	htdocs := filepath.Join(home, "htdocs")
-	if err := os.MkdirAll(htdocs, 0o755); err != nil {
+	if err := jailMkdir(htdocs, 0o755); err != nil {
 		cleanup()
 		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "create mount point failed"})
 	}
-	if out, err := r.hostMount(ctx, "mount", "--bind", p.SiteRoot, htdocs); err != nil {
+	// The site root is pinned, and after the bind mount (which may run in
+	// the host's mount namespace, where the pinned descriptor's path is not
+	// usable) the mounted directory must be the pinned one: a root swapped
+	// for a symlink (to /etc, say) meanwhile is unmounted and refused.
+	sitePin, perr := sitefs.PinDir(p.SiteRoot)
+	if perr != nil {
+		cleanup()
+		return c.JSON(sitefs.StatusOf(perr), map[string]any{"ok": false, "message": perr.Error()})
+	}
+	defer sitePin.Close()
+	mountPoint, _ := os.Stat(htdocs) // the empty directory created above
+	out, err = r.hostMount(ctx, "mount", "--bind", p.SiteRoot, htdocs)
+	if err == nil {
+		fi, serr := os.Stat(htdocs)
+		mountedOther := serr == nil && !os.SameFile(fi, sitePin.Info) && (mountPoint == nil || !os.SameFile(fi, mountPoint))
+		if mountedOther {
+			_, _ = r.hostMount(ctx, "umount", htdocs)
+			cleanup()
+			return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "the site root changed while the jail was created"})
+		}
+	}
+	if err != nil {
 		cleanup()
 		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "bind mount of the site failed: " + strings.TrimSpace(out)})
 	}
@@ -360,4 +414,27 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// jailMkdir creates one directory of a new jail; an existing entry (a
+// symlink included) is an error, never reused.
+func jailMkdir(path string, mode os.FileMode) error {
+	if err := os.Mkdir(path, mode.Perm()); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode) // exact bits (umask, sticky)
+}
+
+// jailWriteFile creates a file of a new jail: O_EXCL|O_NOFOLLOW, so nothing
+// already there (a planted symlink in particular) is followed or reused.
+func jailWriteFile(path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

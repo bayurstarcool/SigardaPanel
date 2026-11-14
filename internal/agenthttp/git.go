@@ -278,7 +278,10 @@ func (r *Router) runGit(ctx context.Context, rootPath string, args ...string) (s
 	return r.executor.RunShell(ctx, "git", full...)
 }
 
-// siteUserIDs resolves a validated, existing, non-root unix account.
+// siteUserIDs resolves a validated, existing regular login account (UID >=
+// minSiteUserUID, not nobody). Service accounts (postgres, mysql, redis,
+// www-data: UIDs below 1000) are refused: a terminal or file operation as
+// postgres is the PostgreSQL superuser, as www-data every site's PHP.
 func siteUserIDs(name string) (uid, gid uint32, ok bool) {
 	if siteinput.SystemUser(name) != nil {
 		return 0, 0, false
@@ -289,7 +292,7 @@ func siteUserIDs(name string) (uid, gid uint32, ok bool) {
 	}
 	a, err1 := strconv.ParseUint(u.Uid, 10, 32)
 	b, err2 := strconv.ParseUint(u.Gid, 10, 32)
-	if err1 != nil || err2 != nil {
+	if err1 != nil || err2 != nil || a < minSiteUserUID || a == 65534 {
 		return 0, 0, false
 	}
 	return uint32(a), uint32(b), true

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sigardapanel/internal/sitefs"
 	"strconv"
 	"strings"
 	"sync"
@@ -143,7 +144,14 @@ func (r *Router) siteUsageTask(c *echo.Context) error {
 	if !dirExists(p.RootPath) {
 		return c.JSON(http.StatusOK, map[string]any{"ok": true, "disk_used_bytes": 0, "exists": false})
 	}
-	out, err := r.executor.RunShell(c.Request().Context(), "du", "-sb", p.RootPath)
+	// Measure the pinned directory (trailing slash: du enters the pinned
+	// descriptor's directory), never a path the site user could swap.
+	pin, perr := sitefs.PinDir(p.RootPath)
+	if perr != nil {
+		return c.JSON(sitefs.StatusOf(perr), map[string]any{"ok": false, "message": perr.Error()})
+	}
+	defer pin.Close()
+	out, err := r.executor.RunShell(c.Request().Context(), "du", "-sb", pin.Path+"/")
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "du failed: " + strings.TrimSpace(out)})
 	}

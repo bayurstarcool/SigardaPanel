@@ -18,11 +18,13 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/executor"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/nginx"
+	"sigardapanel/internal/sitefs"
 	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
@@ -126,6 +128,9 @@ func NewRouterWithOptions(opts RouterOptions) *echo.Echo {
 
 func newRouter(opts *RouterOptions) *echo.Echo {
 	e := echo.New()
+	// Uploads are capped at 32 MB (maxUploadBytes); nothing else is near
+	// that. A cap keeps a client from streaming unbounded bodies at root.
+	e.Use(middleware.BodyLimit(maxUploadBytes + 8<<20))
 
 	r := &Router{
 		executor:       &executor.Executor{Timeout: 30 * time.Minute},
@@ -295,10 +300,9 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	// Agent self-update on remote servers (runs the embedded agent-update.sh)
 	tasks.GET("/agent/update", r.agentUpdateStatusTask)
 	tasks.POST("/agent/update", r.agentUpdateStartTask)
-
-	// Application templates (WordPress, Laravel, etc.)
-	tasks.POST("/templates/wordpress", r.installWordPress)
-	tasks.POST("/templates/laravel", r.installLaravel)
+	// (The WordPress/Laravel template routes were removed: nothing called
+	// them, and they ran composer/wp-cli and chown -R/chmod -R as root on
+	// tenant-controlled trees.)
 
 	// PM2 process manager
 	tasks.POST("/pm2/manage", r.managePM2)
@@ -588,23 +592,28 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 	if err := r.executor.Mkdir(ctx, payload.RootPath); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "mkdir failed: "+err.Error())
 	}
+	// The site user owns the tree above the root: a parent swapped for a
+	// symlink between the path check and mkdir is caught here, before any
+	// file is written or handed over. Later steps use the pinned directory.
+	rootPin, err := sitefs.PinDir(payload.RootPath)
+	if err != nil {
+		return echo.NewHTTPError(sitefs.StatusOf(err), err.Error())
+	}
+	defer rootPin.Close()
 
 	// 2. Write runtime starter template (skip if site already has content — don't overwrite user code)
+	// Starter files are created only where nothing exists (O_EXCL); a
+	// planted symlink is never followed.
 	if payload.VhostRegen {
 		// existing site: leave its files alone
 	} else if templates := nginx.TemplateForRuntime(payload.Runtime, payload.Domain, payload.Port); templates != nil {
 		for fname, content := range templates {
-			fpath := filepath.Join(payload.RootPath, fname)
-			if _, err := r.executor.RunShell(ctx, "test", "-f", fpath); err != nil {
-				r.executor.WriteFile(ctx, fpath, content, 0644)
-			}
+			_ = sitefs.WriteNewFile(rootPin.Path, fname, []byte(content), 0644)
 		}
 	} else {
 		// static/proxy: write placeholder index.html
-		if _, err := r.executor.RunShell(ctx, "test", "-f", filepath.Join(payload.RootPath, "index.html")); err != nil {
-			indexHTML := "<h1>" + payload.Domain + "</h1><p>Site created via SigardaPanel</p>"
-			r.executor.WriteFile(ctx, filepath.Join(payload.RootPath, "index.html"), indexHTML, 0644)
-		}
+		indexHTML := "<h1>" + payload.Domain + "</h1><p>Site created via SigardaPanel</p>"
+		_ = sitefs.WriteNewFile(rootPin.Path, "index.html", []byte(indexHTML), 0644)
 	}
 
 	// ─── Docker runtime: pull image + create container ───
@@ -630,12 +639,8 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		isBitnami := strings.Contains(strings.ToLower(payload.DockerImage), "bitnami")
 		if !isBitnami {
 			if helloFiles := dockerHelloWorld(dockerLang, payload.Domain); helloFiles != nil {
-				r.executor.Mkdir(ctx, payload.RootPath)
 				for fname, content := range helloFiles {
-					fpath := filepath.Join(payload.RootPath, fname)
-					if _, err := r.executor.RunShell(ctx, "test", "-f", fpath); err != nil {
-						r.executor.WriteFile(ctx, fpath, content, 0644)
-					}
+					_ = sitefs.WriteNewFile(rootPin.Path, fname, []byte(content), 0644)
 				}
 			}
 		}
@@ -756,7 +761,7 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 	// 2b. Hand the files to the site owner, like the panel host's
 	// /home/<user>/htdocs/<domain> layout expects.
 	if owner != nil {
-		r.chownNewSiteRoot(ctx, owner, payload.RootPath, rootExisted)
+		r.chownNewSiteRoot(ctx, owner, rootPin, payload.RootPath, rootExisted)
 	}
 
 	// 3. Generate & write nginx config (always regenerate — supports port/command changes)
@@ -1150,8 +1155,9 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 		r.executor.RunShell(ctx, "certbot", "delete", "--non-interactive", "--cert-name", payload.Domain)
 	}
 
-	// 4. Remove site directory
-	if err := r.executor.RemoveAll(ctx, payload.RootPath); err != nil {
+	// 4. Remove site directory: beneath its pinned parent, never through a
+	// symlink the site user put in place of the root or a parent.
+	if err := sitefs.RemoveTree(payload.RootPath); err != nil {
 		errs = append(errs, "site root: "+err.Error())
 	} else {
 		cleaned = append(cleaned, "site files")
@@ -1638,17 +1644,32 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 	if err := r.executor.EnsureDir(ctx, globalBackupDir); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "ensure backup dir failed: "+err.Error())
 	}
+	// The site user can swap the root's parent or backups/ for symlinks:
+	// tar reads the root beneath its pinned parent (a root replaced by a link
+	// is archived as the link) and every file is written into the pinned
+	// backups directory, the archive itself with O_EXCL (RunToFileEnv).
+	backupPin, perr := sitefs.PinDir(globalBackupDir)
+	if perr != nil {
+		return echo.NewHTTPError(sitefs.StatusOf(perr), "backup dir: "+perr.Error())
+	}
+	defer backupPin.Close()
+	parentPin, rootBase, perr := sitefs.PinParent(payload.RootPath)
+	if perr != nil {
+		return echo.NewHTTPError(sitefs.StatusOf(perr), "site root: "+perr.Error())
+	}
+	defer parentPin.Close()
 
 	kind := "files"
 	if payload.BackupType == "both" || len(payload.Databases) > 0 {
 		kind = "full"
 	}
 	backupName := buildBackupFileName(kind, payload.BackupID, ".tar.gz")
-	backupFile := filepath.Join(globalBackupDir, backupName)
+	backupFile := filepath.Join(globalBackupDir, backupName) // reported to the panel
+	writeFile := filepath.Join(backupPin.Path, backupName)
 	var output string
 	var err error
 	if len(payload.Databases) > 0 {
-		bundleDir, err := os.MkdirTemp(globalBackupDir, "full-*")
+		bundleDir, err := os.MkdirTemp(backupPin.Path, "full-*")
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "create bundle temp failed: "+err.Error())
 		}
@@ -1670,9 +1691,9 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, "database dump failed: "+strings.TrimSpace(output))
 			}
 		}
-		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args := append([]string{"-czf", "-"}, siteBackupExcludes(payload.RootPath)...)
 		args = append(args, userExcludeArgs(patterns)...)
-		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath),
+		args = append(args, "-C", parentPin.Path, rootBase,
 			"-C", bundleDir, "database_dumps")
 		if len(patterns) > 0 {
 			if err := os.WriteFile(filepath.Join(bundleDir, excludeManifest), []byte(strings.Join(patterns, "\n")+"\n"), 0o600); err != nil {
@@ -1680,13 +1701,13 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 			}
 			args = append(args, excludeManifest)
 		}
-		output, err = r.executor.RunShell(ctx, "tar", args...)
+		output, err = r.executor.RunToFileEnv(ctx, nil, writeFile, "tar", args...)
 	} else {
-		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args := append([]string{"-czf", "-"}, siteBackupExcludes(payload.RootPath)...)
 		args = append(args, userExcludeArgs(patterns)...)
-		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath))
+		args = append(args, "-C", parentPin.Path, rootBase)
 		if len(patterns) > 0 {
-			manifestDir, merr := os.MkdirTemp(globalBackupDir, "excl-*")
+			manifestDir, merr := os.MkdirTemp(backupPin.Path, "excl-*")
 			if merr != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, "create temp dir failed: "+merr.Error())
 			}
@@ -1696,14 +1717,15 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 			}
 			args = append(args, "-C", manifestDir, excludeManifest)
 		}
-		output, err = r.executor.RunShell(ctx, "tar", args...)
+		output, err = r.executor.RunToFileEnv(ctx, nil, writeFile, "tar", args...)
 	}
 	if err != nil {
+		_ = os.Remove(writeFile)
 		return echo.NewHTTPError(http.StatusInternalServerError, "tar failed: "+strings.TrimSpace(output))
 	}
 
 	// Get file size using os.Stat for cross-platform compatibility
-	info, err := os.Stat(backupFile)
+	info, err := os.Stat(writeFile)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "stat backup failed: "+err.Error())
 	}
@@ -1725,7 +1747,7 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 
 		endpoint := normalizeS3Endpoint(payload.S3Config.Endpoint)
 		awsArgs := []string{
-			"s3", "cp", backupFile, s3Path,
+			"s3", "cp", writeFile, s3Path, // the pinned copy, not a path the user could swap
 			"--endpoint-url", endpoint,
 			"--region", payload.S3Config.Region,
 		}
@@ -1937,12 +1959,21 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 	if err := os.MkdirAll(filepath.Dir(payload.RootPath), 0755); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "create parent dir failed: "+err.Error())
 	}
+	// The site user owns the root's parent: every step of the swap names the
+	// root beneath the pinned parent, so a parent replaced by a symlink after
+	// the path check cannot redirect the moves, deletes or ownership changes.
+	parentPin, rootBase, perr := sitefs.PinParent(payload.RootPath)
+	if perr != nil {
+		return echo.NewHTTPError(sitefs.StatusOf(perr), "site root: "+perr.Error())
+	}
+	defer parentPin.Close()
+	siteRoot := filepath.Join(parentPin.Path, rootBase)
 
 	// Re-own the restored tree to whoever owns the site today (fall back to the
 	// parent directory's owner) and drop setuid/setgid/special files.
-	ownerRef := payload.RootPath
+	ownerRef := siteRoot
 	if _, err := os.Lstat(ownerRef); err != nil {
-		ownerRef = filepath.Dir(payload.RootPath)
+		ownerRef = filepath.Dir(siteRoot)
 	}
 	if fi, err := os.Lstat(ownerRef); err == nil {
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
@@ -1956,23 +1987,24 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 	// failure while installing the restored copy can be rolled back and never
 	// leaves the site with no data.
 	oldRoot := ""
-	if exists, _ := r.executor.Stat(ctx, payload.RootPath); exists {
-		oldRoot = fmt.Sprintf("%s.restore-old-%d", payload.RootPath, payload.BackupID)
+	if exists, _ := r.executor.Stat(ctx, siteRoot); exists {
+		oldRoot = fmt.Sprintf("%s.restore-old-%d", siteRoot, payload.BackupID)
 		_ = os.RemoveAll(oldRoot)
-		if err := movePath(payload.RootPath, oldRoot); err != nil {
+		if err := movePath(siteRoot, oldRoot); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "stage existing root failed: "+err.Error())
 		}
 	}
 
-	if err := movePath(extractedRoot, payload.RootPath); err != nil {
+	if err := movePath(extractedRoot, siteRoot); err != nil {
 		// Roll back: restore the original root from the staged copy.
 		if oldRoot != "" {
-			_ = os.RemoveAll(payload.RootPath)
-			if rbErr := movePath(oldRoot, payload.RootPath); rbErr != nil {
+			_ = os.RemoveAll(siteRoot)
+			if rbErr := movePath(oldRoot, siteRoot); rbErr != nil {
 				slog.Error("agent: backup.restore rollback failed", "backup_id", payload.BackupID,
 					"root_path", payload.RootPath, "staged", oldRoot, "error", rbErr)
 				return echo.NewHTTPError(http.StatusInternalServerError,
-					"move restored root failed and rollback failed; original site data preserved at "+oldRoot+": "+err.Error())
+					"move restored root failed and rollback failed; original site data preserved at "+
+						fmt.Sprintf("%s.restore-old-%d", payload.RootPath, payload.BackupID)+": "+err.Error())
 			}
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "move restored root failed: "+err.Error())
@@ -1984,7 +2016,7 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 	// nor deletes the site's local backups.
 	if oldRoot != "" {
 		for _, name := range siteBackupExcludedTop {
-			from, to := filepath.Join(oldRoot, name), filepath.Join(payload.RootPath, name)
+			from, to := filepath.Join(oldRoot, name), filepath.Join(siteRoot, name)
 			if _, err := os.Lstat(from); err != nil {
 				continue
 			}
@@ -2002,7 +2034,7 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 	if oldRoot != "" {
 		if raw, err := os.ReadFile(filepath.Join(tmpDir, excludeManifest)); err == nil {
 			if pats, err := cleanExcludePatterns(strings.Split(strings.TrimSpace(string(raw)), "\n")); err == nil && len(pats) > 0 {
-				carryExcluded(oldRoot, payload.RootPath, pats)
+				carryExcluded(oldRoot, siteRoot, pats)
 			}
 		}
 	}
@@ -2013,7 +2045,7 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 			slog.Warn("agent: backup.restore cleanup of staged old root failed", "backup_id", payload.BackupID, "staged", oldRoot, "error", err)
 		}
 	}
-	filesExtracted := countFiles(payload.RootPath)
+	filesExtracted := countFiles(siteRoot)
 
 	slog.Info("agent: backup.restore", "backup_id", payload.BackupID, "site_id", payload.SiteID)
 
