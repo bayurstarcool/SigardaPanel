@@ -925,3 +925,6 @@ v1.10.0 security release from two audits: per-site PHP-FPM pools as the site own
 EnvironmentFile), pinned TLS to remote agents, server management / docker sites / raw
 vhost / license super_admin only, reserved database names, privileged Linux accounts
 refused as site owners (trusted-site-users), backup database dumps fixed.
+v1.11.0 RBAC: permission registry (internal/rbac), RequirePermission on every route,
+built-in roles unchanged, custom roles (Settings -> Roles), dangerous permissions only
+grantable by super_admin, no escalation (subset rule, also for user.manage_all).
