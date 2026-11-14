@@ -43,6 +43,11 @@ type TaskResult struct {
 	// or kept the shared one (false, no manageable pool dir). Nil: an agent
 	// that predates per-site pools.
 	PHPPool *bool `json:"php_pool,omitempty"`
+	// site.deploy: the deployed commit and the step log (also on failure).
+	Commit        string `json:"commit,omitempty"`
+	CommitMessage string `json:"commit_message,omitempty"`
+	CommitAuthor  string `json:"commit_author,omitempty"`
+	DeployLog     string `json:"deploy_log,omitempty"`
 }
 
 var agentErrorSecretPattern = regexp.MustCompile(`(?i)\b(password|secret|token|access[_-]?key|authorization)\s*([:=])\s*([^\s,;]+)`)

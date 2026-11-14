@@ -584,6 +584,11 @@ func (h *siteHandler) delete(c *echo.Context) error {
 	// DNS: only the records the panel created for this site, with the
 	// account that created them, and only while unchanged (never by name).
 	dnsNotes := h.removeSiteDNS(c.Request().Context(), site)
+	// Git: the deploy key and webhook at the provider, and the history.
+	if g, _ := h.store.Git.GetSiteGit(c.Request().Context(), site.ID); g != nil && g.ConnectionID > 0 {
+		h.removeRemoteGit(c.Request().Context(), g)
+	}
+	_ = h.store.Git.DeleteSiteData(c.Request().Context(), site.ID)
 
 	// Send cleanup payload to agent — site.delete job handles files, SSL, logs, services
 	payload, _ := json.Marshal(map[string]any{
@@ -670,14 +675,9 @@ func (h *siteHandler) deploy(c *echo.Context) error {
 		branch = "main"
 	}
 
-	job := &jobmodel.Job{
-		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
-		SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
-		Type:        jobmodel.TypeSiteDeploy,
-		Description: fmt.Sprintf("Deploy site %s", site.Domain),
-		Payload:     deployPayload(site, branch),
-	}
-	if err := h.store.Jobs.Create(c.Request().Context(), job); err != nil {
+	_ = branch
+	dep, job, err := queueSiteDeploy(c.Request().Context(), h.store, site, deployRequest{Trigger: "manual", UserID: userID})
+	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
@@ -687,7 +687,8 @@ func (h *siteHandler) deploy(c *echo.Context) error {
 
 	return c.JSON(http.StatusAccepted, httpjson.Success{
 		Data: map[string]any{
-			"job_id": job.ID,
+			"job_id":        job.ID,
+			"deployment_id": dep.ID,
 		},
 		RequestID: rid,
 	})

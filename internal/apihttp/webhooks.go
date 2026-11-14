@@ -4,9 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,7 +12,6 @@ import (
 	"strconv"
 
 	"github.com/labstack/echo/v5"
-	"sigardapanel/internal/jobmodel"
 	"sigardapanel/internal/store"
 	"strings"
 )
@@ -78,18 +75,26 @@ func (h *webhookHandler) deploy(c *echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]any{"ok": false, "message": "missing signature"})
 	}
 
-	// Verify branch if ref is present in payload
-	var payload struct {
-		Ref string `json:"ref"`
+	// Ping events (GitHub sends one when the hook is created) and pushes to
+	// other branches or branch deletions do not deploy.
+	if ev := c.Request().Header.Get("X-GitHub-Event"); ev == "ping" {
+		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "pong"})
 	}
-	if err := json.Unmarshal(body, &payload); err == nil && payload.Ref != "" {
+	push := parsePush(body)
+	if push.Ref != "" {
 		branch := site.GitBranch.String
 		if branch == "" {
 			branch = "main"
 		}
-		if payload.Ref != "refs/heads/"+branch {
+		if push.Ref != "refs/heads/"+branch {
 			return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "branch mismatch"})
 		}
+	}
+	if push.Deleted {
+		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "branch deleted; nothing to deploy"})
+	}
+	if g, _ := h.store.Git.GetSiteGit(c.Request().Context(), site.ID); g != nil && !g.AutoDeploy {
+		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "auto deploy is off for this site"})
 	}
 
 	// Over the owner's disk limit: refuse, and tell the site's users (the git
@@ -104,20 +109,9 @@ func (h *webhookHandler) deploy(c *echo.Context) error {
 	}
 	siteDisk.grew(site.ID, 0)
 
-	branch := site.GitBranch.String
-	if branch == "" {
-		branch = "main"
-	}
-
-	job := &jobmodel.Job{
-		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
-		SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
-		Type:        jobmodel.TypeSiteDeploy,
-		Status:      jobmodel.StatusQueued,
-		Description: fmt.Sprintf("Deploy site %s (webhook)", site.Domain),
-		Payload:     deployPayload(site, branch),
-	}
-	if err := h.store.Jobs.Create(c.Request().Context(), job); err != nil {
+	_, job, err := queueSiteDeploy(c.Request().Context(), h.store, site, deployRequest{Trigger: "push",
+		CommitSHA: push.After, CommitMessage: push.Message, CommitAuthor: push.Author})
+	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
