@@ -55,6 +55,11 @@ func (r *Router) checkPHPFPM(version string) error {
 		have = "Installed PHP-FPM versions: " + strings.Join(installed, ", ") + "."
 	}
 
+	// The site gets its own pool when the version's pool directory exists
+	// (php<version>-fpm installed); the shared socket is not needed then.
+	if r.poolVersion(version) != "" {
+		return nil
+	}
 	if version != "" {
 		if fileExists(r.phpSocket(version)) {
 			return nil

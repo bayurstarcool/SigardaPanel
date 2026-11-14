@@ -87,7 +87,9 @@ func (h *logsHandler) tail(c *echo.Context) error {
 		fileErr = "the site's server has no reachable agent"
 	} else {
 		code, out, err := stackAgentRequest(c.Request().Context(), http.MethodPost, agentBase(server)+"/tasks/logs/read", server.AgentToken,
-			map[string]any{"site_id": site.ID, "domain": site.Domain, "type": logType, "lines": limit, "php_version": site.PHPVersion.String}, 30*time.Second)
+			map[string]any{"site_id": site.ID, "domain": site.Domain, "type": logType, "lines": limit, "php_version": site.PHPVersion.String,
+				// the site's own PHP error log lives in its owner's home
+				"system_user": site.SystemUser.String}, 30*time.Second)
 		switch {
 		case err != nil && code == 0:
 			fileErr = "the site's agent is unreachable"

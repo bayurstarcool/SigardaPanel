@@ -410,6 +410,16 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 				}
 			}
 
+			// Per-site PHP-FPM pools: remember that this site went through
+			// an agent that knows them (see migratePHPPools).
+			if result != nil && result.PHPPool != nil {
+				v := "0"
+				if *result.PHPPool {
+					v = "1"
+				}
+				_ = store.SetSetting(ctx, w.store.DB(), phpPoolSettingKey(siteID), v)
+			}
+
 			// Update conf_file from agent response
 			if result != nil && result.NginxConfig != "" {
 				if err := w.store.Sites.UpdateConfFile(ctx, siteID, result.NginxConfig); err != nil {
@@ -724,6 +734,9 @@ func (w *Worker) siteCreatePayload(ctx context.Context, site *store.Site, raw st
 	setIfMissing("proxy_pass_url", site.ProxyPassURL.String, site.ProxyPassURL.Valid && site.ProxyPassURL.String != "")
 	setIfMissing("php_version", site.PHPVersion.String, site.PHPVersion.Valid && site.PHPVersion.String != "")
 	setIfMissing("php_ini", site.PHPIni.String, site.PHPIni.Valid && site.PHPIni.String != "")
+	// The site's own PHP-FPM pool runs as its owner: regenerations need it
+	// too (an existing root keeps its ownership on the agent).
+	setIfMissing("system_user", site.SystemUser.String, site.SystemUser.Valid && site.SystemUser.String != "")
 	// Settings stored before the allowlist existed are dropped, not sent:
 	// the vhost keeps regenerating with the allowed ones.
 	if raw, ok := p["php_ini"].(string); ok {

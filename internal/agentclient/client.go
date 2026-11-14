@@ -38,6 +38,10 @@ type TaskResult struct {
 	Expires string `json:"expires,omitempty"`
 	// AccessRules: site.create applied IP rules at server level (newer agents).
 	AccessRules bool `json:"access_rules,omitempty"`
+	// PHPPool: site.create ran the site's PHP in its own PHP-FPM pool (true)
+	// or kept the shared one (false, no manageable pool dir). Nil: an agent
+	// that predates per-site pools.
+	PHPPool *bool `json:"php_pool,omitempty"`
 }
 
 var agentErrorSecretPattern = regexp.MustCompile(`(?i)\b(password|secret|token|access[_-]?key|authorization)\s*([:=])\s*([^\s,;]+)`)

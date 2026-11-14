@@ -53,10 +53,14 @@ type Router struct {
 	testAuth     bool
 	certDir      string // placeholder certificate referenced by generated vhosts
 	phpRunDir    string // PHP-FPM sockets (php<version>-fpm.sock)
-	useraddCmd   string // creates site owners' Linux accounts
-	stack        *stackManager
-	panelUpdate  *panelUpdater
-	agentUpdate  *panelUpdater
+	phpEtcDir    string // /etc/php: per-site pools go to <ver>/fpm/pool.d
+	nginxRunUser string // nginx worker account (default: nginx.conf "user", else www-data)
+	// poolUserLookup resolves a site owner for its PHP-FPM pool (tests).
+	poolUserLookup func(name string) (*poolSiteUser, bool)
+	useraddCmd     string // creates site owners' Linux accounts
+	stack          *stackManager
+	panelUpdate    *panelUpdater
+	agentUpdate    *panelUpdater
 
 	// SSH/FTP jails
 	sshHomeBase    string
@@ -86,6 +90,14 @@ type RouterOptions struct {
 	DefaultCertDir string
 	// PHPRunDir overrides where PHP-FPM sockets are looked up (default /run/php).
 	PHPRunDir string
+	// PHPEtcDir overrides /etc/php (per-site pools). Injected routers default
+	// to a directory without pool.d, so PHP sites keep the shared pool unless
+	// a test creates one.
+	PHPEtcDir string
+	// NginxUser overrides the nginx worker account owning pool sockets.
+	NginxUser string
+	// PoolUserLookup replaces the site owner lookup for PHP-FPM pools.
+	PoolUserLookup func(name string) (uid, gid uint32, home string, ok bool)
 	// UseraddCommand is run to create a missing site owner. Injected routers
 	// default to a command that does not exist, so tests can never create
 	// real accounts on the machine running them.
@@ -144,6 +156,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		stubDev:        os.Getenv("SIGARDAPANEL_DEV") == "true",
 		certDir:        defaultSSLCertDir,
 		phpRunDir:      defaultPHPRunDir,
+		phpEtcDir:      defaultPHPEtcDir,
 		useraddCmd:     "useradd",
 		sshHomeBase:    "/home",
 		fstabPath:      "/etc/fstab",
@@ -190,6 +203,20 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		}
 		if opts.PHPRunDir != "" {
 			r.phpRunDir = opts.PHPRunDir
+		}
+		r.phpEtcDir = filepath.Join(os.TempDir(), "sigardapanel-agent-test-no-php")
+		if opts.PHPEtcDir != "" {
+			r.phpEtcDir = opts.PHPEtcDir
+		}
+		r.nginxRunUser = opts.NginxUser
+		if lookup := opts.PoolUserLookup; lookup != nil {
+			r.poolUserLookup = func(name string) (*poolSiteUser, bool) {
+				uid, gid, home, ok := lookup(name)
+				if !ok {
+					return nil, false
+				}
+				return &poolSiteUser{name: name, uid: uid, gid: gid, home: home}, true
+			}
 		}
 		r.useraddCmd = "sigardapanel-test-useradd-not-configured"
 		if opts.UseraddCommand != "" {
@@ -764,6 +791,19 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		r.chownNewSiteRoot(ctx, owner, rootPin, payload.RootPath, rootExisted)
 	}
 
+	// 2c. PHP runs in the site's own PHP-FPM pool, as the site owner (never
+	// a pool shared with other sites). Other runtimes have none.
+	phpSocket := ""
+	if payload.Runtime == "php" {
+		sock, err := r.ensurePHPPool(ctx, payload.SiteID, payload.PHPVersion, payload.SystemUser, payload.RootPath)
+		if err != nil {
+			return err
+		}
+		phpSocket = sock
+	} else {
+		r.removePHPPools(ctx, payload.SiteID, "")
+	}
+
 	// 3. Generate & write nginx config (always regenerate — supports port/command changes)
 	site := &store.Site{
 		Domain:       payload.Domain,
@@ -784,7 +824,7 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		}
 	}
 	certPath, keyPath := r.letsEncryptCert(payload.Domain)
-	config, err := nginx.GenerateVhostWithCert(site, payload.Port, security, certPath, keyPath)
+	config, err := nginx.GenerateVhostWithOptions(site, payload.Port, security, nginx.VhostOptions{CertPath: certPath, KeyPath: keyPath, PHPFPMSocket: phpSocket})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "config gen failed: "+err.Error())
 	}
@@ -845,6 +885,8 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		// level (all locations). Older agents only knew "location /" denies
 		// and no allowlist; the panel warns when this flag is missing.
 		"access_rules": true,
+		// php_pool: the site's PHP runs in its own pool (as the site user).
+		"php_pool": phpSocket != "",
 	})
 }
 
@@ -1142,6 +1184,11 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 		errs = append(errs, "nginx config: "+err.Error())
 	} else {
 		cleaned = append(cleaned, "nginx config")
+	}
+
+	// 2a. Remove the site's PHP-FPM pool(s).
+	if removed := r.removePHPPools(ctx, payload.SiteID, ""); len(removed) > 0 {
+		cleaned = append(cleaned, "PHP-FPM pool")
 	}
 
 	// 2b. Remove logrotate config
@@ -1601,6 +1648,7 @@ func (r *Router) logsReadTask(c *echo.Context) error {
 		Type       string `json:"type"`
 		Lines      int    `json:"lines"`
 		PHPVersion string `json:"php_version"`
+		SystemUser string `json:"system_user"`
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
@@ -1615,6 +1663,20 @@ func (r *Router) logsReadTask(c *echo.Context) error {
 
 	if !isValidDomain(payload.Domain) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid domain")
+	}
+
+	// A site with its own PHP-FPM pool: its own PHP error log, never the
+	// server-wide one (which belongs to every site on the server).
+	if payload.Type == "php" && payload.SiteID > 0 && r.sitePoolExists(payload.SiteID) {
+		path, lines, exists, err := r.readSitePHPErrorLog(payload.SystemUser, payload.SiteID, payload.Lines)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "PHP error log: "+err.Error())
+		}
+		resp := map[string]any{"ok": true, "path": path, "lines": lines}
+		if !exists {
+			resp["message"] = "log file does not exist yet"
+		}
+		return c.JSON(http.StatusOK, resp)
 	}
 
 	logPath := filepath.Join(r.logDir, payload.Domain+"."+payload.Type+".log")

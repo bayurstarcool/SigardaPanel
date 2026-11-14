@@ -622,6 +622,32 @@ func GenerateVhost(s *store.Site, port int, security *store.SiteSecurity) (strin
 // (e.g. Let's Encrypt's live/<domain>/fullchain.pem) instead of the
 // placeholder. Empty paths mean the placeholder.
 func GenerateVhostWithCert(s *store.Site, port int, security *store.SiteSecurity, certPath, keyPath string) (string, error) {
+	return GenerateVhostWithOptions(s, port, security, VhostOptions{CertPath: certPath, KeyPath: keyPath})
+}
+
+// VhostOptions are the per-server choices of a vhost: the certificate and,
+// for PHP sites, the site's own PHP-FPM pool socket.
+type VhostOptions struct {
+	CertPath, KeyPath string
+	// PHPFPMSocket is the site's own pool (see SitePoolSocket). Empty means
+	// the shared per-version pool (hosts where the agent cannot manage pools,
+	// e.g. CloudPanel-only PHP).
+	PHPFPMSocket string
+}
+
+// phpPoolSocketRe matches the per-site pool sockets the agent creates.
+var phpPoolSocketRe = regexp.MustCompile(`^/[A-Za-z0-9._/-]+/sp-site-[0-9]+-php[0-9]+\.[0-9]+-fpm\.sock$`)
+
+// SitePoolSocket is the socket of a site's own PHP-FPM pool. The version is
+// part of the name so "php<version>-fpm.sock" still finds the vhosts that use
+// a version (the Stack page refuses removing a version in use).
+func SitePoolSocket(runDir string, siteID int64, version string) string {
+	return fmt.Sprintf("%s/sp-site-%d-php%s-fpm.sock", strings.TrimRight(runDir, "/"), siteID, version)
+}
+
+// GenerateVhostWithOptions renders the vhost with the given options.
+func GenerateVhostWithOptions(s *store.Site, port int, security *store.SiteSecurity, opts VhostOptions) (string, error) {
+	certPath, keyPath := opts.CertPath, opts.KeyPath
 	if certPath == "" || keyPath == "" {
 		certPath, keyPath = DefaultSSLCertificate, DefaultSSLCertificateKey
 	}
@@ -656,8 +682,11 @@ func GenerateVhostWithCert(s *store.Site, port int, security *store.SiteSecurity
 
 	// Determine PHP-FPM address (auto-detect socket, fallback to TCP)
 	phpFpmPass := phpFpmAddr(s.PHPVersion.String)
-	if s.PHPVersion.Valid && s.PHPVersion.String != "" {
-		phpFpmPass = phpFpmAddr(s.PHPVersion.String)
+	if opts.PHPFPMSocket != "" {
+		if !phpPoolSocketRe.MatchString(opts.PHPFPMSocket) {
+			return "", fmt.Errorf("invalid PHP-FPM pool socket")
+		}
+		phpFpmPass = "unix:" + opts.PHPFPMSocket
 	}
 	var phpIni string
 	if s.PHPIni.Valid {

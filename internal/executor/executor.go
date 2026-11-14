@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -349,5 +350,24 @@ var allowedCommands = map[string]bool{
 
 func isAllowedCommand(name string) bool {
 	base := filepath.Base(name)
-	return allowedCommands[base]
+	return allowedCommands[base] || isPHPFPMBinary(base)
+}
+
+// isPHPFPMBinary: php-fpm<major>.<minor> (per-site pools are checked with
+// "php-fpm<ver> -t" before PHP-FPM is reloaded).
+func isPHPFPMBinary(base string) bool {
+	v, ok := strings.CutPrefix(base, "php-fpm")
+	if !ok {
+		return false
+	}
+	major, minor, ok := strings.Cut(v, ".")
+	if !ok || len(major) != 1 || len(minor) < 1 || len(minor) > 2 {
+		return false
+	}
+	for _, c := range major + minor {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }

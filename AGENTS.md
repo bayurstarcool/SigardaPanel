@@ -99,7 +99,26 @@ hanyawahyu       hanyawahyu      /home/hanyawahyu/htdocs/{domain}
   server lacks the PHP-FPM socket/port the vhost would use.
 - **Root path** → `/home/{system_user}/htdocs/{domain}`
 - **File ownership** → `{system_user}:{system_user}` (not www-data!)
-- **PHP-FPM** → pool runs as `www-data` (shared, for now)
+- **PHP-FPM** → one pool per site (`internal/agenthttp/php_pool.go`):
+  `/etc/php/<ver>/fpm/pool.d/sp-site-<id>.conf`, `user/group = system_user` (UID >= 1000,
+  never www-data/root/service accounts: a PHP site without a usable owner fails with
+  `422`), socket `/run/php/sp-site-<id>-php<ver>-fpm.sock` (nginx user, 0660; the version
+  in the name keeps the Stack "PHP version in use" check working), `pm = ondemand`,
+  `open_basedir = <root>:~/.php/<id>:/usr/share/php`, temp/sessions/`error_log` in
+  `~/.php/<id>/` (created through the pinned home, 0700, owned by the user),
+  `catch_workers_output = no` (the server-wide FPM log is shared). Written atomically,
+  checked with `php-fpm<ver> -t` (restored on failure), then `systemctl reload
+  php<ver>-fpm`. Version change / runtime change / site delete remove the old pool.
+  The allowlisted `php_ini` settings stay in the vhost's `PHP_VALUE` (with a per-site pool
+  they can no longer leak to other sites). Suspend keeps the pool (the placeholder vhost
+  does not use PHP). Hosts without a `pool.d` for the version (e.g. CloudPanel's own PHP)
+  keep the shared upstream (`php_pool: false` in the site.create result). Logs → `php`
+  reads `~/.php/<id>/error.log` (opened beneath the pinned home, no symlinks, regular
+  files only) for sites with a pool. Existing sites: the worker sends `system_user` on
+  every regeneration and records `php_pool_site_<id>` from the agent's answer; the
+  scheduler (`migratePHPPools`) queues one vhost regeneration per active PHP site without
+  that setting whose server's agent reports the panel's version (20 per tick, retry after
+  6 h on failure)
 - **SSH/FTP** → optional per-site user for site-level access
 - **Per-site terminal** → SSH tab in site detail runs shell as `system_user` via `?user=<system_user>`
 
