@@ -228,15 +228,18 @@ func (s *SQLiteRoleStore) Delete(ctx context.Context, id int64) error {
 	if r == nil || r.BuiltIn {
 		return fmt.Errorf("role %d is not a custom role", id)
 	}
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = ?`, r.Name).Scan(&n); err != nil {
+	// One statement: no user can be given the role between the check and the
+	// delete (a user left holding a deleted name would inherit a role later
+	// created with that name).
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM roles WHERE id = ? AND built_in = 0 AND NOT EXISTS (SELECT 1 FROM users WHERE users.role = roles.name)`, id)
+	if err != nil {
 		return err
 	}
-	if n > 0 {
+	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrRoleInUse
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM roles WHERE id = ? AND built_in = 0`, id)
-	return err
+	return nil
 }
 
 // CountUsers returns how many users have the role.

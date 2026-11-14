@@ -232,3 +232,42 @@ func gateRequest(e *echo.Echo, method, path, token string) *httptest.ResponseRec
 	e.ServeHTTP(rec, req)
 	return rec
 }
+
+// A custom role holding user.manage_all still never reaches an account with
+// more permissions than it has (a super_admin): no impersonation, password
+// reset, demotion or delete.
+func TestManageAllCustomRoleCannotTouchSuperAdmin(t *testing.T) {
+	f := newAuthzFixture(t)
+	root, rootTok := f.user("root", auth.RoleSuperAdmin)
+	if rec := f.do("POST", "/api/v1/roles", map[string]any{"name": "usermgr",
+		"permissions": []string{"user.manage", "user.manage_all", "user.impersonate"}}, rootTok); rec.Code != http.StatusCreated {
+		t.Fatalf("create usermgr = %d %s", rec.Code, rec.Body.String())
+	}
+	mgr := &store.User{Username: "usermgr1", Email: "usermgr1@example.test", PasswordHash: "Temp-pass-12345", Role: "usermgr"}
+	if err := f.s.Users.Create(f.ctx, mgr); err != nil {
+		t.Fatal(err)
+	}
+	tok := rbacSessionToken(t, f, mgr.ID)
+	customer, _ := f.user("customer", auth.RoleUser)
+	rid := strconv.FormatInt(root.ID, 10)
+
+	if rec := f.do("POST", "/api/v1/users/"+rid+"/impersonate", nil, tok); rec.Code != http.StatusForbidden {
+		t.Errorf("impersonate super_admin = %d", rec.Code)
+	}
+	if rec := f.do("PATCH", "/api/v1/users/"+rid, map[string]any{"password": "Taken-over-12345"}, tok); rec.Code != http.StatusForbidden {
+		t.Errorf("reset super_admin password = %d", rec.Code)
+	}
+	if rec := f.do("PATCH", "/api/v1/users/"+rid, map[string]any{"role": "user"}, tok); rec.Code != http.StatusForbidden {
+		t.Errorf("demote super_admin = %d", rec.Code)
+	}
+	if rec := f.do("DELETE", "/api/v1/users/"+rid, nil, tok); rec.Code != http.StatusForbidden {
+		t.Errorf("delete super_admin = %d", rec.Code)
+	}
+	if u, _ := f.s.Users.GetByID(f.ctx, root.ID); u == nil || u.Role != auth.RoleSuperAdmin {
+		t.Fatal("super_admin changed")
+	}
+	// A plain user is within its reach.
+	if rec := f.do("POST", "/api/v1/users/"+strconv.FormatInt(customer.ID, 10)+"/impersonate", nil, tok); rec.Code != http.StatusOK {
+		t.Errorf("impersonate customer = %d %s", rec.Code, rec.Body.String())
+	}
+}

@@ -191,7 +191,13 @@ func (h *userHandler) delete(c *echo.Context) error {
 	// Only user.manage_all (super_admin) may delete arbitrary users; everyone
 	// else only users they created whose role they could assign.
 	caller := sessionUser(c.Request().Context(), h.store, sess)
-	if !userCan(c.Request().Context(), h.store, caller, rbac.UserManageAll) {
+	if userCan(c.Request().Context(), h.store, caller, rbac.UserManageAll) {
+		// user.manage_all still never reaches an account holding more than
+		// the caller (a custom role with it must not delete a super_admin).
+		if u, err := h.store.Users.GetByID(c.Request().Context(), id); err == nil && u != nil && !assignableRole(c.Request().Context(), h.store, caller, u.Role) {
+			return echo.NewHTTPError(http.StatusForbidden, "this account holds permissions you do not have")
+		}
+	} else {
 		u, err := h.store.Users.GetByID(c.Request().Context(), id)
 		if err != nil || u == nil || !u.CreatedBy.Valid || u.CreatedBy.Int64 != sess.UserID {
 			return echo.NewHTTPError(http.StatusNotFound, "user not found")
@@ -251,7 +257,13 @@ func (h *userHandler) update(c *echo.Context) error {
 	// Only user.manage_all (super_admin) may update arbitrary users; everyone
 	// else only users they created whose role they could assign.
 	caller := sessionUser(c.Request().Context(), h.store, sess)
-	if !userCan(c.Request().Context(), h.store, caller, rbac.UserManageAll) {
+	if userCan(c.Request().Context(), h.store, caller, rbac.UserManageAll) {
+		// user.manage_all still never reaches an account holding more than
+		// the caller (resetting its password would hand over that role).
+		if u, err := h.store.Users.GetByID(c.Request().Context(), id); err == nil && u != nil && !assignableRole(c.Request().Context(), h.store, caller, u.Role) {
+			return echo.NewHTTPError(http.StatusForbidden, "this account holds permissions you do not have")
+		}
+	} else {
 		u, err := h.store.Users.GetByID(c.Request().Context(), id)
 		if err != nil || u == nil || !u.CreatedBy.Valid || u.CreatedBy.Int64 != sess.UserID {
 			return echo.NewHTTPError(http.StatusNotFound, "user not found")

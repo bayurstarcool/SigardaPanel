@@ -101,7 +101,7 @@ var registry = []Permission{
 	{UserImpersonateAny, "users", "Sign in as any user whose permissions you hold (support), not only users you created", true, RoleSuperAdmin},
 	{QuotaUnlimited, "users", "No default disk quota", false, RoleAdmin},
 
-	{SiteViewAll, "sites", "Read any site, not only owned or assigned ones", false, RoleSuperAdmin},
+	{SiteViewAll, "sites", "Read any site, not only owned or assigned ones", true, RoleSuperAdmin},
 	{SiteManageAll, "sites", "Full access to any site (write, delete, user assignments)", true, RoleSuperAdmin},
 	{SiteSuspend, "sites", "Suspend and resume sites", false, RoleAdmin},
 	{SiteCron, "sites", "Create and delete cron jobs", false, RoleAdmin},
@@ -113,10 +113,10 @@ var registry = []Permission{
 	{SSLRenewAll, "sites", "Renew every certificate", false, RoleSuperAdmin},
 
 	{JobViewServer, "jobs", "See server-level jobs", false, RoleAdmin},
-	{JobViewAll, "jobs", "See every job", false, RoleSuperAdmin},
+	{JobViewAll, "jobs", "See every job", true, RoleSuperAdmin},
 	{JobLogsWrite, "jobs", "Append job logs", false, RoleAdmin},
 	{AuditView, "audit", "See your own audit entries", false, RoleAdmin},
-	{AuditViewAll, "audit", "See every tenant's audit entries", false, RoleSuperAdmin},
+	{AuditViewAll, "audit", "See every tenant's audit entries", true, RoleSuperAdmin},
 	{AuditPurge, "audit", "Delete old audit entries", true, RoleSuperAdmin},
 
 	{BackupBulk, "backups", "Bulk backups", false, RoleAdmin},
@@ -134,7 +134,7 @@ var registry = []Permission{
 	{MetricsIngest, "servers", "Push server metrics", false, RoleAdmin},
 	{DockerManage, "servers", "Create and exec containers, compose, images, volumes, networks", true, RoleSuperAdmin},
 	{DockerControl, "servers", "Start, stop and restart your site containers", false, RoleAdmin},
-	{DockerViewAll, "servers", "See every container on a server", false, RoleSuperAdmin},
+	{DockerViewAll, "servers", "See every container on a server", true, RoleSuperAdmin},
 
 	{DatabaseExecSQL, "databases", "Run free SQL on the database server", true, RoleSuperAdmin},
 	{DatabaseAdmin, "databases", "Database server settings, import, phpMyAdmin password reset", true, RoleSuperAdmin},
@@ -145,7 +145,7 @@ var registry = []Permission{
 	{ServiceTokens, "panel", "Manage service tokens", true, RoleSuperAdmin},
 	{SettingsView, "panel", "Read global settings", false, RoleAdmin},
 	{SettingsGlobal, "panel", "Change global settings", true, RoleSuperAdmin},
-	{AlertManage, "panel", "Alert channels and alerts", false, RoleSuperAdmin},
+	{AlertManage, "panel", "Alert channels and alerts", true, RoleSuperAdmin},
 	{LicenseManage, "panel", "Activate and remove the license", true, RoleSuperAdmin},
 	{PlanManage, "panel", "Manage plans", false, RoleSuperAdmin},
 	{OrderManage, "panel", "Manage orders", false, RoleSuperAdmin},

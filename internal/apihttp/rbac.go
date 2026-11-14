@@ -114,12 +114,14 @@ func canImpersonate(ctx context.Context, s *store.Store, caller, target *store.U
 	if !mine[rbac.UserImpersonate] {
 		return false
 	}
-	if mine[rbac.UserManageAll] {
-		return true
-	}
 	theirs := rolePermissions(ctx, s, target.Role)
 	if theirs == nil {
 		return false
+	}
+	// Even user.manage_all only reaches accounts holding no more than the
+	// caller (super_admin holds everything, so it reaches anyone).
+	if mine[rbac.UserManageAll] {
+		return rbac.Subset(theirs, mine)
 	}
 	if mine[rbac.UserImpersonateAny] && rbac.Subset(theirs, mine) && !theirs[rbac.UserManageAll] {
 		return true
