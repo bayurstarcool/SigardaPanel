@@ -297,6 +297,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/system/agent-updates", auH.startMany, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 	e.PUT("/api/v1/system/agent-updates/settings", auH.settings, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 	e.POST("/api/v1/servers/:id/agent-update", auH.startOne, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/servers/:id/agent-tls", auH.enableAgentTLS, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 	e.PUT("/api/v1/system/panel-update/settings", puH.settings, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	e.GET("/api/v1/settings/retention", getRetention(db), RequireAuth(s), RequireAdmin(s))

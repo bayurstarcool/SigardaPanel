@@ -4,7 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
+
+	"sigardapanel/internal/agenttls"
 )
 
 // Server represents a registered VPS target server.
@@ -24,6 +28,9 @@ type Server struct {
 	HealthStatus    string
 	HealthLatencyMs int64
 	AgentVersion    sql.NullString // reported by the agent's /health
+	// AgentTLSFingerprint pins the remote agent's certificate (hex SHA-256
+	// of the DER certificate); https agent URLs are refused without it.
+	AgentTLSFingerprint string
 	// Rebound is set by agent registration when an existing server (same
 	// agent address) was re-bound instead of a new one created.
 	Rebound bool
@@ -44,6 +51,10 @@ type ServerRepository interface {
 	UpdateHealth(ctx context.Context, id int64, status string, latencyMs int64) error
 	UpdateAgentToken(ctx context.Context, id int64, token string) error
 	UpdateAgentVersion(ctx context.Context, id int64, version string) error
+	// SetAgentTLS stores the agent's https URL and certificate pin.
+	SetAgentTLS(ctx context.Context, id int64, agentURL, fingerprint string) error
+	// TLSPinForAddr returns the pin of the https agent dialed at addr.
+	TLSPinForAddr(ctx context.Context, addr string) (string, error)
 	Delete(ctx context.Context, id int64) error
 }
 
@@ -67,8 +78,8 @@ func (s *SQLiteServerStore) Create(ctx context.Context, srv *Server) error {
 		srv.HealthStatus = "unknown"
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO servers (name, hostname, agent_url, ip_address, ipv6, ssh_port, description, status, provider, agent_token, health_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		srv.Name, srv.Hostname, srv.AgentURL, srv.IPAddress, srv.IPv6, srv.SSHPort, srv.Description, srv.Status, srv.Provider, srv.AgentToken, srv.HealthStatus,
+		`INSERT INTO servers (name, hostname, agent_url, ip_address, ipv6, ssh_port, description, status, provider, agent_token, health_status, agent_tls_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		srv.Name, srv.Hostname, srv.AgentURL, srv.IPAddress, srv.IPv6, srv.SSHPort, srv.Description, srv.Status, srv.Provider, srv.AgentToken, srv.HealthStatus, srv.AgentTLSFingerprint,
 	)
 	if err != nil {
 		return fmt.Errorf("insert server: %w", err)
@@ -86,7 +97,7 @@ func (s *SQLiteServerStore) Create(ctx context.Context, srv *Server) error {
 func (s *SQLiteServerStore) GetByID(ctx context.Context, id int64) (*Server, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, name, hostname, agent_url, ip_address, ipv6, ssh_port, description, status, provider, agent_token,
-		 last_health_check, health_status, health_latency_ms, agent_version, created_at, updated_at
+		 last_health_check, health_status, health_latency_ms, agent_version, agent_tls_fingerprint, created_at, updated_at
 		 FROM servers WHERE id = ?`, id)
 	return scanServer(row)
 }
@@ -95,7 +106,7 @@ func (s *SQLiteServerStore) GetByID(ctx context.Context, id int64) (*Server, err
 func (s *SQLiteServerStore) List(ctx context.Context) ([]Server, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, hostname, agent_url, ip_address, ipv6, ssh_port, description, status, provider, agent_token,
-		 last_health_check, health_status, health_latency_ms, agent_version, created_at, updated_at
+		 last_health_check, health_status, health_latency_ms, agent_version, agent_tls_fingerprint, created_at, updated_at
 		 FROM servers ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query servers: %w", err)
@@ -105,7 +116,7 @@ func (s *SQLiteServerStore) List(ctx context.Context) ([]Server, error) {
 	var servers []Server
 	for rows.Next() {
 		var srv Server
-		if err := rows.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.AgentURL, &srv.IPAddress, &srv.IPv6, &srv.SSHPort, &srv.Description, &srv.Status, &srv.Provider, &srv.AgentToken, &srv.LastHealthCheck, &srv.HealthStatus, &srv.HealthLatencyMs, &srv.AgentVersion, &srv.CreatedAt, &srv.UpdatedAt); err != nil {
+		if err := rows.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.AgentURL, &srv.IPAddress, &srv.IPv6, &srv.SSHPort, &srv.Description, &srv.Status, &srv.Provider, &srv.AgentToken, &srv.LastHealthCheck, &srv.HealthStatus, &srv.HealthLatencyMs, &srv.AgentVersion, &srv.AgentTLSFingerprint, &srv.CreatedAt, &srv.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan server: %w", err)
 		}
 		servers = append(servers, srv)
@@ -188,7 +199,7 @@ func (s *SQLiteServerStore) Delete(ctx context.Context, id int64) error {
 
 func scanServer(row *sql.Row) (*Server, error) {
 	var srv Server
-	err := row.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.AgentURL, &srv.IPAddress, &srv.IPv6, &srv.SSHPort, &srv.Description, &srv.Status, &srv.Provider, &srv.AgentToken, &srv.LastHealthCheck, &srv.HealthStatus, &srv.HealthLatencyMs, &srv.AgentVersion, &srv.CreatedAt, &srv.UpdatedAt)
+	err := row.Scan(&srv.ID, &srv.Name, &srv.Hostname, &srv.AgentURL, &srv.IPAddress, &srv.IPv6, &srv.SSHPort, &srv.Description, &srv.Status, &srv.Provider, &srv.AgentToken, &srv.LastHealthCheck, &srv.HealthStatus, &srv.HealthLatencyMs, &srv.AgentVersion, &srv.AgentTLSFingerprint, &srv.CreatedAt, &srv.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -196,4 +207,42 @@ func scanServer(row *sql.Row) (*Server, error) {
 		return nil, fmt.Errorf("scan server: %w", err)
 	}
 	return &srv, nil
+}
+
+// SetAgentTLS stores the https agent URL and its certificate pin together.
+func (s *SQLiteServerStore) SetAgentTLS(ctx context.Context, id int64, agentURL, fingerprint string) error {
+	fp := agenttls.Normalize(fingerprint)
+	u, err := url.Parse(agentURL)
+	if fp == "" || err != nil || u.Scheme != "https" {
+		return fmt.Errorf("set agent TLS: an https URL and a SHA-256 fingerprint are required")
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE servers SET agent_url = ?, agent_tls_fingerprint = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		agentURL, fp, id); err != nil {
+		return fmt.Errorf("set agent TLS: %w", err)
+	}
+	return nil
+}
+
+// TLSPinForAddr returns the stored pin of the https agent whose URL dials
+// addr ("host:port"), or "" when none is stored.
+func (s *SQLiteServerStore) TLSPinForAddr(ctx context.Context, addr string) (string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT agent_url, agent_tls_fingerprint FROM servers WHERE agent_tls_fingerprint != '' AND agent_url LIKE 'https://%'`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	want := strings.ToLower(addr)
+	for rows.Next() {
+		var u sql.NullString
+		var fp string
+		if err := rows.Scan(&u, &fp); err != nil {
+			return "", err
+		}
+		if u.Valid && agenttls.AddrOf(u.String) == want {
+			return fp, nil
+		}
+	}
+	return "", rows.Err()
 }

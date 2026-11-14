@@ -11,7 +11,7 @@ import (
 
 func TestInstallScriptRendersAndParses(t *testing.T) {
 	script := fmt.Sprintf(installScriptTemplate, shellQuote("https://panel.example.com"), shellQuote("tok"),
-		shellQuote("v1.6.1"), shellQuote(releasePublicKey), shellQuote("1"))
+		shellQuote("v1.6.1"), shellQuote(releasePublicKey), shellQuote("1"), shellQuote("203.0.113.9"))
 	if strings.Contains(script, "%!") {
 		t.Fatalf("template placeholders do not match the arguments")
 	}

@@ -96,6 +96,7 @@ var AllMigrations = []Migration{
 	UserAPIKeysSchema,
 	ServerAgentVersionSchema,
 	BackupProviderSchema,
+	AgentTLSFingerprintSchema,
 }
 
 func Down(db *sql.DB) error {

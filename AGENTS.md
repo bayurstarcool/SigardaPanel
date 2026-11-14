@@ -609,6 +609,20 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
   could not be removed.
 - **Panel→agent HTTP** uses `agentClient` (dial-time address check: no link-local,
   multicast, unspecified; loopback only when literal; private only when allowed).
+- **Agent TLS is pinned** (`internal/agenttls`): remote agents serve HTTPS with a
+  self-signed certificate; `servers.agent_tls_fingerprint` (hex SHA-256 of the DER
+  cert) is set at registration (`tls_fingerprint`, install script uses openssl) or by
+  the switch from http (`agenttls.Upgrade` → agent `POST /tasks/agent/tls/enable`,
+  token-authenticated, TOFU over the existing connection; run by the health checker
+  once per server and agent version, or `POST /api/v1/servers/:id/agent-tls`,
+  super_admin). Every agent-bound client (`agentTransport`, terminal websocket,
+  `agentclient`, health/metrics/security collectors) dials https through
+  `agenttls.DialTLS`, which looks the pin up by host:port (`store.TLSPinForAddr`,
+  loader set in `store.New`) and refuses an https agent without one. Loopback (panel
+  host) agents stay on http. The servers list shows `insecure_transport` /
+  `tls_pinned`. Re-registration matches the address over either scheme and replaces
+  URL and pin. The install script adds ufw rules for 7710 (panel IP from
+  `SIGARDAPANEL_PANEL_IP` or DNS) only when ufw is active, never enables it.
 - **Global settings that act on every tenant** (backup providers, global retention,
   order approval) are super_admin only; plans/usage/orders follow user ownership
   (`callerManagesUser`).

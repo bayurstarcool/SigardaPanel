@@ -426,10 +426,19 @@ run the agent there and register it in the panel. The agent is the same binary
 (`sigardapanel agent`); it runs as root and accepts requests only with the
 server's agent token.
 
-The panel connects to the agent at `http://<server>:7710` and sends the token
-with every request, so keep that traffic off the open internet: use a private
-network or VPN (WireGuard, provider VLAN) if you can, and in any case allow port
-7710 only from the panel's IP address. Keep agents on the panel's version; the
+Remote agents serve **HTTPS with a self-signed certificate that the panel pins**:
+the install command creates the certificate (`/etc/sigardapanel/agent-tls/`) and
+registers its SHA-256 fingerprint, the panel stores it per server and refuses
+every other certificate for that agent, so the token and all traffic are
+encrypted and nobody on the path can impersonate the agent. Agents registered
+over plain `http://` before this (shown as *insecure transport* in the server
+list) are switched automatically once they run a version with TLS support: the
+panel asks the agent, over its existing token-authenticated connection, to
+create its certificate, stores the returned fingerprint and the `https://` URL,
+and the agent restarts with TLS (trust on first use over that connection; re-run
+the install command to replace a pin). A super_admin can trigger the switch with
+`POST /api/v1/servers/:id/agent-tls`. Still allow port 7710 only from the
+panel's IP address, and prefer a private network or VPN when you have one. Keep agents on the panel's version; the
 **Servers** page shows each agent's version and warns about a mismatch.
 
 There are two ways, both under **Servers → Add server**:
@@ -457,8 +466,13 @@ There are two ways, both under **Servers → Add server**:
    `SHA256SUMS`, writes `/etc/sigardapanel/agent.env`, starts `sigardapanel-agent`
    and registers the server with its public IP. The dialog notices the new server
    by itself.
-3. Allow port 7710 only from the panel:
-   `ufw allow from <panel-ip> to any port 7710 proto tcp`.
+3. Firewall: when ufw is already active the script allows port 7710 only from
+   the panel (`ufw allow from <panel-ip> to any port 7710 proto tcp` then
+   `ufw deny 7710/tcp`; it never enables ufw itself, which could lock you out of
+   SSH). The panel address is `SIGARDAPANEL_PANEL_IP` from the panel's
+   `panel.env` or the server's environment, else the panel host name resolved
+   on the server; set it when the panel sits behind a CDN or NAT. Without an
+   active ufw the script prints the commands to run.
 
 Options, set between `sudo` and `bash` (e.g. `| sudo SIGARDAPANEL_AGENT_IP=10.0.0.5 bash`):
 
@@ -468,6 +482,8 @@ Options, set between `sudo` and `bash` (e.g. `| sudo SIGARDAPANEL_AGENT_IP=10.0.
 | `SIGARDAPANEL_PANEL_CA` | CA/certificate file that signs the panel's HTTPS certificate, for a panel with a self-signed or private certificate. Copy the panel's `/etc/sigardapanel/selfsigned.crt` to the server and also pass `--cacert <file>` to the first `curl`. |
 | `SIGARDAPANEL_VERSION` | Install another release tag than the panel's. |
 | `SIGARDAPANEL_BINARY_URL` + `SIGARDAPANEL_BINARY_SHA256` | Download the binary from a mirror (HTTPS only) and check this SHA-256 instead of the signed `SHA256SUMS`. |
+| `SIGARDAPANEL_PANEL_IP` | The panel's address for the port-7710 firewall rule (default: the panel host name resolved on the server). |
+| `SIGARDAPANEL_AGENT_FIREWALL=0` | Do not add the ufw rules. |
 | `SIGARDAPANEL_AGENT_SITE_ROOT` | Restrict site files to this directory (default: no restriction; sites live in `/home/<user>/htdocs/<domain>`). |
 
 If anything fails, the script restores the previous state and prints the panel's
@@ -494,6 +510,9 @@ The one-line installer still needs an `https://` panel URL; without one use
 
 **1. In the panel:** **Servers → Add server → Manual setup**. Enter a name, the
 hostname and the IP address; the agent URL `http://<server-ip>:7710` is filled in
+(the panel switches it to pinned TLS by itself once the agent runs; an
+`https://` URL entered by hand is refused until a fingerprint is stored, so
+start with `http://`)
 (use the private/VPN address if you have one). After saving, the dialog shows the
 **agent token** once, already inserted into the `agent.env` commands of step 3.
 CLI: `sigardapanel server add --name web1 --hostname web1.example.com --ip 203.0.113.10 --agent-url http://203.0.113.10:7710`.

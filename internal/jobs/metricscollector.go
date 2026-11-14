@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/notify"
 	"sigardapanel/internal/store"
 )
@@ -52,10 +53,9 @@ func NewMetricsCollector(s *store.Store) *MetricsCollector {
 	return &MetricsCollector{
 		store: s,
 		client: &http.Client{
-			Timeout:   10 * time.Second,
-			Transport: &http.Transport{
-				// Allow self-signed certs for agent TLS
-			},
+			Timeout: 10 * time.Second,
+			// https agents only with their pinned certificate.
+			Transport: agenttls.Transport(nil),
 		},
 		stopCh: make(chan struct{}),
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v5"
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
@@ -213,7 +214,7 @@ func (h *terminalHandler) serve(c *echo.Context) error {
 	}
 
 	// Same dial-time address checks as every other panel→agent call.
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, NetDialContext: dialAgent}
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, NetDialContext: dialAgent, NetDialTLSContext: agenttls.DialTLS(dialAgent)}
 	agentConn, resp, err := dialer.Dial(target.String(), http.Header{"Authorization": {"Bearer " + t.token}})
 	if err != nil {
 		status := 0

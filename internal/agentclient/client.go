@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/jobmodel"
 )
 
@@ -46,10 +47,13 @@ type TaskResult struct {
 
 var agentErrorSecretPattern = regexp.MustCompile(`(?i)\b(password|secret|token|access[_-]?key|authorization)\s*([:=])\s*([^\s,;]+)`)
 
+// agentTransport pins https agents' certificates (internal/agenttls).
+var agentTransport = agenttls.Transport(nil)
+
 // New creates a new agent client.
 func New(baseURL, token string) *Client {
 	return &Client{
-		httpClient: &http.Client{Timeout: 15 * time.Minute},
+		httpClient: &http.Client{Timeout: 15 * time.Minute, Transport: agentTransport},
 		token:      token,
 		baseURL:    baseURL,
 	}

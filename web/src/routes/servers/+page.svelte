@@ -107,6 +107,11 @@
                         {#if versionMismatch(s)}<TriangleAlert size={11} class="inline -mt-0.5" />{/if} v{s.agent_version}
                       </span>
                     {/if}
+                    {#if s.insecure_transport}
+                      <span class="ml-1.5 text-warning" title="The panel reaches this agent over plain http: the token and all traffic are unencrypted. It switches to pinned TLS automatically once the agent is updated; or re-run the install command.">
+                        <TriangleAlert size={11} class="inline -mt-0.5" /> no TLS
+                      </span>
+                    {/if}
                   {:else}
                     <span class="text-subtle">—</span>
                   {/if}

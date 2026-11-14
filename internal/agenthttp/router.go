@@ -61,6 +61,7 @@ type Router struct {
 	stack          *stackManager
 	panelUpdate    *panelUpdater
 	agentUpdate    *panelUpdater
+	agentTLS       *agentTLSManager
 
 	// SSH/FTP jails
 	sshHomeBase    string
@@ -120,6 +121,11 @@ type RouterOptions struct {
 	PanelUpdateFreeBytes func(path string) (uint64, error)
 	PanelUpdateBackupDir string
 	AgentUpdateEnvFile   string
+	// AgentTLS* replace the host access of the agent TLS switch.
+	AgentTLSDir     string
+	AgentTLSEnvFile string
+	AgentTLSActive  func() string
+	AgentTLSRestart func()
 	// SSHHomeBase / FstabPath / SSHDConfigPath replace /home, /etc/fstab and
 	// the sshd drop-in for SSH/FTP accounts (injected routers default to
 	// temp paths so tests never touch the real ones).
@@ -258,6 +264,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 
 	r.panelUpdate = newPanelUpdater(opts)
 	r.agentUpdate = newAgentUpdater(opts)
+	r.agentTLS = newAgentTLSManager(opts)
 
 	e.GET("/health", healthHandler)
 	// /metrics forks several processes per call, so it requires the agent token.
@@ -327,6 +334,9 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	// Agent self-update on remote servers (runs the embedded agent-update.sh)
 	tasks.GET("/agent/update", r.agentUpdateStatusTask)
 	tasks.POST("/agent/update", r.agentUpdateStartTask)
+	// TLS for remote agents: status and the switch from plain http
+	tasks.GET("/agent/tls", r.agentTLSStatusTask)
+	tasks.POST("/agent/tls/enable", r.agentTLSEnableTask)
 	// (The WordPress/Laravel template routes were removed: nothing called
 	// them, and they ran composer/wp-cli and chown -R/chmod -R as root on
 	// tenant-controlled trees.)

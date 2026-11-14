@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -133,14 +134,16 @@ func (s *Store) ConsumeRegistrationTokenAndCreateServer(ctx context.Context, tok
 	if srv.AgentURL.Valid && srv.AgentURL.String != "" {
 		var existingID int64
 		var existingToken string
-		err := tx.QueryRowContext(ctx, `SELECT id, agent_token FROM servers WHERE agent_url = ? ORDER BY id LIMIT 1`, srv.AgentURL.String).Scan(&existingID, &existingToken)
+		// The same address may have been registered over http before TLS.
+		httpURL, httpsURL := agentURLVariants(srv.AgentURL.String)
+		err := tx.QueryRowContext(ctx, `SELECT id, agent_token FROM servers WHERE agent_url IN (?, ?) ORDER BY id LIMIT 1`, httpURL, httpsURL).Scan(&existingID, &existingToken)
 		if err == nil && existingID > 0 {
 			if srv.PreviousAgentToken == "" || subtle.ConstantTimeCompare([]byte(srv.PreviousAgentToken), []byte(existingToken)) != 1 {
 				return ErrServerAlreadyRegistered
 			}
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE servers SET hostname = ?, ip_address = ?, agent_token = ?, status = ?, health_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-				srv.Hostname, srv.IPAddress, srv.AgentToken, srv.Status, srv.HealthStatus, existingID); err != nil {
+				`UPDATE servers SET hostname = ?, ip_address = ?, agent_token = ?, status = ?, health_status = ?, agent_url = ?, agent_tls_fingerprint = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+				srv.Hostname, srv.IPAddress, srv.AgentToken, srv.Status, srv.HealthStatus, srv.AgentURL.String, srv.AgentTLSFingerprint, existingID); err != nil {
 				return fmt.Errorf("re-bind registered server: %w", err)
 			}
 			srv.ID = existingID
@@ -149,8 +152,8 @@ func (s *Store) ConsumeRegistrationTokenAndCreateServer(ctx context.Context, tok
 		}
 	}
 	res, err = tx.ExecContext(ctx,
-		`INSERT INTO servers (name, hostname, agent_url, ip_address, ipv6, ssh_port, description, status, provider, agent_token, health_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		srv.Name, srv.Hostname, srv.AgentURL, srv.IPAddress, srv.IPv6, srv.SSHPort, srv.Description, srv.Status, srv.Provider, srv.AgentToken, srv.HealthStatus)
+		`INSERT INTO servers (name, hostname, agent_url, ip_address, ipv6, ssh_port, description, status, provider, agent_token, health_status, agent_tls_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		srv.Name, srv.Hostname, srv.AgentURL, srv.IPAddress, srv.IPv6, srv.SSHPort, srv.Description, srv.Status, srv.Provider, srv.AgentToken, srv.HealthStatus, srv.AgentTLSFingerprint)
 	if err != nil {
 		return fmt.Errorf("insert registered server: %w", err)
 	}
@@ -162,4 +165,10 @@ func (s *Store) ConsumeRegistrationTokenAndCreateServer(ctx context.Context, tok
 		return fmt.Errorf("commit agent registration: %w", err)
 	}
 	return nil
+}
+
+// agentURLVariants returns the http and https spellings of an agent URL.
+func agentURLVariants(u string) (string, string) {
+	rest := strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+	return "http://" + rest, "https://" + rest
 }

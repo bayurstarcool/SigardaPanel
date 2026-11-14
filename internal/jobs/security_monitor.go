@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/notify"
 	"sigardapanel/internal/store"
 )
@@ -37,7 +38,7 @@ type SecurityCollector struct {
 func NewSecurityCollector(s *store.Store) *SecurityCollector {
 	return &SecurityCollector{
 		store:        s,
-		client:       &http.Client{Timeout: 15 * time.Second},
+		client:       &http.Client{Timeout: 15 * time.Second, Transport: agenttls.Transport(nil)},
 		stopCh:       make(chan struct{}),
 		fingerprints: map[string]string{},
 		sshWatermark: map[int64]int{},

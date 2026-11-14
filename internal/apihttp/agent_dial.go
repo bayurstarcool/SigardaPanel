@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/config"
 )
 
@@ -16,15 +17,10 @@ import (
 // saved may resolve to the panel host or a cloud metadata service later,
 // and the panel sends the server's token there and returns the answers.
 // Literal loopback (the panel's own agent) stays allowed.
-var agentTransport = &http.Transport{
-	Proxy:                 nil,
-	DialContext:           dialAgent,
-	ForceAttemptHTTP2:     true,
-	MaxIdleConns:          50,
-	IdleConnTimeout:       90 * time.Second,
-	TLSHandshakeTimeout:   10 * time.Second,
-	ExpectContinueTimeout: time.Second,
-}
+//
+// https agents are reached only with their pinned certificate
+// (internal/agenttls): an https URL without a stored pin is refused.
+var agentTransport = agenttls.Transport(dialAgent)
 
 // agentClient returns an HTTP client for agent requests.
 func agentClient(timeout time.Duration) *http.Client {

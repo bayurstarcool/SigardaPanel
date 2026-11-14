@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -11,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/notify"
 	"sigardapanel/internal/store"
 )
@@ -31,10 +31,8 @@ type HealthChecker struct {
 
 // NewHealthChecker creates a new HealthChecker.
 func NewHealthChecker(s *store.Store) *HealthChecker {
-	// Use a custom transport that skips TLS verification for self-signed certs
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
+	// https agents only with their pinned certificate (internal/agenttls).
+	transport := agenttls.Transport(nil)
 	return &HealthChecker{
 		store: s,
 		client: &http.Client{
@@ -43,7 +41,7 @@ func NewHealthChecker(s *store.Store) *HealthChecker {
 		},
 		// The token check sends the agent token: never over a TLS
 		// connection whose certificate was not verified.
-		authClient: &http.Client{Timeout: healthCheckTimeout},
+		authClient: &http.Client{Timeout: healthCheckTimeout, Transport: transport},
 		stopCh:     make(chan struct{}),
 		stopped:    make(chan struct{}),
 	}
@@ -163,6 +161,9 @@ func (hc *HealthChecker) checkServer(ctx context.Context, srv store.Server) {
 	if status != "offline" && hc.tokenRejected(ctx, srv) {
 		status = "unauthorized"
 	}
+	if status == "online" && agenttls.InsecureTransport(srv.AgentURL.String) {
+		hc.upgradeTLS(ctx, srv)
+	}
 
 	hc.updateAndAlert(ctx, srv, status, latencyMs)
 }
@@ -233,4 +234,35 @@ func (hc *HealthChecker) updateAndAlert(ctx context.Context, srv store.Server, s
 		sender.Send(ctx, "info", "Server Recovered", "Server '"+srv.Name+"' ("+srv.Hostname+") is back online")
 		slog.Info("healthcheck: server recovered", "server_id", srv.ID, "name", srv.Name, "status", status)
 	}
+}
+
+// tlsTried remembers the servers whose TLS switch was attempted by this
+// process (one attempt each; a restart or an agent update tries again).
+var tlsTried sync.Map
+
+// upgradeTLS switches a remote agent reached over plain http to pinned TLS
+// (agenttls.Upgrade). Agents without the switch (older releases) are left
+// alone until they are updated.
+func (hc *HealthChecker) upgradeTLS(ctx context.Context, srv store.Server) {
+	key := srv.ID
+	if v, ok := tlsTried.Load(key); ok && v.(string) == srv.AgentVersion.String {
+		return
+	}
+	tlsTried.Store(key, srv.AgentVersion.String)
+	client := hc.authClient
+	if client == nil {
+		client = &http.Client{Timeout: healthCheckTimeout}
+	}
+	newURL, fp, err := agenttls.Upgrade(ctx, client, srv.AgentURL.String, srv.AgentToken, srv.IPAddress.String)
+	if err != nil {
+		if err != agenttls.ErrAgentTooOld {
+			slog.Warn("healthcheck: agent TLS switch failed", "server_id", srv.ID, "error", err)
+		}
+		return
+	}
+	if err := hc.store.Servers.SetAgentTLS(ctx, srv.ID, newURL, fp); err != nil {
+		slog.Error("healthcheck: store agent TLS pin", "server_id", srv.ID, "error", err)
+		return
+	}
+	slog.Info("healthcheck: agent switched to pinned TLS", "server_id", srv.ID, "url", newURL, "fingerprint", fp)
 }
