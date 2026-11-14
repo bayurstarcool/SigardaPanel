@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import { fmtBytes } from '$lib/format';
-  import { Server, HardDrive, ChevronRight, Clock, Cpu, Trash2, AlertTriangle, Activity, KeyRound, Key } from 'lucide-svelte';
+  import { Server, HardDrive, ChevronRight, Clock, Cpu, Trash2, AlertTriangle, Activity, KeyRound, Key, ShieldCheck } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
@@ -92,6 +92,16 @@
         </span>
         <ChevronRight size={16} class="shrink-0 text-subtle transition-colors group-hover:text-fg" />
       </a>
+      {#if hasPermission('user.manage') || hasPermission('role.manage')}
+        <a href="/settings/roles" class="group flex items-center gap-3 p-5 transition-colors duration-150 hover:bg-surface-2">
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent"><ShieldCheck size={16} /></span>
+          <span class="min-w-0 flex-1">
+            <span class="block text-sm font-semibold text-fg">Roles &amp; permissions</span>
+            <span class="block text-[13px] text-muted">Built-in roles and custom roles with their permissions.</span>
+          </span>
+          <ChevronRight size={16} class="shrink-0 text-subtle transition-colors group-hover:text-fg" />
+        </a>
+      {/if}
       <a href="/member/api-keys" class="group flex items-center gap-3 p-5 transition-colors duration-150 hover:bg-surface-2">
         <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent"><Key size={16} /></span>
         <span class="min-w-0 flex-1">

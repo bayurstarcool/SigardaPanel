@@ -7,6 +7,7 @@
   import PageHeader from '$components/PageHeader.svelte';
   import EmptyState from '$components/EmptyState.svelte';
   import Modal from '$components/Modal.svelte';
+  import RoleSelect from '$components/RoleSelect.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import { Users, Search, Trash2, RefreshCw, X, Plus, Loader2, Check, Shield, Key, LogIn, Settings } from 'lucide-svelte';
   import { onMount } from 'svelte';
@@ -131,7 +132,7 @@
   }
 
   function roleLabel(role: string) {
-    return role === 'super_admin' ? 'Super Admin' : role === 'admin' ? 'Admin' : 'User';
+    return role === 'super_admin' ? 'Super Admin' : role === 'admin' ? 'Admin' : role === 'user' ? 'User' : role;
   }
 
 
@@ -280,13 +281,7 @@
       </div>
       <div>
         <label for="usr-role" class="label">Role</label>
-        <select id="usr-role" bind:value={form.role} class="input">
-          <option value="user">User</option>
-          <option value="admin">Admin</option>
-          {#if hasRole(auth.user?.role, 'super_admin')}
-            <option value="super_admin">Super Admin</option>
-          {/if}
-        </select>
+        <RoleSelect id="usr-role" bind:value={form.role} />
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div>

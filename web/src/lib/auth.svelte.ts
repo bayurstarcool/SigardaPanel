@@ -74,6 +74,7 @@ function createAuthStore() {
         username: json.data.username,
         email: json.data.email,
         role: json.data.role,
+        permissions: Array.isArray(json.data.permissions) ? json.data.permissions : [],
         password_change_required: !!json.data.password_change_required,
       } as User,
       isImpersonating: !!json.data.impersonated_by,
@@ -333,4 +334,14 @@ export function hasRole(
     return userRole === "super_admin" || userRole === "admin";
   if (requiredRole === "super_admin") return userRole === "super_admin";
   return false;
+}
+
+/**
+ * Whether the signed-in user's role holds a permission (from /auth/me). Only
+ * hides UI the API would refuse; the API checks every request itself. A
+ * cached user without the list (older session) falls back to the built-in
+ * role's capabilities through hasRole at the call site.
+ */
+export function hasPermission(permission: string): boolean {
+  return !!auth.user?.permissions?.includes(permission);
 }

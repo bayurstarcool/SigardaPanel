@@ -2,7 +2,10 @@ export interface User {
   id: number;
   username: string;
   email: string;
-  role: "super_admin" | "admin" | "user";
+  /** A built-in role (super_admin, admin, user) or a custom role name. */
+  role: "super_admin" | "admin" | "user" | (string & {});
+  /** The role's permissions (internal/rbac); the API enforces them itself. */
+  permissions?: string[];
   /** Set for accounts whose password was chosen by someone else (installer, admin). */
   password_change_required?: boolean;
 }
