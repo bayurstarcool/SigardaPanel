@@ -4,7 +4,7 @@
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import { fmtBytes } from '$lib/format';
-  import { Server, HardDrive, ChevronRight, Clock, Cpu, Trash2, AlertTriangle, Activity, KeyRound, Key, ShieldCheck } from 'lucide-svelte';
+  import { Server, HardDrive, ChevronRight, Clock, Cpu, Trash2, AlertTriangle, Activity, KeyRound, Key, ShieldCheck, GitBranch } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
@@ -102,6 +102,14 @@
           <ChevronRight size={16} class="shrink-0 text-subtle transition-colors group-hover:text-fg" />
         </a>
       {/if}
+      <a href="/settings/integrations" class="group flex items-center gap-3 p-5 transition-colors duration-150 hover:bg-surface-2">
+        <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent"><GitBranch size={16} /></span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-sm font-semibold text-fg">Integrations</span>
+          <span class="block text-[13px] text-muted">GitHub, GitLab and Gitea accounts for deploying sites.</span>
+        </span>
+        <ChevronRight size={16} class="shrink-0 text-subtle transition-colors group-hover:text-fg" />
+      </a>
       <a href="/member/api-keys" class="group flex items-center gap-3 p-5 transition-colors duration-150 hover:bg-surface-2">
         <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent"><Key size={16} /></span>
         <span class="min-w-0 flex-1">

@@ -200,6 +200,9 @@ func (r *Router) siteDeployTask(c *echo.Context) error {
 		log.step(title)
 		out, err := git(dir, args...)
 		log.out(out)
+		if err != nil && strings.TrimSpace(out) == "" {
+			log.out(err.Error())
+		}
 		return err
 	}
 
@@ -237,7 +240,7 @@ func (r *Router) siteDeployTask(c *echo.Context) error {
 		if st, ok := parent.Info.Sys().(*syscall.Stat_t); !ok || st.Uid != siteUID {
 			return echo.NewHTTPError(http.StatusConflict, "the site's parent directory is not owned by the site user")
 		}
-		if err := gitStep(parent.Path, "Clone "+payload.Repo+" ("+payload.Branch+")", "clone", "-b", payload.Branch, "--", payload.Repo, base); err != nil {
+		if err := gitStep(parent.Real, "Clone "+payload.Repo+" ("+payload.Branch+")", "clone", "-b", payload.Branch, "--", payload.Repo, base); err != nil {
 			return fail(http.StatusUnprocessableEntity, "git clone failed")
 		}
 		if rootPin, err = sitefs.PinDir(payload.RootPath); err != nil {
@@ -249,39 +252,39 @@ func (r *Router) siteDeployTask(c *echo.Context) error {
 		// starter files): clone the history next to the files and check it
 		// out in place.
 		const tmp = ".sigarda-clone"
-		_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "rm", "-rf", "--", tmp)
-		if err := gitStep(rootPin.Path, "Clone "+payload.Repo+" ("+payload.Branch+")", "clone", "--no-checkout", "-b", payload.Branch, "--", payload.Repo, tmp); err != nil {
-			_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "rm", "-rf", "--", tmp)
+		_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Real, "rm", "-rf", "--", tmp)
+		if err := gitStep(rootPin.Real, "Clone "+payload.Repo+" ("+payload.Branch+")", "clone", "--no-checkout", "-b", payload.Branch, "--", payload.Repo, tmp); err != nil {
+			_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Real, "rm", "-rf", "--", tmp)
 			return fail(http.StatusUnprocessableEntity, "git clone failed")
 		}
-		out, err := r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "mv", "-T", "--", tmp+"/.git", ".git")
-		_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "rm", "-rf", "--", tmp)
+		out, err := r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Real, "mv", "-T", "--", tmp+"/.git", ".git")
+		_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Real, "rm", "-rf", "--", tmp)
 		if err != nil {
 			log.out(out)
 			return fail(http.StatusInternalServerError, "install repository failed")
 		}
 	default:
 		// Follow a changed remote (e.g. https → the deploy key's SSH URL).
-		_, _ = git(rootPin.Path, "remote", "set-url", "origin", payload.Repo)
-		if err := gitStep(rootPin.Path, "Fetch "+payload.Branch, "fetch", "--prune", "origin", "+refs/heads/"+payload.Branch+":refs/remotes/origin/"+payload.Branch); err != nil {
+		_, _ = git(rootPin.Real, "remote", "set-url", "origin", payload.Repo)
+		if err := gitStep(rootPin.Real, "Fetch "+payload.Branch, "fetch", "--prune", "origin", "+refs/heads/"+payload.Branch+":refs/remotes/origin/"+payload.Branch); err != nil {
 			return fail(http.StatusUnprocessableEntity, "git fetch failed")
 		}
 	}
 	// The working tree follows the branch (or the requested commit) exactly;
 	// tracked files changed on the server are overwritten, untracked ones
 	// (uploads, .env) stay.
-	if err := gitStep(rootPin.Path, "Check out "+target, "checkout", "-f", "-B", payload.Branch, target, "--"); err != nil {
+	if err := gitStep(rootPin.Real, "Check out "+target, "checkout", "-f", "-B", payload.Branch, target, "--"); err != nil {
 		if payload.TargetCommit != "" {
 			// An older commit may not be in a shallow or pruned history yet.
-			if gitStep(rootPin.Path, "Fetch "+payload.TargetCommit, "fetch", "origin", payload.TargetCommit) == nil &&
-				gitStep(rootPin.Path, "Check out "+target, "checkout", "-f", "-B", payload.Branch, target, "--") == nil {
+			if gitStep(rootPin.Real, "Fetch "+payload.TargetCommit, "fetch", "origin", payload.TargetCommit) == nil &&
+				gitStep(rootPin.Real, "Check out "+target, "checkout", "-f", "-B", payload.Branch, target, "--") == nil {
 				goto checkedOut
 			}
 		}
 		return fail(http.StatusUnprocessableEntity, "git checkout failed")
 	}
 checkedOut:
-	if info, err := git(rootPin.Path, "log", "-1", "--format=%H%n%an%n%s"); err == nil {
+	if info, err := git(rootPin.Real, "log", "-1", "--format=%H%n%an%n%s"); err == nil {
 		lines := strings.SplitN(strings.TrimSpace(info), "\n", 3)
 		if len(lines) == 3 {
 			commit, author, message = lines[0], lines[1], lines[2]
@@ -291,8 +294,11 @@ checkedOut:
 
 	run := func(title, name string, args ...string) error {
 		log.step(title)
-		out, err := r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, name, args...)
+		out, err := r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Real, name, args...)
 		log.out(out)
+		if err != nil && strings.TrimSpace(out) == "" {
+			log.out(err.Error())
+		}
 		return err
 	}
 	has := func(rel string) bool {
@@ -334,7 +340,7 @@ checkedOut:
 		if payload.Runtime == "python" && has("requirements.txt") {
 			pip := "pip"
 			if has(".venv/bin/pip") {
-				pip = filepath.Join(rootPin.Path, ".venv/bin/pip")
+				pip = filepath.Join(rootPin.Real, ".venv/bin/pip")
 			}
 			if err := run("pip install", pip, "install", "-r", "requirements.txt"); err != nil {
 				return fail(http.StatusUnprocessableEntity, "pip install failed")

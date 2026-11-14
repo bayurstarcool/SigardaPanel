@@ -161,7 +161,7 @@
   async function triggerDeploy() {
     if (!confirm('Deploy this site now?')) return;
     deployBusy = true;
-    try { const d = await apiFetch(auth.token, 'POST', `sites/${siteId}/deploy`); toasts.success(`Deploy queued — Job #${d?.job_id}`); }
+    try { await apiFetch(auth.token, 'POST', `sites/${siteId}/deploy`); toasts.success('Deploy queued'); setTab('git'); }
     catch (e: any) { toasts.error(e.message); } finally { deployBusy = false; }
   }
 
@@ -263,6 +263,7 @@
 
   const allTabs = [
     { key: 'info', label: 'Info', icon: Globe },
+    { key: 'git', label: 'Git', icon: GitBranch },
     { key: 'vhost', label: 'Vhost', icon: Code },
     { key: 'ssl', label: 'SSL', icon: ShieldCheck },
     { key: 'security', label: 'Security', icon: Shield },
@@ -286,6 +287,7 @@
     allTabs.filter((t) => {
       if (t.key === 'app') return !!site && appRuntimes.includes(site.runtime);
       if (noRoot && ['databases', 'cron', 'files', 'ssh'].includes(t.key)) return false;
+      if (t.key === 'git') return !noGit;
       if (t.key === 'users') return canManageUsers;
       return true;
     }),
@@ -361,7 +363,7 @@
         <a href="http://{site.domain}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm"><ExternalLink size={14} /> Visit</a>
         {#if canWrite && site.git_repo && !noGit}
           <button onclick={triggerDeploy} disabled={deployBusy} class="btn btn-primary btn-sm">
-            {#if deployBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Upload size={14} />{/if} Git pull
+            {#if deployBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Upload size={14} />{/if} Deploy
           </button>
         {/if}
         {#if canSuspend && (site.status === 'active' || site.status === 'suspended')}
@@ -529,7 +531,7 @@
         </div>
       </div>
 
-      <!-- Git deploy (not for reverse proxies or Docker sites: nothing to pull) -->
+      <!-- Git deploy summary (managed on the Git tab) -->
       {#if !noGit}
       <div class="card">
         <div class="card-header">
@@ -537,32 +539,13 @@
             <GitBranch size={16} class="text-subtle" />
             <h2 class="card-title">Git deploy</h2>
           </div>
-          {#if !gitEditing && canWrite}
-            <button onclick={startEditGit} class="btn btn-ghost btn-sm"><Pencil size={14} /> {site.git_repo ? 'Edit' : 'Configure'}</button>
-          {/if}
+          <button onclick={() => setTab('git')} class="btn btn-ghost btn-sm">{site.git_repo ? 'Open' : 'Set up'}</button>
         </div>
-        {#if gitEditing}
-          <div class="card-body space-y-4">
-            <div>
-              <label for="git-repo" class="label">Repository URL</label>
-              <input id="git-repo" bind:value={gitRepo} type="url" class="input font-mono text-[13px]" placeholder="https://github.com/user/repo.git" />
-            </div>
-            <div>
-              <label for="git-branch" class="label">Branch</label>
-              <input id="git-branch" bind:value={gitBranch} type="text" class="input font-mono text-[13px]" placeholder="main" />
-            </div>
-            <div class="flex items-center gap-2">
-              <button onclick={saveGitConfig} disabled={gitBusy || !gitRepo} class="btn btn-primary btn-sm">
-                {#if gitBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Save size={14} />{/if} Save
-              </button>
-              <button onclick={() => { gitEditing = false; }} class="btn btn-ghost btn-sm">Cancel</button>
-            </div>
-          </div>
-        {:else if site.git_repo}
+        {#if site.git_repo}
           <dl class="divide-y divide-line px-5">
             {@render row('Repository', site.git_repo, { mono: true })}
             {@render row('Branch', site.git_branch || 'main', { mono: true })}
-            {@render row('Last commit', site.git_commit?.slice(0, 8) || '—', { mono: true })}
+            {@render row('Deployed commit', site.git_commit?.slice(0, 7) || '—', { mono: true })}
           </dl>
           {#if isAdmin}
             <div class="border-t border-line px-5 py-3">
@@ -571,7 +554,7 @@
                   <div><dt class="label">Webhook URL</dt><dd class="font-mono break-all text-fg">{webhook.url}</dd></div>
                   <div><dt class="label">Secret</dt><dd class="font-mono break-all text-fg">{webhook.secret}</dd></div>
                 </dl>
-                <p class="hint mt-2">Add this URL as a push webhook (content type JSON) with the secret. GitHub and Gitea sign with it; GitLab sends it as the token.</p>
+                <p class="hint mt-2">Sites connected through GitHub, GitLab or Gitea get this webhook automatically. Otherwise add it as a push webhook (JSON) with the secret.</p>
                 <div class="mt-2 flex gap-2">
                   <button onclick={() => loadWebhook(true)} disabled={webhookBusy} class="btn btn-secondary btn-sm"><RefreshCw size={14} /> Rotate secret</button>
                   <button onclick={() => (webhook = null)} class="btn btn-ghost btn-sm">Hide</button>
@@ -582,10 +565,18 @@
             </div>
           {/if}
         {:else}
-          <p class="card-body text-[13px] text-muted">No git repository configured. Click Configure to set up git deploy.</p>
+          <p class="card-body text-[13px] text-muted">Deploy this site from GitHub, GitLab, Gitea or any repository URL, with automatic deploys on push and a deploy history.</p>
         {/if}
       </div>
       {/if}
+    {:else if activeTab === 'git'}
+      {#await import('$components/sites/GitTab.svelte')}
+        {@render tabLoading()}
+      {:then m}
+        <m.default {siteId} {site} onsite={async () => { const fresh = await apiFetch(auth.token, 'GET', `sites/${siteId}`); if (fresh) site = fresh; }} />
+      {:catch}
+        {@render tabError()}
+      {/await}
     {:else if activeTab === 'vhost'}
       {#await import('$components/sites/VhostTab.svelte')}
         {@render tabLoading()}

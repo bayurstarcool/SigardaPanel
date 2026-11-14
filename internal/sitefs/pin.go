@@ -67,7 +67,12 @@ func rootOwned(fi os.FileInfo) bool {
 // (root can open another root process's fd links).
 type PinnedDir struct {
 	f    *os.File
-	Path string
+	Path string // /proc/<pid>/fd/<n>: for this (root) process only
+	// Real is the verified kernel path of the directory. Processes started
+	// as another user (the site user) work there: they cannot enter this
+	// process's /proc/<pid>/fd, and what they reach through a later swap is
+	// limited to what that user can access anyway.
+	Real string
 	Info os.FileInfo
 }
 
@@ -116,7 +121,7 @@ func PinDir(path string) (*PinnedDir, error) {
 		f.Close()
 		return nil, fail(http.StatusBadRequest, "site root changed while it was opened")
 	}
-	p := &PinnedDir{f: f, Path: fdPath, Info: opened}
+	p := &PinnedDir{f: f, Path: fdPath, Real: real, Info: opened}
 	return p, nil
 }
 

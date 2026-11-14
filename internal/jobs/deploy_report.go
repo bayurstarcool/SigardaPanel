@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -82,7 +83,7 @@ func (w *Worker) deployFinished(ctx context.Context, job *jobmodel.Job, result *
 	d.Status = "succeeded"
 	if execErr != nil {
 		d.Status = "failed"
-		d.Error = execErr.Error()
+		d.Error = agentErrPrefix.ReplaceAllString(execErr.Error(), "")
 	}
 	if result != nil {
 		d.CommitSHA, d.CommitMessage, d.CommitAuthor, d.Log = result.Commit, result.CommitMessage, result.CommitAuthor, result.DeployLog
@@ -114,7 +115,7 @@ func (w *Worker) deployFinished(ctx context.Context, job *jobmodel.Job, result *
 		}
 		state, desc := gitprovider.StateSuccess, fmt.Sprintf("Deployed to %s", site.Domain)
 		if execErr != nil {
-			state, desc = gitprovider.StateFailure, "Deploy failed: "+firstLine(execErr.Error())
+			state, desc = gitprovider.StateFailure, "Deploy failed: "+firstLine(d.Error)
 		}
 		if handle != "" {
 			if err := p.UpdateDeployment(rctx, repo, handle, sha, state, siteURL(site), desc); err != nil {
@@ -123,9 +124,11 @@ func (w *Worker) deployFinished(ctx context.Context, job *jobmodel.Job, result *
 		}
 	}
 	if execErr != nil && site != nil {
-		w.store.NotifySiteUsers(ctx, site.ID, "deploy_failed", "Deploy failed: "+site.Domain, firstLine(execErr.Error()), "error", "site", site.ID)
+		w.store.NotifySiteUsers(ctx, site.ID, "deploy_failed", "Deploy failed: "+site.Domain, firstLine(d.Error), "error", "site", site.ID)
 	}
 }
+
+var agentErrPrefix = regexp.MustCompile(`^agent (error|returned) \d+: `)
 
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
