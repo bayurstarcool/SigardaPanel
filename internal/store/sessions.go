@@ -177,19 +177,19 @@ func scanSession(row *sql.Row) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
 	}
-	
+
 	// Parse expires_at — handle both new UTC format and legacy Go default format
 	sess.ExpiresAt, err = parseTimestamp(expiresAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse expires_at: %w", err)
 	}
-	
+
 	// Parse created_at — same dual-format handling
 	sess.CreatedAt, err = parseTimestamp(createdAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse created_at: %w", err)
 	}
-	
+
 	// Parse revoked_at (nullable)
 	if revokedAtStr.Valid {
 		revokedTime, err := parseTimestamp(revokedAtStr.String)
@@ -198,7 +198,7 @@ func scanSession(row *sql.Row) (*Session, error) {
 		}
 		sess.RevokedAt = sql.NullTime{Time: revokedTime, Valid: true}
 	}
-	
+
 	return &sess, nil
 }
 
