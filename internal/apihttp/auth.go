@@ -20,6 +20,7 @@ import (
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/rbac"
 	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
@@ -484,6 +485,9 @@ func (ah *authHandler) me(c *echo.Context) error {
 		"username": user.Username,
 		"email":    user.Email,
 		"role":     user.Role,
+		// The role's permissions (internal/rbac), for the UI to hide what the
+		// API refuses; the API checks them itself on every request.
+		"permissions": rbac.Sorted(rolePermissions(c.Request().Context(), ah.store, user.Role)),
 		// Accounts created by install.sh/init or by an admin start with a
 		// password someone else knows; the web UI asks for a new one first.
 		// Never during impersonation: that would make the admin change the

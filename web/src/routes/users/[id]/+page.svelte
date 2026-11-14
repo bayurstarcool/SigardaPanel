@@ -2,12 +2,13 @@
   import LoadError from '$components/LoadError.svelte';
   import { fmtDate } from '$lib/format';
   import { page } from '$app/stores';
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import EmptyState from '$components/EmptyState.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
+  import RoleSelect from '$components/RoleSelect.svelte';
   import { ArrowLeft, Loader2, Check, Shield, Key, User, Globe, Trash2, Eye, RefreshCw, LogIn, AlertTriangle, Settings, Gauge } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
@@ -266,7 +267,7 @@
       {/if}
     {/snippet}
     {#snippet actions()}
-      {#if user && hasRole(auth.user?.role, 'admin') && auth.user?.id !== userId}
+      {#if user && hasPermission('user.impersonate') && auth.user?.id !== userId}
         <button onclick={() => (showImpersonateDialog = true)} class="btn btn-secondary btn-sm">
           <LogIn size={14} /> Impersonate
         </button>
@@ -308,13 +309,7 @@
             </div>
             <div>
               <label for="ude-role" class="label">Role</label>
-              <select id="ude-role" bind:value={form.role} class="input">
-                <option value="user">User</option>
-                <option value="admin">Admin</option>
-                {#if hasRole(auth.user?.role, 'super_admin')}
-                  <option value="super_admin">Super Admin</option>
-                {/if}
-              </select>
+              <RoleSelect id="ude-role" bind:value={form.role} current={user?.role || ''} />
             </div>
             <div>
               <label for="ude-pass" class="label flex items-center gap-1"><Key size={12} /> Reset password</label>

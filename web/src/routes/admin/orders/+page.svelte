@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fmtDate, fmtDateTime } from '$lib/format';
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -76,7 +76,7 @@
   }
 
   onMount(() => {
-    if (!hasRole(auth.user?.role, 'super_admin')) return;
+    if (!hasPermission('order.manage')) return;
     loadOrders();
   });
 
@@ -153,7 +153,7 @@
 </script>
 
 <DashboardLayout active="Orders">
-  {#if !hasRole(auth.user?.role, 'super_admin')}
+  {#if !hasPermission('order.manage')}
     <div class="card">
       <EmptyState icon={ShieldOff as any} title="Access denied" description="Only super admins can manage orders." />
     </div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -23,7 +23,7 @@
   let creating = $state(false);
   let deletingEmail = $state('');
   let query = $state('');
-  const canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  const canManage = $derived(hasPermission('server.services'));
 
   let confirmInstall = $state(false);
   let confirmDelete = $state(false);

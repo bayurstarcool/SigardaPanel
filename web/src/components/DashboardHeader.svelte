@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { theme } from '$lib/theme.svelte';
   import { onMount } from 'svelte';
@@ -14,7 +14,7 @@
   let panelUpdateTag = $state('');
 
   async function checkPanelUpdate() {
-    if (!hasRole(auth.user?.role, 'super_admin') || auth.isImpersonating) return;
+    if (!hasPermission('panel.update') || auth.isImpersonating) return;
     const key = 'sigarda_panel_update';
     try {
       const cached = JSON.parse(sessionStorage.getItem(key) || 'null');

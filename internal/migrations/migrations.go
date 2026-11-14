@@ -97,6 +97,7 @@ var AllMigrations = []Migration{
 	ServerAgentVersionSchema,
 	BackupProviderSchema,
 	AgentTLSFingerprintSchema,
+	RBACRolesSchema,
 }
 
 func Down(db *sql.DB) error {

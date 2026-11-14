@@ -75,8 +75,8 @@ func NewUserStore(db *sql.DB) *SQLiteUserStore {
 
 // Create inserts a new user into the database.
 func (s *SQLiteUserStore) Create(ctx context.Context, user *User) error {
-	if !auth.IsValidRole(user.Role) {
-		return fmt.Errorf("invalid role %q: must be super_admin, admin or user", user.Role)
+	if !s.roleExists(ctx, user.Role) {
+		return fmt.Errorf("invalid role %q: must be super_admin, admin, user or a custom role", user.Role)
 	}
 
 	hash, err := auth.HashPassword(user.PasswordHash)
@@ -243,10 +243,26 @@ func (s *SQLiteUserStore) List(ctx context.Context, filter UserListFilter) ([]Us
 	return users, rows.Err()
 }
 
+// roleExists accepts the built-in roles and custom roles stored in roles
+// (databases migrated before the roles table know only the built-ins).
+func (s *SQLiteUserStore) roleExists(ctx context.Context, role string) bool {
+	if auth.IsValidRole(role) {
+		return true
+	}
+	if !ValidCustomRoleName(role) {
+		return false
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM roles WHERE name = ? AND built_in = 0`, role).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
 // UpdateRole changes a user's role.
 func (s *SQLiteUserStore) UpdateRole(ctx context.Context, userID int64, role string) error {
-	if !auth.IsValidRole(role) {
-		return fmt.Errorf("invalid role %q: must be super_admin, admin or user", role)
+	if !s.roleExists(ctx, role) {
+		return fmt.Errorf("invalid role %q: must be super_admin, admin, user or a custom role", role)
 	}
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, role, userID)

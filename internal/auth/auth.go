@@ -22,7 +22,9 @@ func HasRole(userRole, requiredRole string) bool {
 	case RoleAdmin:
 		return userRole == RoleSuperAdmin || userRole == RoleAdmin
 	case RoleUser:
-		return userRole == RoleSuperAdmin || userRole == RoleAdmin || userRole == RoleUser
+		// Custom roles (internal/rbac) are at least the user tier: their
+		// extra capabilities are checked by permission, never by rank.
+		return userRole != "" && userRole != "service_token"
 	default:
 		return false
 	}

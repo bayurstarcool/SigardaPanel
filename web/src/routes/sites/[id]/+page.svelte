@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtDate, fmtDaysLeft, fmtBytesFull } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -73,6 +73,8 @@
   let dockerContainer = $state<any>(null);
 
   const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
+  const canSuspend = $derived(hasPermission('site.suspend'));
+  const canManageUsers = $derived(hasPermission('user.manage'));
   // What the caller may do on this site, as the API decides it (GET /sites/:id).
   const canWrite = $derived(!!site?.can_write);
   const canDelete = $derived(!!site?.can_delete);
@@ -235,7 +237,7 @@
     allTabs.filter((t) => {
       if (t.key === 'app') return !!site && appRuntimes.includes(site.runtime);
       if (noRoot && ['databases', 'cron', 'files', 'ssh'].includes(t.key)) return false;
-      if (t.key === 'users') return isAdmin;
+      if (t.key === 'users') return canManageUsers;
       return true;
     }),
   );
@@ -313,7 +315,7 @@
             {#if deployBusy}<LoaderCircle size={14} class="animate-spin" />{:else}<Upload size={14} />{/if} Git pull
           </button>
         {/if}
-        {#if isAdmin && (site.status === 'active' || site.status === 'suspended')}
+        {#if canSuspend && (site.status === 'active' || site.status === 'suspended')}
           <button onclick={toggleSuspend} disabled={toggleBusy} class="btn btn-secondary btn-sm">
             {#if toggleBusy}<LoaderCircle size={14} class="animate-spin" />{:else if site.status === 'suspended'}<Play size={14} />{:else}<Pause size={14} />{/if}
             {site.status === 'suspended' ? 'Resume' : 'Suspend'}
@@ -330,7 +332,7 @@
         <Pause size={16} class="mt-0.5 shrink-0 text-warning" />
         <div>
           <p class="font-medium text-fg">This site is suspended</p>
-          <p class="text-muted">The nginx vhost and SSL auto-renewal are disabled. Files, databases and certificates are untouched{isAdmin ? ' — use Resume to bring it back online' : ''}.</p>
+          <p class="text-muted">The nginx vhost and SSL auto-renewal are disabled. Files, databases and certificates are untouched{canSuspend ? ' — use Resume to bring it back online' : ''}.</p>
         </div>
       </div>
     {/if}

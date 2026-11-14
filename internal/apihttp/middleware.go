@@ -12,6 +12,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/auth"
+	"sigardapanel/internal/rbac"
 	"sigardapanel/internal/store"
 )
 
@@ -359,10 +360,10 @@ func featureMinTier(feature string) string {
 // sees their own entries (the log holds every tenant's actions, including
 // super_admin command lines).
 func scopeAuditLogs(s *store.Store) echo.MiddlewareFunc {
-	admin := RequireAdmin(s)
+	admin := RequirePermission(s, rbac.AuditView)
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return admin(func(c *echo.Context) error {
-			if role, _ := c.Get(roleKey).(string); role != auth.RoleSuperAdmin {
+			if !sessionCan(c.Request().Context(), s, sessionFromEcho(c), rbac.AuditViewAll) {
 				sess := sessionFromEcho(c)
 				// Service tokens have no user (UserID 0, which the store
 				// reads as "no filter"): they would see every entry.
@@ -392,10 +393,7 @@ func requireSuperAdminOnPanelHost(s *store.Store) echo.MiddlewareFunc {
 			if err != nil || server == nil || !isLocalServer(*server) {
 				return next(c)
 			}
-			if role, _ := c.Get(roleKey).(string); role == auth.RoleSuperAdmin {
-				return next(c)
-			}
-			if sess := sessionFromEcho(c); sess != nil && isSessionSuperAdmin(c.Request().Context(), s, sess) {
+			if sess := sessionFromEcho(c); sess != nil && sessionCan(c.Request().Context(), s, sess, rbac.ServerPanelHost) {
 				return next(c)
 			}
 			return echo.NewHTTPError(http.StatusForbidden, "on the panel host this action requires a super admin")
@@ -490,15 +488,9 @@ func impersonationStillAllowed(ctx context.Context, s *store.Store, sess *store.
 	if admin == nil {
 		return false, nil
 	}
-	switch admin.Role {
-	case auth.RoleSuperAdmin:
-		return true, nil
-	case auth.RoleAdmin:
-		target, err := s.Users.GetByID(ctx, sess.UserID)
-		if err != nil {
-			return false, err
-		}
-		return target != nil && target.Role == auth.RoleUser && target.CreatedBy.Valid && target.CreatedBy.Int64 == admin.ID, nil
+	target, err := s.Users.GetByID(ctx, sess.UserID)
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return canImpersonate(ctx, s, admin, target), nil
 }

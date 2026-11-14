@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import EmptyState from '$components/EmptyState.svelte';
   import { Clock, Plus, Trash2 } from 'lucide-svelte';
@@ -7,7 +7,7 @@
 
   let { siteId }: { siteId: number } = $props();
   // Creating and deleting cron jobs is for admins (the API enforces it).
-  const canEdit = $derived(hasRole(auth.user?.role, 'admin'));
+  const canEdit = $derived(hasPermission('site.cron'));
 
   let cronJobs = $state<any[]>([]);
   let cronLoading = $state(false);

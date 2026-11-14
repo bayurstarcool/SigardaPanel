@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtRelative, fmtDateTime } from '$lib/format';
   import { toasts } from '$lib/toast.svelte';
@@ -23,7 +23,7 @@
   let configs = $state<any[]>([]);
   let loading = $state(true);
   let view = $state<'history' | 'settings'>('history');
-  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
+  const isAdmin = $derived(hasPermission('backup.provider.view'));
   let activeTab = $state<'all' | 'files' | 'database'>('all');
   let allSites = $state<any[]>([]);
   let allDatabases = $state<any[]>([]);
@@ -49,7 +49,7 @@
     if (!auth.user) { window.location.href = '/login'; return; }
     await load();
     // Providers and schedules are admin-only endpoints.
-    await Promise.all([isAdmin ? loadProviders() : null, hasRole(auth.user?.role, 'super_admin') ? loadConfigs() : null, loadSites(), loadDatabases()]);
+    await Promise.all([isAdmin ? loadProviders() : null, hasPermission('backup.config.manage') ? loadConfigs() : null, loadSites(), loadDatabases()]);
   });
 
   async function load() {

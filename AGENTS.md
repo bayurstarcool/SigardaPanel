@@ -122,6 +122,51 @@ hanyawahyu       hanyawahyu      /home/hanyawahyu/htdocs/{domain}
 - **SSH/FTP** → optional per-site user for site-level access
 - **Per-site terminal** → SSH tab in site detail runs shell as `system_user` via `?user=<system_user>`
 
+### RBAC (permissions and roles)
+
+Capabilities beyond a user's own and assigned sites are **permissions**
+(`internal/rbac`, one registry: name, category, description, `Dangerous`,
+`MinRole`). Routes use `RequirePermission(s, "<perm>")`; handlers use
+`userCan` / `sessionCan` (`internal/apihttp/rbac.go`).
+
+- **Built-in roles** `super_admin`, `admin`, `user` are derived from `MinRole`
+  (code, not the database), so upgrades can add permissions and the built-ins
+  keep today's behaviour (`TestBuiltinRolesMatchRouteGates` walks every gated
+  route for each built-in role). `user` holds no extra permission.
+- **Custom roles** (migration 058: `roles`, `role_permissions`; `users.role`
+  holds the name) are created on Settings → Roles by `role.manage`
+  (`GET /api/v1/rbac/permissions`, `GET /api/v1/roles` for `user.manage`,
+  `POST/PATCH/DELETE /api/v1/roles`). Built-ins are read-only; a role in use
+  cannot be deleted; a role never holds permissions its creator lacks.
+  Custom roles count as the `user` tier in the remaining role-rank checks
+  (`auth.HasRole`), so they only gain what their permissions grant.
+- **Dangerous** permissions (root on a server or access across every tenant:
+  `server.*`, `docker.manage`, `site.docker`, `site.vhost.raw`,
+  `site.any_root`, `site.proxy_internal`, `site.manage_all`,
+  `user.manage_all`, `user.impersonate_any`, `panel.update`, `agent.*`,
+  `backup.provider.manage`, `backup.config.manage`, `service_token.manage`,
+  `database.*`, `settings.global`, `license.manage`, `audit.purge`,
+  `role.manage`) are super_admin-only by default and can only be granted by
+  a caller with `user.manage_all`.
+- **Assigning roles** (`assignableRole`): only roles whose permissions the
+  caller holds; without `user.manage_all` never a role with user management or
+  dangerous permissions (an admin still creates `user`s only).
+  `canImpersonate`: `user.manage_all` anyone; `user.impersonate_any` any user
+  whose permissions the caller holds; otherwise users the caller created whose
+  role it could assign.
+- **Ownership stays on top**: a permission like `site.cron` only acts on sites
+  the caller owns or is assigned; only `site.view_all` / `site.manage_all`
+  widen site scope.
+- **Service tokens** keep their scopes: a token passes a permission when its
+  scope covers the permission's `MinRole`, never for super_admin-only ones.
+- `/auth/me` returns `permissions`; the web uses `hasPermission()` to hide what
+  the API refuses.
+
+Adding a route that is not open to every signed-in user: add (or reuse) a
+permission in `internal/rbac` with the lowest built-in role that should have it,
+mark it `Dangerous` when it is root-equivalent or cross-tenant, and guard the
+route with `RequirePermission`.
+
 ### Assignment API
 
 ```
@@ -880,3 +925,6 @@ v1.10.0 security release from two audits: per-site PHP-FPM pools as the site own
 EnvironmentFile), pinned TLS to remote agents, server management / docker sites / raw
 vhost / license super_admin only, reserved database names, privileged Linux accounts
 refused as site owners (trusted-site-users), backup database dumps fixed.
+v1.11.0 RBAC: permission registry (internal/rbac), RequirePermission on every route,
+built-in roles unchanged, custom roles (Settings -> Roles), dangerous permissions only
+grantable by super_admin, no escalation (subset rule, also for user.manage_all).

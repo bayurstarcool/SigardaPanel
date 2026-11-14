@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
@@ -18,7 +18,7 @@
   onMount(() => {
     // auth.user sudah terisi: layout hanya me-render halaman setelah auth.init
     // selesai, jadi pemeriksaan role di sini aman dari race init.
-    if (auth.user && !hasRole(auth.user.role, 'admin')) { goto('/dashboard', { replaceState: true }); return; }
+    if (auth.user && !hasPermission('server.firewall')) { goto('/dashboard', { replaceState: true }); return; }
     load();
   });
 

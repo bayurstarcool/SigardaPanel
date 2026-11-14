@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
@@ -17,8 +17,8 @@
   import { runStackAction, pollStackOp, statusBadge, describeAction, type StackActionBody, type StackOp } from './stackOps';
 
   const serverId = $derived($page.params.id ?? '');
-  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
-  const isSuper = $derived(hasRole(auth.user?.role, 'super_admin'));
+  const isAdmin = $derived(hasPermission('server.stack'));
+  const isSuper = $derived(hasPermission('server.panel_host'));
 
   let server = $state<any>(null);
   let packages = $state<any[]>([]);

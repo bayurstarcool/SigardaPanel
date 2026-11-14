@@ -13,8 +13,8 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
-	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/rbac"
 	"sigardapanel/internal/store"
 )
 
@@ -64,7 +64,7 @@ func (h *stackHandler) tenantContainerNames(c *echo.Context) (allowed map[string
 	// unfiltered it could stop other tenants' site containers or read their
 	// logs (secrets often end up there).
 	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
-	if user != nil && user.Role == auth.RoleSuperAdmin {
+	if userCan(ctx, h.store, user, rbac.DockerViewAll) {
 		return nil, false
 	}
 	allowed = map[string]bool{}

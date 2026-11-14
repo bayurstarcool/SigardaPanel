@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { Code, Save, RefreshCw, Check, X, FileText, Wrench, Upload, Copy, LoaderCircle } from 'lucide-svelte';
   import { toasts } from '$lib/toast.svelte';
@@ -7,7 +7,7 @@
   let { siteId, site, onTriggerDeploy }: { siteId: number; site: any; onTriggerDeploy?: () => void } = $props();
   // Raw vhost edits are root on the server: the API allows admins only.
   // Raw nginx text can read files and reach the agent: super_admin only.
-  const canEditVhost = $derived(hasRole(auth.user?.role, 'super_admin'));
+  const canEditVhost = $derived(hasPermission('site.vhost.raw'));
 
   // CodeMirror is heavy; fetch it only when this tab renders.
   const editorModule = import('$components/CodeEditor.svelte');
