@@ -533,6 +533,27 @@ These are enforced in code and covered by tests; keep them when changing handler
   reset, SSL renew-all, panel update/rollback, agent updates. Non-super admins see only
   their own audit entries and the site mappings of users they created, and can change or
   delete only `user`-role accounts they created.
+- **Servers = super_admin** (Nov 2026 audit): servers have no owner, so creating,
+  changing, deleting servers and every server-level action (command, docker
+  create/exec/compose/images/volumes/networks, firewall, fail2ban, redis, pm2, mail,
+  stack actions, server terminal) need super_admin on every server. Tenants keep the
+  server list, PHP versions and their own site containers (list/logs/start/stop/restart,
+  filtered for every non-super_admin). Docker sites are super_admin only (the container
+  runs as root with the site root mounted).
+- **Site accounts**: the agent never acts as an account in a privileged group (sudo,
+  wheel, admin, adm, docker, lxd, disk, shadow, root; the account's own personal group
+  excepted) or an SFTP jail account (root-owned home), unless the name is listed in
+  `/etc/sigardapanel/trusted-site-users` (root-owned; install.sh adds ADMIN_USER).
+  Panel usernames must pass `siteinput.SystemUser` and not be a site's system user or an
+  SSH/SFTP account name.
+- **Site roots** are `owner:<nginx group> 2750` (`restrictSiteRoot`, applied on
+  create/regen/restore): nginx reads through its group, nobody else can enter.
+  Root paths are pinned (`sitefs.PinDir` verifies the kernel path of the opened
+  directory); git deploy runs every git step as the site user inside pinned
+  directories; app units do not use `EnvironmentFile=` (the app's shell sources
+  `.env` as the site user).
+- **Proxy targets** for non-super_admin: IP literals or localhost only (no DNS
+  rebinding), never link-local, private or loopback service ports (panel, databases).
 - **Panel host = super_admin**: on the local server (loopback agent) container
   create/exec/compose/images/volumes/networks, firewall, fail2ban, bot blocker, pm2,
   mail, redis flush and the root terminal need super_admin

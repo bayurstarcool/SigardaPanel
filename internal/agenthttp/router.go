@@ -799,6 +799,7 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 	// /home/<user>/htdocs/<domain> layout expects.
 	if owner != nil {
 		r.chownNewSiteRoot(ctx, owner, rootPin, payload.RootPath, rootExisted)
+		r.restrictSiteRoot(owner, rootPin, payload.RootPath)
 	}
 
 	// 2c. PHP runs in the site's own PHP-FPM pool, as the site owner (never
@@ -2159,6 +2160,15 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 			if pats, err := cleanExcludePatterns(strings.Split(strings.TrimSpace(string(raw)), "\n")); err == nil && len(pats) > 0 {
 				carryExcluded(oldRoot, siteRoot, pats)
 			}
+		}
+	}
+
+	// sanitizeRestoredTree drops setgid everywhere in the archive's tree:
+	// put the root back to owner:<nginx group> 2750 (restrictSiteRoot).
+	if _, _, ok := siteUserIDs(payload.SystemUser); ok {
+		if pin, err := sitefs.PinDir(payload.RootPath); err == nil {
+			r.restrictSiteRoot(&siteOwner{name: payload.SystemUser}, pin, payload.RootPath)
+			pin.Close()
 		}
 	}
 

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -207,4 +208,47 @@ func (r *Router) siteTransferTask(c *echo.Context) error {
 	}
 	slog.Info("agent: site.transfer", "site_id", p.SiteID, "from", p.OldRoot, "to", p.NewRoot, "user", p.SystemUser)
 	return c.JSON(http.StatusOK, map[string]any{"ok": true, "root_path": p.NewRoot})
+}
+
+// restrictSiteRoot makes the site root owner:<nginx group> 2750: the web
+// server reads it through its group, the owner's PHP pool, apps, cron and
+// SSH run as the owner, and no other account on the server can enter it.
+// Site files are 0644 by default, so with a traversable root another
+// tenant's shell, cron job or PHP exec() could read wp-config.php/.env (and
+// with them the database). Only a root the owner already owns is changed;
+// setgid keeps new subdirectories in the nginx group.
+func (r *Router) restrictSiteRoot(owner *siteOwner, root *sitefs.PinnedDir, rootPath string) {
+	uid, _, ok := siteUserIDs(owner.name)
+	if !ok {
+		return
+	}
+	st, ok := root.Info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return
+	}
+	if cur, err := os.Stat(root.Path); err == nil {
+		if s2, ok := cur.Sys().(*syscall.Stat_t); ok {
+			st = s2
+		}
+	}
+	if st.Uid != uid {
+		slog.Info("agent: site root not owned by its owner; permissions left unchanged", "root", rootPath, "user", owner.name)
+		return
+	}
+	g, err := user.Lookup(r.nginxUser())
+	if err != nil {
+		slog.Warn("agent: restrict site root: nginx user not found", "user", r.nginxUser(), "error", err)
+		return
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return
+	}
+	if err := root.Chown(int(uid), gid); err != nil {
+		slog.Warn("agent: restrict site root: chown", "root", rootPath, "error", err)
+		return
+	}
+	if err := root.Chmod(os.ModeSetgid | 0o750); err != nil {
+		slog.Warn("agent: restrict site root: chmod", "root", rootPath, "error", err)
+	}
 }

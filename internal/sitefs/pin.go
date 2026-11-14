@@ -254,3 +254,7 @@ func ChownTree(p *PinnedDir, uid, gid int) error {
 // Chown changes the owner of the pinned directory itself (fchown on the
 // open descriptor, never a path).
 func (p *PinnedDir) Chown(uid, gid int) error { return p.f.Chown(uid, gid) }
+
+// Chmod changes the mode of the pinned directory itself (fchmod on the open
+// descriptor, never a path).
+func (p *PinnedDir) Chmod(mode os.FileMode) error { return p.f.Chmod(mode) }

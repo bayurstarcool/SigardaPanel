@@ -274,31 +274,6 @@ func (r *Router) removePHPPools(ctx context.Context, siteID int64, keep string) 
 	return removed
 }
 
-// writeFileAtomic writes a root-owned config file through a temp file and
-// rename (the pool directory is root's).
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".sp-pool-*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(name)
-		return err
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		os.Remove(name)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(name)
-		return err
-	}
-	return os.Rename(name, path)
-}
-
 // readSitePHPErrorLog returns the last lines of ~/.php/<id>/error.log. The
 // file is the site user's: it is opened beneath the pinned home without
 // following links and only when it is a regular file.

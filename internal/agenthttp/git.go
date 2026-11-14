@@ -316,6 +316,13 @@ var privilegedGroups = map[string]bool{
 func accountPrivilegedOrJail(u *user.User) error {
 	if gids, err := u.GroupIds(); err == nil && !trustedSiteUser(u.Username) {
 		for _, gid := range gids {
+			// The account's own personal group (useradd's default: same name,
+			// its primary group) is not the legacy "admin" sudo group.
+			if gid == u.Gid {
+				if g, err := user.LookupGroupId(gid); err == nil && g.Name == u.Username {
+					continue
+				}
+			}
 			if g, err := user.LookupGroupId(gid); err == nil && privilegedGroups[g.Name] {
 				return fmt.Errorf("account %s is in the privileged group %s", u.Username, g.Name)
 			}
