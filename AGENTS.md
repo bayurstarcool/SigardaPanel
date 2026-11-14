@@ -260,13 +260,14 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `DELETE /api/v1/servers/:id` — Delete server
 - `GET /api/v1/servers/health` — All servers health
 - `GET /api/v1/servers/:id/health` — Server health
+- `GET /api/v1/servers/:id/public-ip` — IPv4 used for site DNS (`?refresh=1`: server.manage)
 - `POST /api/v1/servers/:id/token` — Regenerate agent token
 
 ### Sites (15 endpoints)
 - `GET /api/v1/sites` — List sites
 - `POST /api/v1/sites` — Create site
 - `GET /api/v1/sites/:id` — Site detail
-- `DELETE /api/v1/sites/:id` — Delete site
+- `DELETE /api/v1/sites/:id` — Delete site (`?delete_files=false` keeps the root directory and its files; default deletes them; CLI `site delete --keep-files`)
 - `POST /api/v1/sites/:id/deploy` — Deploy site
 - `POST /api/v1/sites/:id/config` — Update config
 - `POST /api/v1/sites/:id/reload-nginx` — Reload nginx
@@ -276,6 +277,8 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `POST /api/v1/sites/:id/vhost/validate` — Validate vhost
 - `GET /api/v1/sites/:id/usage` — Disk usage
 - `GET /api/v1/sites/:id/logs` — Tail logs
+- `GET /api/v1/sites/:id/dns` — DNS state (owner's Cloudflare account)
+- `POST /api/v1/sites/:id/dns` — Create/sync/replace `{overwrite, replace_ids}` (owner or super_admin)
 - `POST /api/v1/webhooks/deploy/:site_id` — Git webhook
 - `GET /api/v1/sites/:id/ssh/info` — SSH info
 
@@ -662,6 +665,23 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
   container actions match name, full id or 12-char short id only.
 - **Agent re-registration** from a known agent URL re-binds that server row.
 - **Cloudflare API tokens** are encrypted at rest (`secrets.Encrypt`).
+- **Site DNS** (`internal/apihttp/site_dns.go`, `GET/POST /api/v1/sites/:id/dns`): always the
+  site owner's Cloudflare account; changes (POST) owner or super_admin only. Only active zones,
+  longest label-boundary match, public IPv4 only. Target IP (`dnsTargetIP`): the server's
+  `ip_address` when public, otherwise the public IPv4 its agent detects (`internal/publicip`:
+  a public interface address, else the majority answer of 1.1.1.1/cdn-cgi/trace, checkip.amazonaws.com,
+  api.ipify.org, icanhazip; agent `GET /tasks/system/public-ip`, cached 10 min), kept in
+  `app_settings.server_public_ip_<id>` for 6 h (`GET /api/v1/servers/:id/public-ip`, `?refresh=1`
+  needs server.manage); the last known value is used if the agent cannot answer.
+  The auto-registered Local Server gets its public IPv4 written to `ip_address` at API start
+  (`fixLocalServerIP`) when it holds a private or no address (never overwrites a public one or
+  `SIGARDAPANEL_LOCAL_IP`), so the Servers page shows the address DNS uses. Records the panel creates carry the exact
+  comment `SigardaPanel site:<id>` and are tracked in `site_dns_records`; existing records are
+  never replaced without consent (`cloudflare_overwrite` on create, or the replace dialog's
+  `replace_ids`, refused if other records appeared). Overwrite keeps a correct A record, deletes
+  a CNAME before creating the A and A/AAAA conflicts after it, each delete audited. Delete
+  removes only tracked, unchanged records (rows whose removal failed are kept); a transfer
+  marks the site's records unmanaged.
 - **Never run SQL clients as root on site content**: dump imports run as the site's
   Linux user (nobody without one) with one of the database's own accounts
   (`RunAsUserInput`, dump on stdin). Dumps and archives live in user-writable trees.

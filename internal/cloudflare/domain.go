@@ -35,6 +35,9 @@ func RootDomain(domain string) string {
 		"com.ar": true, "org.ar": true,
 		"co.th": true, "or.th": true, "go.th": true,
 		"com.tr": true, "org.tr": true, "net.tr": true, "gov.tr": true,
+		"co.id": true, "or.id": true, "ac.id": true, "go.id": true, "sch.id": true,
+		"web.id": true, "my.id": true, "biz.id": true, "net.id": true, "ponpes.id": true, "desa.id": true,
+		"com.my": true, "com.ph": true, "com.vn": true,
 	}
 
 	if n >= 3 {
@@ -54,14 +57,23 @@ func RootDomain(domain string) string {
 	return domain
 }
 
-// FindMatchingZone checks if any zone in the list matches the given domain.
-// Returns the matching zone, or nil if not found.
+// FindMatchingZone returns the zone the domain belongs to: the zone itself or
+// a parent zone at a label boundary (sub.example.com is in example.com,
+// myexample.com is not). The longest match wins, so a delegated sub-zone
+// (dev.example.com) is chosen over its parent. nil when none matches.
 func FindMatchingZone(zones []Zone, domain string) *Zone {
-	domain = strings.TrimSpace(strings.ToLower(domain))
+	domain = strings.TrimSuffix(strings.TrimSpace(strings.ToLower(domain)), ".")
+	var best *Zone
 	for i := range zones {
-		if strings.HasSuffix(domain, zones[i].Name) || domain == zones[i].Name {
-			return &zones[i]
+		name := strings.TrimSuffix(strings.ToLower(zones[i].Name), ".")
+		if name == "" {
+			continue
+		}
+		if domain == name || strings.HasSuffix(domain, "."+name) {
+			if best == nil || len(name) > len(best.Name) {
+				best = &zones[i]
+			}
 		}
 	}
-	return nil
+	return best
 }

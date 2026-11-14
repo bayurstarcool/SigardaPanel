@@ -115,7 +115,12 @@ func (h *serverHandler) list(c *echo.Context) error {
 
 	out := make([]map[string]any, 0, len(servers))
 	for _, s := range servers {
-		out = append(out, serverToMap(s, false))
+		m := serverToMap(s, false)
+		// The public IPv4 its agent detected (DNS uses it when ip_address is private).
+		if v, ok := cachedServerPublicIP(c.Request().Context(), h.store, s.ID); ok {
+			m["public_ip"] = v.IP
+		}
+		out = append(out, m)
 	}
 
 	return c.JSON(http.StatusOK, httpjson.Success{

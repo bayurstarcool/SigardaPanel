@@ -7,6 +7,7 @@
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
+  import Modal from '$components/Modal.svelte';
   import EmptyState from '$components/EmptyState.svelte';
   import LoadError from '$components/LoadError.svelte';
   import StatusPill from '$components/StatusPill.svelte';
@@ -28,6 +29,7 @@
   import AppTab from '$components/sites/AppTab.svelte';
   import BackupTab from '$components/sites/BackupTab.svelte';
   import SslTab from '$components/sites/SslTab.svelte';
+  import ProvisioningSteps from '$components/sites/ProvisioningSteps.svelte';
   import DatabaseTab from '$components/sites/DatabaseTab.svelte';
   import SettingsTab from '$components/sites/SettingsTab.svelte';
 
@@ -59,6 +61,7 @@
 
   // Databases count (for stats)
   let dbsCount = $state(0);
+  let dbNames = $state<string[]>([]);
   // Disk usage, measured by du on the site's server: null = loading,
   // '' = could not be measured.
   let diskUsed = $state<number | null | ''>(null);
@@ -79,6 +82,8 @@
   const canWrite = $derived(!!site?.can_write);
   const canDelete = $derived(!!site?.can_delete);
   const canTransfer = $derived(!!site?.can_transfer);
+  // DNS changes use the owner's Cloudflare account: owner or super_admin only.
+  const canDNS = $derived(!!site?.can_delete);
   const noRoot = $derived(site?.runtime === 'proxy'); // a reverse proxy serves no files of its own
   const noGit = $derived(site?.runtime === 'proxy' || site?.runtime === 'docker');
   const hasSSL = $derived(!!site?.ssl_status && site.ssl_status !== 'none');
@@ -132,11 +137,11 @@
 
   async function initSite() {
     if (!auth.user) { window.location.href = '/login'; return; }
-    site = null; loading = true; activeTab = new URL(window.location.href).searchParams.get('tab') || 'info'; dockerContainer = null; dbsCount = 0;
+    site = null; loading = true; activeTab = new URL(window.location.href).searchParams.get('tab') || 'info'; dockerContainer = null; dbsCount = 0; dbNames = [];
     await loadSite();
-    if (site) void loadDiskUsage();
+    if (site) { void loadDiskUsage(); void loadDNS(); }
     // Load db count for stats
-    try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbsCount = (d?.databases || []).length; } catch {}
+    try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbNames = (d?.databases || []).map((x: any) => x.name); dbsCount = dbNames.length; } catch {}
     // Load Docker container info for docker runtime sites
     if (site?.runtime === 'docker' && site?.server_id) {
       try {
@@ -206,10 +211,54 @@
     } catch (e: any) { toasts.error(e.message); } finally { toggleBusy = false; }
   }
 
+  // Cloudflare DNS for the site (with the site owner's Cloudflare account).
+  let dns = $state<any>(null);
+  let dnsBusy = $state(false);
+  let showDnsReplace = $state(false);
+  async function loadDNS() {
+    try { dns = await apiFetch(auth.token, 'GET', `sites/${siteId}/dns`); } catch { dns = null; }
+  }
+  async function syncDNS(overwrite = false) {
+    dnsBusy = true;
+    try {
+      // Replacing sends the records the user saw in the dialog; the API
+      // refuses if anything else is there now.
+      const replace_ids = overwrite ? (dns?.existing || []).map((r: any) => r.id).filter(Boolean) : [];
+      const r = await apiFetch(auth.token, 'POST', `sites/${siteId}/dns`, { overwrite, replace_ids });
+      dns = r;
+      if (r?.status === 'conflict') toasts.warning(r.message); else toasts.success(r?.message || 'DNS updated');
+      showDnsReplace = false;
+    } catch (e: any) { toasts.error(e.message); await loadDNS(); } finally { dnsBusy = false; }
+  }
+  const dnsTone = $derived(
+    !dns ? '' : ['managed', 'exists', 'created', 'updated', 'replaced'].includes(dns.status) ? 'success' : dns.status === 'conflict' ? 'warning' : dns.status === 'error' ? 'danger' : '',
+  );
+  const dnsLabel = $derived(
+    !dns ? '' : ({ managed: 'Managed', exists: 'Points here', created: 'Created', updated: 'Updated', replaced: 'Replaced', conflict: 'Conflict', missing: 'Not set', error: 'Problem', skipped: 'Not connected' } as Record<string, string>)[dns.status] || dns.status,
+  );
+
+  // Delete dialog: everything that belongs to the site goes; its files only
+  // when asked (unchecked by default, so a mistaken delete keeps the data).
+  let showDelete = $state(false);
+  let deleteFiles = $state(false);
+  let deleteConfirm = $state('');
+  let deleteBusy = $state(false);
+  function openDelete() { deleteFiles = false; deleteConfirm = ''; showDelete = true; }
   async function deleteSite() {
-    if (!confirm(`DELETE site "${site?.domain}" permanently? This cannot be undone.`)) return;
-    try { await apiFetch(auth.token, 'DELETE', `sites/${siteId}`); goto('/sites'); }
-    catch (e: any) { toasts.error(e.message); }
+    if (!site || deleteConfirm.trim().toLowerCase() !== site.domain.toLowerCase()) return;
+    deleteBusy = true;
+    try {
+      const d = await apiFetch(auth.token, 'DELETE', `sites/${siteId}?delete_files=${deleteFiles}`);
+      toasts.success(deleteFiles ? `${site.domain} and its files are being deleted` : `${site.domain} deleted; its files were kept`);
+      // DNS outcome: records the panel created are removed; anything it could
+      // not remove has to be cleaned up in Cloudflare.
+      for (const note of (d?.dns || []) as string[]) {
+        if (/could not|remove it in Cloudflare/.test(note)) toasts.warning(`DNS: ${note}`);
+        else toasts.info(`DNS: ${note}`);
+      }
+      showDelete = false;
+      goto('/sites');
+    } catch (e: any) { toasts.error(e.message); } finally { deleteBusy = false; }
   }
 
   const allTabs = [
@@ -322,7 +371,7 @@
           </button>
         {/if}
         {#if canDelete}
-          <button onclick={deleteSite} class="btn btn-danger-ghost btn-sm"><Trash2 size={14} /> Delete</button>
+          <button onclick={openDelete} class="btn btn-danger-ghost btn-sm"><Trash2 size={14} /> Delete</button>
         {/if}
       {/snippet}
     </PageHeader>
@@ -338,6 +387,10 @@
     {/if}
 
     <!-- Quick stats -->
+    {#key site.id}
+      <ProvisioningSteps {site} {dns} onsite={(fresh) => { site = fresh; }} />
+    {/key}
+
     <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
       <StatCard label="SSL" value={site.ssl_status || 'none'} icon={ShieldCheck} tone={hasSSL ? 'success' : ''} />
       <StatCard label="Runtime" value={site.runtime} icon={Zap} tone="accent" />
@@ -407,6 +460,45 @@
               <EmptyState compact icon={ShieldCheck} title="No SSL configured" description="Issue a certificate from the SSL tab." actionLabel="Open SSL tab" onaction={() => setTab('ssl')} />
             {/if}
           </div>
+
+          {#if dns && dns.status !== 'skipped'}
+            <div class="card">
+              <div class="card-header">
+                <h2 class="card-title flex items-center gap-2">DNS <span class="font-normal text-subtle">· Cloudflare</span></h2>
+                <span class="badge {dnsTone ? 'badge-' + dnsTone : ''}">{dnsLabel}</span>
+              </div>
+              <div class="card-body space-y-3 text-[13px]">
+                <p class="text-muted">{dns.message}</p>
+                {#if dns.zone}
+                  <dl class="space-y-1.5">
+                    <div class="flex justify-between gap-3"><dt class="text-subtle">Zone</dt><dd class="font-mono text-[12.5px] text-fg">{dns.zone}</dd></div>
+                    {#if dns.content}<div class="flex justify-between gap-3"><dt class="text-subtle">Server IP</dt><dd class="text-right"><span class="font-mono text-[12.5px] text-fg">{dns.content}</span>{#if dns.content_source}<span class="block text-[11.5px] text-subtle">{dns.content_source}</span>{/if}</dd></div>{/if}
+                  </dl>
+                {/if}
+                {#if dns.existing?.length}
+                  <div class="rounded-lg border border-warning/30 bg-warning/5 p-3">
+                    <div class="mb-1 text-xs font-medium text-warning">Existing records for {dns.name}</div>
+                    {#each dns.existing as r, i (i)}
+                      <div class="font-mono text-[12px] text-fg">{r.type} → {r.content}{r.proxied ? ' (proxied)' : ''}</div>
+                    {/each}
+                  </div>
+                {/if}
+                {#if !canDNS && ['missing', 'error', 'conflict'].includes(dns.status)}
+                  <p class="text-xs text-subtle">Uses the site owner's Cloudflare account; only the owner can change these records.</p>
+                {/if}
+                {#if canDNS}
+                  <div class="flex flex-wrap gap-2 pt-1">
+                    {#if dns.status === 'missing' || dns.status === 'error'}
+                      <button onclick={() => syncDNS(false)} disabled={dnsBusy} class="btn btn-secondary btn-sm">{dnsBusy ? 'Working…' : dns.status === 'error' ? 'Try again' : 'Create DNS record'}</button>
+                    {:else if dns.status === 'conflict'}
+                      <button onclick={() => syncDNS(false)} disabled={dnsBusy} class="btn btn-secondary btn-sm">Sync</button>
+                      <button onclick={() => (showDnsReplace = true)} disabled={dnsBusy} class="btn btn-danger-ghost btn-sm">Replace with this server</button>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            </div>
+          {/if}
 
           {#if canTransfer}
             <div class="card">
@@ -531,3 +623,61 @@
   {/if}
 {/key}
 </DashboardLayout>
+
+{#if site && dns}
+  <Modal bind:open={showDnsReplace} title="Replace DNS records for {dns.name}" maxWidth="md">
+    <div class="space-y-3 text-[13px]">
+      <p class="text-muted">These records are deleted in Cloudflare and replaced by one A record to this server ({dns.content}), proxied:</p>
+      <div class="rounded-lg border border-line p-3">
+        {#each dns.existing || [] as r, i (i)}
+          <div class="font-mono text-[12px] text-fg">{r.type} → {r.content}</div>
+        {/each}
+      </div>
+      <p class="text-xs text-subtle">Other record types (MX, TXT, …) are not touched. The change is recorded in the audit log with the old values.</p>
+    </div>
+    {#snippet footer()}
+      <button onclick={() => (showDnsReplace = false)} class="btn btn-ghost btn-sm">Cancel</button>
+      <button onclick={() => syncDNS(true)} disabled={dnsBusy} class="btn btn-danger btn-sm">{dnsBusy ? 'Replacing…' : 'Replace records'}</button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if site}
+  <Modal bind:open={showDelete} title="Delete {site.domain}" maxWidth="md">
+    <div class="space-y-4 text-[13px]">
+      <div>
+        <p class="text-muted">Always removed from the panel and the server:</p>
+        <ul class="mt-2 space-y-1 text-fg">
+          <li class="flex gap-2"><span class="text-subtle">•</span> Nginx vhost, SSL certificate and logs</li>
+          <li class="flex gap-2"><span class="text-subtle">•</span> {site.runtime === 'php' ? 'PHP-FPM pool' : 'App service'}, cron jobs and SSH/SFTP accounts</li>
+          <li class="flex gap-2"><span class="text-subtle">•</span>
+            {#if dbNames.length}Databases: <span class="font-mono">{dbNames.join(', ')}</span>{:else}Databases: none{/if}
+          </li>
+        </ul>
+      </div>
+
+      <label class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors {deleteFiles ? 'border-danger/40 bg-danger/5' : 'border-line'}">
+        <input type="checkbox" bind:checked={deleteFiles} class="checkbox mt-0.5" />
+        <span class="min-w-0">
+          <span class="block font-medium text-fg">Also delete all site files</span>
+          <span class="mt-0.5 block font-mono text-[12px] break-all text-muted">{site.root_path}</span>
+          <span class="mt-1 block text-xs text-subtle">
+            {deleteFiles ? 'The folder and everything in it (including local backups inside it) is deleted for good.' : 'Unchecked: the folder and its files stay on the server, and a new site can use it again later.'}
+          </span>
+        </span>
+      </label>
+
+      <div>
+        <label for="delete-confirm" class="label">Type <span class="font-mono text-fg">{site.domain}</span> to confirm</label>
+        <input id="delete-confirm" bind:value={deleteConfirm} class="input font-mono" autocomplete="off" spellcheck="false" placeholder={site.domain} />
+      </div>
+    </div>
+    {#snippet footer()}
+      <button onclick={() => (showDelete = false)} class="btn btn-ghost btn-sm">Cancel</button>
+      <button onclick={deleteSite} disabled={deleteBusy || deleteConfirm.trim().toLowerCase() !== site.domain.toLowerCase()} class="btn btn-danger btn-sm">
+        <Trash2 size={14} /> {deleteFiles ? 'Delete site and files' : 'Delete site'}
+      </button>
+    {/snippet}
+  </Modal>
+{/if}
+

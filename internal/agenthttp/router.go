@@ -303,6 +303,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 
 	// System specifications and benchmarks
 	tasks.GET("/system/spec", r.systemSpecTask)
+	tasks.GET("/system/public-ip", r.publicIPTask)
 	tasks.GET("/system/benchmark", r.systemBenchmarkTask)
 
 	// Stack management (install/manage software on the server)
@@ -1157,6 +1158,8 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 		SiteID   int64  `json:"site_id"`
 		Domain   string `json:"domain"`
 		RootPath string `json:"root_path"`
+		// KeepFiles leaves the site root and the files in it in place.
+		KeepFiles bool `json:"keep_files"`
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
@@ -1165,7 +1168,7 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid domain or path")
 	}
 
-	slog.Info("agent: site.delete", "site_id", payload.SiteID, "domain", payload.Domain)
+	slog.Info("agent: site.delete", "site_id", payload.SiteID, "domain", payload.Domain, "keep_files", payload.KeepFiles)
 	cleaned := []string{}
 	errs := []string{}
 
@@ -1215,7 +1218,9 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 
 	// 4. Remove site directory: beneath its pinned parent, never through a
 	// symlink the site user put in place of the root or a parent.
-	if err := sitefs.RemoveTree(payload.RootPath); err != nil {
+	if payload.KeepFiles {
+		cleaned = append(cleaned, "site files kept at "+payload.RootPath)
+	} else if err := sitefs.RemoveTree(payload.RootPath); err != nil {
 		errs = append(errs, "site root: "+err.Error())
 	} else {
 		cleaned = append(cleaned, "site files")
@@ -1234,8 +1239,10 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 	r.executor.RunShell(ctx, "rm", "-f", logError)
 
 	// 7. Remove backup directory if exists
-	backupPath := filepath.Join(r.backupDir, "sites", sanitizeBackupName(payload.Domain))
-	r.executor.RemoveAll(ctx, backupPath)
+	if !payload.KeepFiles {
+		backupPath := filepath.Join(r.backupDir, "sites", sanitizeBackupName(payload.Domain))
+		r.executor.RemoveAll(ctx, backupPath)
+	}
 
 	// 8. Remove ACME webroot challenge dir
 	r.executor.RemoveAll(ctx, "/var/www/certbot/"+payload.Domain)

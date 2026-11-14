@@ -569,3 +569,35 @@ func TestBackupRestoreTask_MissingBackupDir(t *testing.T) {
 		t.Fatalf("backup dir not created: %v", err)
 	}
 }
+
+// keep_files removes everything the site owns on the server except its root.
+func TestSiteDeleteTask_KeepFiles(t *testing.T) {
+	nginxDir := t.TempDir()
+	parent := t.TempDir()
+	rootDir := filepath.Join(parent, "keep.example.com")
+	if err := os.MkdirAll(rootDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootDir, "index.html"), []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	conf := filepath.Join(nginxDir, "keep.example.com.conf")
+	if err := os.WriteFile(conf, []byte("server {}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	e := NewRouterWithOptions(RouterOptions{NginxConfDir: nginxDir})
+	body, _ := json.Marshal(map[string]any{"site_id": 7, "domain": "keep.example.com", "root_path": rootDir, "keep_files": true})
+	req := httptest.NewRequest(http.MethodPost, "/tasks/site/delete", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got, err := os.ReadFile(filepath.Join(rootDir, "index.html")); err != nil || string(got) != "data" {
+		t.Fatalf("site files not kept: %v %q", err, got)
+	}
+	if _, err := os.Stat(conf); !os.IsNotExist(err) {
+		t.Fatalf("vhost not removed: %v", err)
+	}
+}

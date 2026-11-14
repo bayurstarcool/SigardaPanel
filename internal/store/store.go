@@ -36,6 +36,7 @@ type Store struct {
 	Cloudflare         *CloudflareStore
 	UserSites          *SQLiteUserSiteStore
 	Roles              *SQLiteRoleStore
+	SiteDNS            *SiteDNSStore
 	BackupProviders    *SQLiteBackupStorageProviderStore
 	BackupSchedules    BackupScheduleRepository
 	BackupConfigs      BackupConfigRepository
@@ -77,6 +78,7 @@ func New(db *sql.DB) *Store {
 		Cloudflare:         NewCloudflareStore(db),
 		UserSites:          NewUserSiteStore(db),
 		Roles:              NewRoleStore(db),
+		SiteDNS:            &SiteDNSStore{db: db},
 		BackupProviders:    NewBackupStorageProviderStore(db),
 		BackupSchedules:    NewBackupScheduleStore(db),
 		BackupConfigs:      NewBackupConfigStore(db),

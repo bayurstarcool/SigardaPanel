@@ -478,6 +478,11 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 				slog.Error("worker: transfer site record", "site_id", p.SiteID, "error", err)
 				break
 			}
+			// The DNS records were made with the previous owner's Cloudflare
+			// token: the panel no longer changes or removes them.
+			if err := w.store.SiteDNS.MarkUnmanagedBySite(ctx, p.SiteID); err != nil {
+				slog.Warn("worker: release site dns records", "site_id", p.SiteID, "error", err)
+			}
 			if site, _ := w.store.Sites.GetByID(ctx, p.SiteID); site != nil {
 				regen, _ := json.Marshal(map[string]any{
 					"site_id": site.ID, "name": site.Name, "domain": site.Domain,

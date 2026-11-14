@@ -150,6 +150,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.DELETE("/api/v1/servers/:id", sh.delete, RequireAuth(s), RequirePermission(s, "server.manage"))
 	e.GET("/api/v1/servers/health", sh.getHealthAll, RequireAuth(s))
 	e.GET("/api/v1/servers/:id/health", sh.getHealth, RequireAuth(s))
+	e.GET("/api/v1/servers/:id/public-ip", sh.publicIP, RequireAuth(s))
 	e.POST("/api/v1/servers/:id/token", sh.regenerateToken, RequireAuth(s), RequireUserSession, RequirePermission(s, "server.manage"))
 
 	sitesH := newSiteHandler(s, auditRec)
@@ -210,6 +211,8 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	logsH := newLogsHandler(s)
 
 	// Site management advanced tabs
+	e.GET("/api/v1/sites/:id/dns", sitesH.getSiteDNS, RequireAuth(s))
+	e.POST("/api/v1/sites/:id/dns", sitesH.syncSiteDNS, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/vhost", sitesH.getVhost, RequireAuth(s))
 	// Raw vhost editing can read/write arbitrary files via nginx directives, so it is admin-only.
 	// Raw vhost text is accepted when nginx -t passes: include, access_log or

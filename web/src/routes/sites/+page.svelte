@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { fmtDate } from '$lib/format';
   import { auth, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
@@ -121,7 +122,7 @@
   let busy = $state(false);
   let cfEnabled = $state(true);
   let servers = $state<any[]>([]);
-  let cfResult = $state<{provisioned: boolean; zone: string; error: string} | null>(null);
+  let cfOverwrite = $state(false);
 
   let searchInput = $state('');
   let runtimeFilter = $state('');
@@ -193,6 +194,19 @@
       })
       .catch(() => { if (form.server_id === sid) serverPhp = null; });
   });
+  // The IPv4 the site's DNS record will point at (the server's public
+  // address, or the one its agent detects behind NAT).
+  let dnsIP = $state<{ ip: string; source: string; error?: string } | null>(null);
+  let dnsIPFor = 0;
+  $effect(() => {
+    const sid = form.server_id;
+    if (!cfEnabled || sid <= 0 || sid === dnsIPFor) return;
+    dnsIPFor = sid;
+    dnsIP = null;
+    apiFetch(auth.token, 'GET', `servers/${sid}/public-ip`)
+      .then((d: any) => { if (form.server_id === sid) dnsIP = d; })
+      .catch(() => { if (form.server_id === sid) dnsIPFor = 0; });
+  });
   const phpChoices = $derived(serverPhp && serverPhp.length ? serverPhp : phpVersions);
 
   const sortedSites = $derived((() => {
@@ -217,8 +231,17 @@
     }
     busy = true;
     try {
-      await apiFetch(auth.token, 'POST', 'sites', { ...form, cloudflare_provision: cfEnabled });
+      const created = await apiFetch(auth.token, 'POST', 'sites', { ...form, cloudflare_provision: cfEnabled, cloudflare_overwrite: cfEnabled && cfOverwrite });
       showCreate = false;
+      cfOverwrite = false;
+      // The site page shows every provisioning step (server setup, DNS, SSL)
+      // as it happens.
+      const newId = created?.site?.id;
+      if (newId) {
+        toasts.success(`${created.site.domain} is being set up`);
+        goto(`/sites/${newId}`);
+        return;
+      }
       form = { server_id: 0, name: '', domain: '', runtime: 'static', php_version: '8.3', root_path: '', proxy_pass_url: '', docker_image: '', docker_language: '', docker_name: '', docker_ports: '', docker_env: '', docker_volume: '', docker_restart: 'unless-stopped' };
       selectedPreset = '';
       showDockerConfig = false;
@@ -310,11 +333,25 @@
               {/if}
             </p>
           </div>
-          <div class="flex items-end">
+          <div class="flex flex-col justify-end gap-1.5">
             <label class="flex h-9 cursor-pointer items-center gap-2 text-sm text-muted">
               <input type="checkbox" bind:checked={cfEnabled} class="checkbox" />
               Cloudflare DNS
             </label>
+            {#if cfEnabled && form.server_id > 0}
+              <p class="hint mt-0 ml-6">
+                {#if !dnsIP}Detecting the server's public IP…
+                {:else if dnsIP.ip}Points to <span class="font-mono text-muted">{dnsIP.ip}</span> <span class="text-subtle">({dnsIP.source})</span>
+                {:else}<span class="text-warning">{dnsIP.error || 'Public IP unknown'}</span>{/if}
+              </p>
+            {/if}
+            {#if cfEnabled}
+              <label class="ml-6 flex cursor-pointer items-center gap-2 text-[13px] text-muted">
+                <input type="checkbox" bind:checked={cfOverwrite} class="checkbox" />
+                Replace existing DNS records for this name
+              </label>
+              <p class="hint mt-0 ml-6">{cfOverwrite ? 'A, AAAA and CNAME records that point elsewhere are replaced.' : 'Records that already exist are never changed; you can replace them later from the site.'}</p>
+            {/if}
           </div>
         </div>
 
@@ -411,11 +448,7 @@
           </button>
           <button onclick={() => (showCreate = false)} class="btn btn-ghost btn-sm">Cancel</button>
         </div>
-        {#if cfResult}
-          <p class="mt-3 text-xs {cfResult.provisioned ? 'text-success' : 'text-warning'}">
-            {cfResult.provisioned ? `DNS provisioned in zone ${cfResult.zone}` : cfResult.error}
-          </p>
-        {/if}
+
       </div>
     </div>
   {/if}

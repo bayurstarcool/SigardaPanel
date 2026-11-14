@@ -21,6 +21,7 @@ import (
 	sjobs "sigardapanel/internal/jobs"
 	"sigardapanel/internal/migrations"
 	"sigardapanel/internal/secrets"
+	"sigardapanel/internal/publicip"
 	"sigardapanel/internal/store"
 )
 
@@ -251,6 +252,7 @@ func ensureLocalServer(ctx context.Context, s *store.Store) error {
 	agentURL := strings.TrimRight(config.AgentServerURL(), "/")
 	for _, server := range servers {
 		if server.Hostname == hostname || (server.AgentURL.Valid && strings.TrimRight(server.AgentURL.String, "/") == agentURL) {
+			go fixLocalServerIP(context.WithoutCancel(ctx), s, server.ID)
 			return nil
 		}
 	}
@@ -285,7 +287,46 @@ func ensureLocalServer(ctx context.Context, s *store.Store) error {
 		return fmt.Errorf("register local server: %w", err)
 	}
 	slog.Info("local server auto-registered", "server_id", server.ID, "hostname", hostname, "agent_url", agentURL)
+	go fixLocalServerIP(context.WithoutCancel(ctx), s, server.ID)
 	return nil
+}
+
+// detectLocalPublicIP is replaced in tests.
+var detectLocalPublicIP = func(ctx context.Context) (string, error) {
+	r, err := publicip.Detect(ctx, nil)
+	return r.IP, err
+}
+
+// fixLocalServerIP replaces the panel host's address on the Servers page
+// with its public IPv4 when it holds a private (or no) address: cloud VMs
+// only see the private one on their interfaces, and site DNS points at
+// this address. A public address (set by hand or SIGARDAPANEL_LOCAL_IP) is
+// never changed.
+func fixLocalServerIP(ctx context.Context, s *store.Store, serverID int64) {
+	if config.LocalServerIP() != "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	srv, err := s.Servers.GetByID(ctx, serverID)
+	if err != nil || srv == nil {
+		return
+	}
+	if ip := net.ParseIP(strings.TrimSpace(srv.IPAddress.String)); srv.IPAddress.Valid && publicip.IsPublicIPv4(ip) {
+		return
+	}
+	pub, err := detectLocalPublicIP(ctx)
+	if err != nil || !publicip.IsPublicIPv4(net.ParseIP(pub)) {
+		slog.Warn("local server: public IP not detected; set it on the Servers page", "server_id", serverID, "error", err)
+		return
+	}
+	old := srv.IPAddress.String
+	srv.IPAddress = sql.NullString{String: pub, Valid: true}
+	if err := s.Servers.Update(ctx, srv); err != nil {
+		slog.Warn("local server: store public IP", "server_id", serverID, "error", err)
+		return
+	}
+	slog.Info("local server: address set to its public IP", "server_id", serverID, "old", old, "ip", pub)
 }
 
 func detectLocalIPv4() string {

@@ -98,7 +98,7 @@
                 <td class="font-medium">{s.name}</td>
                 <td class="text-muted max-sm:hidden">{s.hostname}</td>
                 <td><StatusPill status={s.status} /></td>
-                <td class="font-mono text-[13px] text-muted max-md:hidden">{s.ip_address || '—'}</td>
+                <td class="font-mono text-[13px] text-muted max-md:hidden">{s.ip_address || '—'}{#if s.public_ip && s.public_ip !== s.ip_address}<span class="block text-[11.5px] text-subtle" title="Public IP detected by the agent; site DNS points here">public {s.public_ip}</span>{/if}</td>
                 <td class="text-xs">
                   {#if s.agent_url}
                     <span class="inline-flex items-center gap-1.5 {h.cls}" title={s.health_status === 'unauthorized' ? "The agent answers but rejects the panel's token: update SIGARDAPANEL_AGENT_TOKEN in its agent.env" : ''}><span class="dot"></span>{h.label}</span>
