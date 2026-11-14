@@ -18,7 +18,6 @@ import (
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
-	"sigardapanel/internal/cloudflare"
 	"sigardapanel/internal/dbserver"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/jobmodel"
@@ -179,6 +178,10 @@ func (h *siteHandler) create(c *echo.Context) error {
 		// CloudflareProvision: false skips the DNS record even when the user
 		// has Cloudflare configured (absent = provision, as before).
 		CloudflareProvision *bool `json:"cloudflare_provision,omitempty"`
+		// CloudflareOverwrite: true replaces A/AAAA/CNAME records at the
+		// site's name that point elsewhere (explicit consent); otherwise they
+		// are left alone and reported.
+		CloudflareOverwrite *bool `json:"cloudflare_overwrite,omitempty"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -464,54 +467,15 @@ func (h *siteHandler) create(c *echo.Context) error {
 
 	h.store.NotifyAdmins(c.Request().Context(), "site_created", "Site Created", fmt.Sprintf("%s created", site.Domain), "info", "site", site.ID)
 
-	// ── Cloudflare DNS auto-provisioning (per-user) ──
-	cloudflareDNS := map[string]any{"provisioned": false, "zone": "", "record_id": "", "error": ""}
-	cfEnabled := false
-	cfCfg, err := h.store.Cloudflare.GetConfig(userID)
-	if body.CloudflareProvision != nil && !*body.CloudflareProvision {
-		err = fmt.Errorf("skipped")
-	}
-	if err == nil && cfCfg.APIToken != "" {
-		cfEnabled = true
-		cfClient := cloudflare.NewClient(cloudflare.Config{APIToken: cfCfg.APIToken, Email: cfCfg.Email})
-		if zones, err := cfClient.ListZones(); err == nil {
-			rootDomain := cloudflare.RootDomain(site.Domain)
-			if zone := cloudflare.FindMatchingZone(zones, rootDomain); zone != nil {
-				// Get server IP for A record
-				var ip string
-				if server != nil && server.IPAddress.Valid && server.IPAddress.String != "" {
-					ip = server.IPAddress.String
-				}
-				if ip == "" {
-					cloudflareDNS["error"] = "server has no IP address"
-				} else {
-					// Create A record: subdomain (or @ for root) pointing to server IP
-					dnsName := site.Domain
-					// Remove zone suffix to get subdomain part
-					sub := strings.TrimSuffix(site.Domain, "."+zone.Name)
-					if sub == "" || sub == site.Domain {
-						dnsName = "@"
-					}
-					record, err := cfClient.CreateDNSRecord(zone.ID, cloudflare.CreateDNSRecordRequest{
-						Name:    dnsName,
-						Type:    "A",
-						Content: ip,
-						TTL:     1,
-						Proxied: boolPtr(true),
-					})
-					if err != nil {
-						cloudflareDNS["error"] = err.Error()
-					} else {
-						cloudflareDNS["provisioned"] = true
-						cloudflareDNS["zone"] = zone.Name
-						cloudflareDNS["record_id"] = record.ID
-					}
-				}
-			} else {
-				cloudflareDNS["error"] = "no Cloudflare zone found for " + rootDomain
-			}
-		} else {
-			cloudflareDNS["error"] = "failed to list zones: " + err.Error()
+	// ── Cloudflare DNS (per-user account) ──
+	// An A record to the server's public IP is created only when nothing else
+	// answers for the name; existing records are reported, never replaced
+	// unless the request explicitly asks (cloudflare_overwrite).
+	var dnsResult *siteDNSResult
+	if body.CloudflareProvision == nil || *body.CloudflareProvision {
+		overwrite := body.CloudflareOverwrite != nil && *body.CloudflareOverwrite
+		if r := h.siteDNS(c.Request().Context(), site, userID, false, overwrite); r.Status != "skipped" {
+			dnsResult = &r
 		}
 	}
 	data := map[string]any{
@@ -522,8 +486,8 @@ func (h *siteHandler) create(c *echo.Context) error {
 			"status": job.Status,
 		},
 	}
-	if cfEnabled {
-		data["cloudflare_dns"] = cloudflareDNS
+	if dnsResult != nil {
+		data["cloudflare_dns"] = dnsResult
 	}
 
 	return c.JSON(http.StatusCreated, httpjson.Success{
@@ -617,23 +581,9 @@ func (h *siteHandler) delete(c *echo.Context) error {
 	// Clear app port so it can be reused
 	h.store.Sites.ClearAppPort(c.Request().Context(), id)
 
-	// Delete Cloudflare DNS record
-	if cfCfg, err := h.store.Cloudflare.GetConfig(userID); err == nil && cfCfg.APIToken != "" {
-		cfClient := cloudflare.NewClient(cloudflare.Config{APIToken: cfCfg.APIToken, Email: cfCfg.Email})
-		if zones, err := cfClient.ListZones(); err == nil {
-			rootDomain := cloudflare.RootDomain(site.Domain)
-			if zone := cloudflare.FindMatchingZone(zones, rootDomain); zone != nil {
-				if records, err := cfClient.ListDNSRecords(zone.ID, "A"); err == nil {
-					for _, record := range records {
-						if record.Name == site.Domain {
-							cfClient.DeleteDNSRecord(zone.ID, record.ID)
-							break
-						}
-					}
-				}
-			}
-		}
-	}
+	// DNS: only the records the panel created for this site, with the
+	// account that created them, and only while unchanged (never by name).
+	dnsNotes := h.removeSiteDNS(c.Request().Context(), site)
 
 	// Send cleanup payload to agent — site.delete job handles files, SSL, logs, services
 	payload, _ := json.Marshal(map[string]any{
@@ -674,6 +624,7 @@ func (h *siteHandler) delete(c *echo.Context) error {
 			"site_id":       id,
 			"job_id":        job.ID,
 			"files_deleted": deleteFiles,
+			"dns":           dnsNotes,
 		},
 		RequestID: rid,
 	})

@@ -121,7 +121,7 @@
   let busy = $state(false);
   let cfEnabled = $state(true);
   let servers = $state<any[]>([]);
-  let cfResult = $state<{provisioned: boolean; zone: string; error: string} | null>(null);
+  let cfOverwrite = $state(false);
 
   let searchInput = $state('');
   let runtimeFilter = $state('');
@@ -217,8 +217,18 @@
     }
     busy = true;
     try {
-      await apiFetch(auth.token, 'POST', 'sites', { ...form, cloudflare_provision: cfEnabled });
+      const created = await apiFetch(auth.token, 'POST', 'sites', { ...form, cloudflare_provision: cfEnabled, cloudflare_overwrite: cfEnabled && cfOverwrite });
       showCreate = false;
+      cfOverwrite = false;
+      // Cloudflare DNS outcome: never silent (it used to be dropped here).
+      const dns = created?.cloudflare_dns;
+      if (dns) {
+        if (['created', 'replaced', 'exists', 'managed', 'updated'].includes(dns.status)) toasts.success(`DNS: ${dns.message}`);
+        else if (dns.status === 'conflict') {
+          const list = (dns.existing || []).map((r: any) => `${r.type} → ${r.content}`).join(', ');
+          toasts.warning(`DNS not changed: ${dns.name} already has ${list}. Open the site's DNS card to replace it.`);
+        } else toasts.warning(`DNS: ${dns.message}`);
+      }
       form = { server_id: 0, name: '', domain: '', runtime: 'static', php_version: '8.3', root_path: '', proxy_pass_url: '', docker_image: '', docker_language: '', docker_name: '', docker_ports: '', docker_env: '', docker_volume: '', docker_restart: 'unless-stopped' };
       selectedPreset = '';
       showDockerConfig = false;
@@ -310,11 +320,18 @@
               {/if}
             </p>
           </div>
-          <div class="flex items-end">
+          <div class="flex flex-col justify-end gap-1.5">
             <label class="flex h-9 cursor-pointer items-center gap-2 text-sm text-muted">
               <input type="checkbox" bind:checked={cfEnabled} class="checkbox" />
               Cloudflare DNS
             </label>
+            {#if cfEnabled}
+              <label class="ml-6 flex cursor-pointer items-center gap-2 text-[13px] text-muted">
+                <input type="checkbox" bind:checked={cfOverwrite} class="checkbox" />
+                Replace existing DNS records for this name
+              </label>
+              <p class="hint mt-0 ml-6">{cfOverwrite ? 'A, AAAA and CNAME records that point elsewhere are replaced.' : 'Records that already exist are never changed; you can replace them later from the site.'}</p>
+            {/if}
           </div>
         </div>
 
@@ -411,11 +428,7 @@
           </button>
           <button onclick={() => (showCreate = false)} class="btn btn-ghost btn-sm">Cancel</button>
         </div>
-        {#if cfResult}
-          <p class="mt-3 text-xs {cfResult.provisioned ? 'text-success' : 'text-warning'}">
-            {cfResult.provisioned ? `DNS provisioned in zone ${cfResult.zone}` : cfResult.error}
-          </p>
-        {/if}
+
       </div>
     </div>
   {/if}

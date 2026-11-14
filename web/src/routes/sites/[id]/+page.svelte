@@ -136,7 +136,7 @@
     if (!auth.user) { window.location.href = '/login'; return; }
     site = null; loading = true; activeTab = new URL(window.location.href).searchParams.get('tab') || 'info'; dockerContainer = null; dbsCount = 0; dbNames = [];
     await loadSite();
-    if (site) void loadDiskUsage();
+    if (site) { void loadDiskUsage(); void loadDNS(); }
     // Load db count for stats
     try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbNames = (d?.databases || []).map((x: any) => x.name); dbsCount = dbNames.length; } catch {}
     // Load Docker container info for docker runtime sites
@@ -207,6 +207,29 @@
       }
     } catch (e: any) { toasts.error(e.message); } finally { toggleBusy = false; }
   }
+
+  // Cloudflare DNS for the site (with the viewer's Cloudflare account).
+  let dns = $state<any>(null);
+  let dnsBusy = $state(false);
+  let showDnsReplace = $state(false);
+  async function loadDNS() {
+    try { dns = await apiFetch(auth.token, 'GET', `sites/${siteId}/dns`); } catch { dns = null; }
+  }
+  async function syncDNS(overwrite = false) {
+    dnsBusy = true;
+    try {
+      const r = await apiFetch(auth.token, 'POST', `sites/${siteId}/dns`, { overwrite });
+      dns = r;
+      if (r?.status === 'conflict') toasts.warning(r.message); else toasts.success(r?.message || 'DNS updated');
+      showDnsReplace = false;
+    } catch (e: any) { toasts.error(e.message); await loadDNS(); } finally { dnsBusy = false; }
+  }
+  const dnsTone = $derived(
+    !dns ? '' : ['managed', 'exists', 'created', 'updated', 'replaced'].includes(dns.status) ? 'success' : dns.status === 'conflict' ? 'warning' : dns.status === 'error' ? 'danger' : '',
+  );
+  const dnsLabel = $derived(
+    !dns ? '' : ({ managed: 'Managed', exists: 'Points here', created: 'Created', updated: 'Updated', replaced: 'Replaced', conflict: 'Conflict', missing: 'Not set', error: 'Problem', skipped: 'Not connected' } as Record<string, string>)[dns.status] || dns.status,
+  );
 
   // Delete dialog: everything that belongs to the site goes; its files only
   // when asked (unchecked by default, so a mistaken delete keeps the data).
@@ -422,6 +445,42 @@
             {/if}
           </div>
 
+          {#if dns && dns.status !== 'skipped'}
+            <div class="card">
+              <div class="card-header">
+                <h2 class="card-title flex items-center gap-2">DNS <span class="font-normal text-subtle">· Cloudflare</span></h2>
+                <span class="badge {dnsTone ? 'badge-' + dnsTone : ''}">{dnsLabel}</span>
+              </div>
+              <div class="card-body space-y-3 text-[13px]">
+                <p class="text-muted">{dns.message}</p>
+                {#if dns.zone}
+                  <dl class="space-y-1.5">
+                    <div class="flex justify-between gap-3"><dt class="text-subtle">Zone</dt><dd class="font-mono text-[12.5px] text-fg">{dns.zone}</dd></div>
+                    {#if dns.content}<div class="flex justify-between gap-3"><dt class="text-subtle">Server IP</dt><dd class="font-mono text-[12.5px] text-fg">{dns.content}</dd></div>{/if}
+                  </dl>
+                {/if}
+                {#if dns.existing?.length}
+                  <div class="rounded-lg border border-warning/30 bg-warning/5 p-3">
+                    <div class="mb-1 text-xs font-medium text-warning">Existing records for {dns.name}</div>
+                    {#each dns.existing as r, i (i)}
+                      <div class="font-mono text-[12px] text-fg">{r.type} → {r.content}{r.proxied ? ' (proxied)' : ''}</div>
+                    {/each}
+                  </div>
+                {/if}
+                {#if canWrite}
+                  <div class="flex flex-wrap gap-2 pt-1">
+                    {#if dns.status === 'missing' || dns.status === 'error'}
+                      <button onclick={() => syncDNS(false)} disabled={dnsBusy} class="btn btn-secondary btn-sm">{dnsBusy ? 'Working…' : dns.status === 'error' ? 'Try again' : 'Create DNS record'}</button>
+                    {:else if dns.status === 'conflict'}
+                      <button onclick={() => syncDNS(false)} disabled={dnsBusy} class="btn btn-secondary btn-sm">Sync</button>
+                      <button onclick={() => (showDnsReplace = true)} disabled={dnsBusy} class="btn btn-danger-ghost btn-sm">Replace with this server</button>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            </div>
+          {/if}
+
           {#if canTransfer}
             <div class="card">
               <div class="card-header">
@@ -545,6 +604,24 @@
   {/if}
 {/key}
 </DashboardLayout>
+
+{#if site && dns}
+  <Modal bind:open={showDnsReplace} title="Replace DNS records for {dns.name}" maxWidth="md">
+    <div class="space-y-3 text-[13px]">
+      <p class="text-muted">These records are deleted in Cloudflare and replaced by one A record to this server ({dns.content}), proxied:</p>
+      <div class="rounded-lg border border-line p-3">
+        {#each dns.existing || [] as r, i (i)}
+          <div class="font-mono text-[12px] text-fg">{r.type} → {r.content}</div>
+        {/each}
+      </div>
+      <p class="text-xs text-subtle">Other record types (MX, TXT, …) are not touched. The change is recorded in the audit log with the old values.</p>
+    </div>
+    {#snippet footer()}
+      <button onclick={() => (showDnsReplace = false)} class="btn btn-ghost btn-sm">Cancel</button>
+      <button onclick={() => syncDNS(true)} disabled={dnsBusy} class="btn btn-danger btn-sm">{dnsBusy ? 'Replacing…' : 'Replace records'}</button>
+    {/snippet}
+  </Modal>
+{/if}
 
 {#if site}
   <Modal bind:open={showDelete} title="Delete {site.domain}" maxWidth="md">

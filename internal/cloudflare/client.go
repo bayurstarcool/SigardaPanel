@@ -68,9 +68,8 @@ func (c *Client) ListZones() ([]Zone, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cloudflare list zones: %w", err)
 		}
-		defer resp.Body.Close()
-
 		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("cloudflare list zones read: %w", err)
 		}
@@ -378,4 +377,56 @@ func formatErrors(errors []APIError) string {
 		msgs = append(msgs, fmt.Sprintf("[%d] %s", e.Code, e.Message))
 	}
 	return strings.Join(msgs, "; ")
+}
+
+// ListDNSRecordsByName returns every record (any type) whose name is exactly
+// name (a fully qualified name, e.g. shop.example.com).
+func (c *Client) ListDNSRecordsByName(zoneID, name string) ([]DNSRecord, error) {
+	path := fmt.Sprintf("/zones/%s/dns_records?per_page=100&name=%s", url.PathEscape(zoneID), url.QueryEscape(name))
+	resp, err := c.request("GET", path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare list dns records: %w", err)
+	}
+	defer resp.Body.Close()
+	var wrapper struct {
+		Success bool        `json:"success"`
+		Errors  []APIError  `json:"errors"`
+		Result  []DNSRecord `json:"result"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&wrapper); err != nil {
+		return nil, fmt.Errorf("cloudflare list dns records decode: %w", err)
+	}
+	if !wrapper.Success {
+		return nil, fmt.Errorf("cloudflare list dns records failed: %s", formatErrors(wrapper.Errors))
+	}
+	return wrapper.Result, nil
+}
+
+// GetDNSRecord returns one record; (nil, nil) when it no longer exists.
+func (c *Client) GetDNSRecord(zoneID, recordID string) (*DNSRecord, error) {
+	resp, err := c.request("GET", fmt.Sprintf("/zones/%s/dns_records/%s", url.PathEscape(zoneID), url.PathEscape(recordID)), nil)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare get dns record: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil, nil
+	}
+	var wrapper struct {
+		Success bool       `json:"success"`
+		Errors  []APIError `json:"errors"`
+		Result  DNSRecord  `json:"result"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&wrapper); err != nil {
+		return nil, fmt.Errorf("cloudflare get dns record decode: %w", err)
+	}
+	if !wrapper.Success {
+		for _, e := range wrapper.Errors {
+			if e.Code == 81044 { // record not found
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("cloudflare get dns record failed: %s", formatErrors(wrapper.Errors))
+	}
+	return &wrapper.Result, nil
 }
