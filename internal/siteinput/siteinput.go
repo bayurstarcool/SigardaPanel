@@ -357,7 +357,6 @@ func FilterPHPIni(s string) (string, []string) {
 	return strings.Join(kept, `\n `), rejected
 }
 
-
 // loopbackServicePorts are local services a tenant's proxy must never reach:
 // the panel (API, agent, web) and data stores that listen on loopback.
 var loopbackServicePorts = map[int]bool{
