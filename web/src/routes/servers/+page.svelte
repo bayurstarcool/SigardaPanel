@@ -33,7 +33,7 @@
   let panelVersion = $state('');
   onMount(() => {
     loadServers();
-    fetch('/api/v1/version')
+    fetch('/api/proxy/version')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => (panelVersion = d?.data?.version ?? ''))
       .catch(() => {});

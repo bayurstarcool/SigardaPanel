@@ -111,6 +111,23 @@
     }
   });
 
+  // A new site is "pending" until its site.create job has run: refresh it
+  // quietly (no loading state) so the header and Nginx card update without
+  // a manual reload. Stops once it leaves pending or after ~5 minutes.
+  $effect(() => {
+    if (site?.status !== 'pending') return;
+    const id = siteId;
+    let tries = 0;
+    const timer = setInterval(async () => {
+      if (++tries > 75 || id !== siteId) { clearInterval(timer); return; }
+      try {
+        const fresh = await apiFetch(auth.token, 'GET', `sites/${id}`);
+        if (id === siteId && fresh && fresh.status !== 'pending') site = fresh;
+      } catch {}
+    }, 4000);
+    return () => clearInterval(timer);
+  });
+
   async function initSite() {
     if (!auth.user) { window.location.href = '/login'; return; }
     site = null; loading = true; activeTab = new URL(window.location.href).searchParams.get('tab') || 'info'; dockerContainer = null; dbsCount = 0;

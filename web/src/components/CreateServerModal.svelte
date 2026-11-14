@@ -59,7 +59,7 @@
       description = '';
       createdToken = '';
       createdServer = null;
-      fetch('/api/v1/version')
+      fetch('/api/proxy/version')
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => (panelVersion = d?.data?.version && d.data.version !== 'dev' ? 'v' + d.data.version : ''))
         .catch(() => {});

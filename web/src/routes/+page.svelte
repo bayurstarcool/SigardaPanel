@@ -11,7 +11,7 @@
   // if the request fails.
   let version = $state('');
   onMount(() => {
-    fetch('/api/v1/version')
+    fetch('/api/proxy/version')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         const v = d?.data?.version;

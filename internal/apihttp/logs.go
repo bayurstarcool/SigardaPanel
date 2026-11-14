@@ -197,9 +197,9 @@ func normalizeLevel(l string) string {
 	switch l {
 	case "emerg", "alert", "crit", "critical", "error", "err":
 		return "error"
-	case "warn", "warning", "notice":
+	case "warn", "warning":
 		return "warn"
-	case "info":
+	case "info", "notice":
 		return "info"
 	case "debug":
 		return "debug"

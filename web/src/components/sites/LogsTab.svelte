@@ -10,7 +10,8 @@
 
   let site = $state<any>(null);
   let logType = $state('error');
-  let logEntries = $state<string[]>([]);
+  type LogLine = { text: string; level: string };
+  let logEntries = $state<LogLine[]>([]);
   let logLoading = $state(false);
   let logLoaded = $state(false);
   let logPath = $state('');
@@ -33,17 +34,19 @@
         if (container) {
           const d = await apiFetch(auth.token, 'GET', `servers/${site.server_id}/docker/container/logs?container_id=${container.id}&lines=200`);
           const raw = d?.logs || '';
-          logEntries = raw.split('\n').filter((l: string) => l.trim());
+          logEntries = raw.split('\n').filter((l: string) => l.trim()).map((l: string) => ({ text: l, level: '' }));
           logExists = true;
           logPath = `docker:${container.name}`;
         } else {
-          logEntries = ['Container not found'];
+          logEntries = [{ text: 'Container not found', level: '' }];
           logExists = true;
         }
       } else {
         // Standard site logs
         const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/logs?type=${logType}&limit=300`);
-        logEntries = d?.logs || [];
+        // The API parses lines into {level, message, created_at}; access
+        // lines keep the whole line as the message.
+        logEntries = (d?.logs || []).map((e: any) => toLine(e, logType));
         logPath = d?.path || '';
         logExists = d?.exists || false;
       }
@@ -61,9 +64,20 @@
       ]
   );
 
-  function lineClass(entry: string): string {
-    const l = entry.toLowerCase();
-    if (l.includes('error') || l.includes('fatal') || entry.includes('[crit]')) return 'text-danger';
+  function toLine(e: any, type: string): LogLine {
+    if (typeof e === 'string') return { text: e, level: '' };
+    const msg = String(e?.message ?? '');
+    if (type === 'access' || !e?.created_at) return { text: msg, level: String(e?.level ?? '') };
+    const lvl = e?.level ? ` ${String(e.level).toUpperCase()}:` : '';
+    return { text: `[${e.created_at}]${lvl} ${msg}`, level: String(e?.level ?? '') };
+  }
+
+  function lineClass(entry: LogLine): string {
+    if (entry.level === 'error') return 'text-danger';
+    if (entry.level === 'warn') return 'text-warning';
+    if (entry.level) return 'text-muted';
+    const l = entry.text.toLowerCase();
+    if (l.includes('error') || l.includes('fatal') || l.includes('[crit]')) return 'text-danger';
     if (l.includes('warn')) return 'text-warning';
     return 'text-muted';
   }
@@ -96,7 +110,7 @@
     <EmptyState compact icon={ScrollText} title="Log is empty" />
   {:else}
     <div class="max-h-[60vh] overflow-y-auto bg-surface-2/40">
-      <pre class="overflow-x-auto p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{#each logEntries as entry, i (i)}<span class={lineClass(entry)}>{entry}</span>
+      <pre class="overflow-x-auto p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{#each logEntries as entry, i (i)}<span class={lineClass(entry)}>{entry.text}</span>
 {/each}</pre>
     </div>
     <div class="border-t border-line px-5 py-2 text-xs text-subtle tabular-nums">Showing last {logEntries.length} lines</div>
