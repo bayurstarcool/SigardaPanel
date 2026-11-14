@@ -669,7 +669,10 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
   a public interface address, else the majority answer of 1.1.1.1/cdn-cgi/trace, checkip.amazonaws.com,
   api.ipify.org, icanhazip; agent `GET /tasks/system/public-ip`, cached 10 min), kept in
   `app_settings.server_public_ip_<id>` for 6 h (`GET /api/v1/servers/:id/public-ip`, `?refresh=1`
-  needs server.manage); the last known value is used if the agent cannot answer. Records the panel creates carry the exact
+  needs server.manage); the last known value is used if the agent cannot answer.
+  The auto-registered Local Server gets its public IPv4 written to `ip_address` at API start
+  (`fixLocalServerIP`) when it holds a private or no address (never overwrites a public one or
+  `SIGARDAPANEL_LOCAL_IP`), so the Servers page shows the address DNS uses. Records the panel creates carry the exact
   comment `SigardaPanel site:<id>` and are tracked in `site_dns_records`; existing records are
   never replaced without consent (`cloudflare_overwrite` on create, or the replace dialog's
   `replace_ids`, refused if other records appeared). Overwrite keeps a correct A record, deletes
