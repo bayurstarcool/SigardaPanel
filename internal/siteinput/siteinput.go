@@ -431,3 +431,38 @@ func ProxyPassTarget(ctx context.Context, raw string, allowInternal bool) error 
 	}
 	return nil
 }
+
+// RootPathForOwner checks a site root against its owner's account: a root
+// under /home must be inside the owner's own home (/home/<systemUser>/...),
+// at least one directory below it, and neither the whole htdocs folder nor
+// a hidden directory (.ssh, .config, ...). Deleting a site removes its root,
+// so a root that is a home, all of htdocs, or another account's tree would
+// take that account's files with it. Roots outside /home (super_admin only)
+// are checked by RootPathAllowed.
+func RootPathForOwner(root, systemUser string) error {
+	clean := path.Clean(root)
+	if !strings.HasPrefix(clean, "/home/") {
+		return nil
+	}
+	parts := strings.Split(strings.TrimPrefix(clean, "/home/"), "/")
+	if parts[0] != systemUser {
+		return fmt.Errorf("root_path is inside /home/%s, which belongs to another Linux account; use /home/%s/...", parts[0], systemUser)
+	}
+	if len(parts) < 2 {
+		return fmt.Errorf("root_path cannot be the whole home directory; use /home/%s/htdocs/<domain>", systemUser)
+	}
+	if strings.HasPrefix(parts[1], ".") {
+		return fmt.Errorf("root_path cannot be inside a hidden directory of the home")
+	}
+	if len(parts) == 2 && parts[1] == "htdocs" {
+		return fmt.Errorf("root_path cannot be the whole htdocs folder; use /home/%s/htdocs/<domain>", systemUser)
+	}
+	return nil
+}
+
+// RootPathsOverlap reports whether two site roots are the same directory or
+// one contains the other.
+func RootPathsOverlap(a, b string) bool {
+	a, b = path.Clean(a), path.Clean(b)
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
