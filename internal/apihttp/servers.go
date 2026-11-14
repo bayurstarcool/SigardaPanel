@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/config"
 	"strconv"
 	"strings"
@@ -499,6 +500,10 @@ func serverToMap(s store.Server, includeToken bool) map[string]any {
 	}
 	if s.AgentURL.Valid {
 		m["agent_url"] = s.AgentURL.String
+		// Plain http to a remote agent: the token and all traffic travel in
+		// clear until the panel switches it to pinned TLS.
+		m["insecure_transport"] = agenttls.InsecureTransport(s.AgentURL.String)
+		m["tls_pinned"] = s.AgentTLSFingerprint != "" && strings.HasPrefix(s.AgentURL.String, "https://")
 	}
 	if s.IPAddress.Valid {
 		m["ip_address"] = s.IPAddress.String

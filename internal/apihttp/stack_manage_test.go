@@ -194,10 +194,14 @@ func TestStackLocalServerProtections(t *testing.T) {
 		t.Fatalf("refused actions must not reach the agent, got %d calls", n)
 	}
 
-	// Allowed: admin restarts, super_admin uninstalls redis → forwarded, 202 + op.
-	agent.status, agent.answer = http.StatusOK, map[string]any{"ok": true, "message": "redis-server restarted"}
-	if rec := post(admin, map[string]any{"package": "redis", "action": "restart"}); rec.Code != http.StatusOK {
+	// Server management is super_admin only: admin is refused, super_admin
+	// restarts and uninstalls redis → forwarded, 202 + op.
+	if rec := post(admin, map[string]any{"package": "redis", "action": "restart"}); rec.Code != http.StatusForbidden {
 		t.Errorf("admin restart: %d %s", rec.Code, rec.Body)
+	}
+	agent.status, agent.answer = http.StatusOK, map[string]any{"ok": true, "message": "redis-server restarted"}
+	if rec := post(super, map[string]any{"package": "redis", "action": "restart"}); rec.Code != http.StatusOK {
+		t.Errorf("super restart: %d %s", rec.Code, rec.Body)
 	}
 	agent.status, agent.answer = 0, nil
 	rec := post(super, map[string]any{"package": "redis", "action": "uninstall"})
@@ -257,7 +261,7 @@ func TestStackOpResultAuditedOnce(t *testing.T) {
 	srv := httptest.NewServer(agent)
 	defer srv.Close()
 	e, s, ctx := newTestAppWithAllMigrations(t)
-	admin := roleToken(t, s, ctx, "ops", auth.RoleAdmin)
+	admin := roleToken(t, s, ctx, "ops", auth.RoleSuperAdmin)
 	id := addServer(t, s, ctx, "local", srv.URL)
 
 	if rec := doRequest(t, e, "GET", stackPath(id, "/stack/ops/../../x"), nil, admin); rec.Code == http.StatusOK {

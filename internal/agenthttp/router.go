@@ -18,11 +18,13 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/executor"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/nginx"
+	"sigardapanel/internal/sitefs"
 	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
@@ -51,10 +53,15 @@ type Router struct {
 	testAuth     bool
 	certDir      string // placeholder certificate referenced by generated vhosts
 	phpRunDir    string // PHP-FPM sockets (php<version>-fpm.sock)
-	useraddCmd   string // creates site owners' Linux accounts
-	stack        *stackManager
-	panelUpdate  *panelUpdater
-	agentUpdate  *panelUpdater
+	phpEtcDir    string // /etc/php: per-site pools go to <ver>/fpm/pool.d
+	nginxRunUser string // nginx worker account (default: nginx.conf "user", else www-data)
+	// poolUserLookup resolves a site owner for its PHP-FPM pool (tests).
+	poolUserLookup func(name string) (*poolSiteUser, bool)
+	useraddCmd     string // creates site owners' Linux accounts
+	stack          *stackManager
+	panelUpdate    *panelUpdater
+	agentUpdate    *panelUpdater
+	agentTLS       *agentTLSManager
 
 	// SSH/FTP jails
 	sshHomeBase    string
@@ -84,6 +91,14 @@ type RouterOptions struct {
 	DefaultCertDir string
 	// PHPRunDir overrides where PHP-FPM sockets are looked up (default /run/php).
 	PHPRunDir string
+	// PHPEtcDir overrides /etc/php (per-site pools). Injected routers default
+	// to a directory without pool.d, so PHP sites keep the shared pool unless
+	// a test creates one.
+	PHPEtcDir string
+	// NginxUser overrides the nginx worker account owning pool sockets.
+	NginxUser string
+	// PoolUserLookup replaces the site owner lookup for PHP-FPM pools.
+	PoolUserLookup func(name string) (uid, gid uint32, home string, ok bool)
 	// UseraddCommand is run to create a missing site owner. Injected routers
 	// default to a command that does not exist, so tests can never create
 	// real accounts on the machine running them.
@@ -106,6 +121,11 @@ type RouterOptions struct {
 	PanelUpdateFreeBytes func(path string) (uint64, error)
 	PanelUpdateBackupDir string
 	AgentUpdateEnvFile   string
+	// AgentTLS* replace the host access of the agent TLS switch.
+	AgentTLSDir     string
+	AgentTLSEnvFile string
+	AgentTLSActive  func() string
+	AgentTLSRestart func()
 	// SSHHomeBase / FstabPath / SSHDConfigPath replace /home, /etc/fstab and
 	// the sshd drop-in for SSH/FTP accounts (injected routers default to
 	// temp paths so tests never touch the real ones).
@@ -126,6 +146,9 @@ func NewRouterWithOptions(opts RouterOptions) *echo.Echo {
 
 func newRouter(opts *RouterOptions) *echo.Echo {
 	e := echo.New()
+	// Uploads are capped at 32 MB (maxUploadBytes); nothing else is near
+	// that. A cap keeps a client from streaming unbounded bodies at root.
+	e.Use(middleware.BodyLimit(maxUploadBytes + 8<<20))
 
 	r := &Router{
 		executor:       &executor.Executor{Timeout: 30 * time.Minute},
@@ -139,6 +162,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		stubDev:        os.Getenv("SIGARDAPANEL_DEV") == "true",
 		certDir:        defaultSSLCertDir,
 		phpRunDir:      defaultPHPRunDir,
+		phpEtcDir:      defaultPHPEtcDir,
 		useraddCmd:     "useradd",
 		sshHomeBase:    "/home",
 		fstabPath:      "/etc/fstab",
@@ -186,6 +210,20 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 		if opts.PHPRunDir != "" {
 			r.phpRunDir = opts.PHPRunDir
 		}
+		r.phpEtcDir = filepath.Join(os.TempDir(), "sigardapanel-agent-test-no-php")
+		if opts.PHPEtcDir != "" {
+			r.phpEtcDir = opts.PHPEtcDir
+		}
+		r.nginxRunUser = opts.NginxUser
+		if lookup := opts.PoolUserLookup; lookup != nil {
+			r.poolUserLookup = func(name string) (*poolSiteUser, bool) {
+				uid, gid, home, ok := lookup(name)
+				if !ok {
+					return nil, false
+				}
+				return &poolSiteUser{name: name, uid: uid, gid: gid, home: home}, true
+			}
+		}
 		r.useraddCmd = "sigardapanel-test-useradd-not-configured"
 		if opts.UseraddCommand != "" {
 			r.useraddCmd = opts.UseraddCommand
@@ -226,6 +264,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 
 	r.panelUpdate = newPanelUpdater(opts)
 	r.agentUpdate = newAgentUpdater(opts)
+	r.agentTLS = newAgentTLSManager(opts)
 
 	e.GET("/health", healthHandler)
 	// /metrics forks several processes per call, so it requires the agent token.
@@ -295,10 +334,12 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	// Agent self-update on remote servers (runs the embedded agent-update.sh)
 	tasks.GET("/agent/update", r.agentUpdateStatusTask)
 	tasks.POST("/agent/update", r.agentUpdateStartTask)
-
-	// Application templates (WordPress, Laravel, etc.)
-	tasks.POST("/templates/wordpress", r.installWordPress)
-	tasks.POST("/templates/laravel", r.installLaravel)
+	// TLS for remote agents: status and the switch from plain http
+	tasks.GET("/agent/tls", r.agentTLSStatusTask)
+	tasks.POST("/agent/tls/enable", r.agentTLSEnableTask)
+	// (The WordPress/Laravel template routes were removed: nothing called
+	// them, and they ran composer/wp-cli and chown -R/chmod -R as root on
+	// tenant-controlled trees.)
 
 	// PM2 process manager
 	tasks.POST("/pm2/manage", r.managePM2)
@@ -588,23 +629,28 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 	if err := r.executor.Mkdir(ctx, payload.RootPath); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "mkdir failed: "+err.Error())
 	}
+	// The site user owns the tree above the root: a parent swapped for a
+	// symlink between the path check and mkdir is caught here, before any
+	// file is written or handed over. Later steps use the pinned directory.
+	rootPin, err := sitefs.PinDir(payload.RootPath)
+	if err != nil {
+		return echo.NewHTTPError(sitefs.StatusOf(err), err.Error())
+	}
+	defer rootPin.Close()
 
 	// 2. Write runtime starter template (skip if site already has content — don't overwrite user code)
+	// Starter files are created only where nothing exists (O_EXCL); a
+	// planted symlink is never followed.
 	if payload.VhostRegen {
 		// existing site: leave its files alone
 	} else if templates := nginx.TemplateForRuntime(payload.Runtime, payload.Domain, payload.Port); templates != nil {
 		for fname, content := range templates {
-			fpath := filepath.Join(payload.RootPath, fname)
-			if _, err := r.executor.RunShell(ctx, "test", "-f", fpath); err != nil {
-				r.executor.WriteFile(ctx, fpath, content, 0644)
-			}
+			_ = sitefs.WriteNewFile(rootPin.Path, fname, []byte(content), 0644)
 		}
 	} else {
 		// static/proxy: write placeholder index.html
-		if _, err := r.executor.RunShell(ctx, "test", "-f", filepath.Join(payload.RootPath, "index.html")); err != nil {
-			indexHTML := "<h1>" + payload.Domain + "</h1><p>Site created via SigardaPanel</p>"
-			r.executor.WriteFile(ctx, filepath.Join(payload.RootPath, "index.html"), indexHTML, 0644)
-		}
+		indexHTML := "<h1>" + payload.Domain + "</h1><p>Site created via SigardaPanel</p>"
+		_ = sitefs.WriteNewFile(rootPin.Path, "index.html", []byte(indexHTML), 0644)
 	}
 
 	// ─── Docker runtime: pull image + create container ───
@@ -630,12 +676,8 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		isBitnami := strings.Contains(strings.ToLower(payload.DockerImage), "bitnami")
 		if !isBitnami {
 			if helloFiles := dockerHelloWorld(dockerLang, payload.Domain); helloFiles != nil {
-				r.executor.Mkdir(ctx, payload.RootPath)
 				for fname, content := range helloFiles {
-					fpath := filepath.Join(payload.RootPath, fname)
-					if _, err := r.executor.RunShell(ctx, "test", "-f", fpath); err != nil {
-						r.executor.WriteFile(ctx, fpath, content, 0644)
-					}
+					_ = sitefs.WriteNewFile(rootPin.Path, fname, []byte(content), 0644)
 				}
 			}
 		}
@@ -756,7 +798,21 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 	// 2b. Hand the files to the site owner, like the panel host's
 	// /home/<user>/htdocs/<domain> layout expects.
 	if owner != nil {
-		r.chownNewSiteRoot(ctx, owner, payload.RootPath, rootExisted)
+		r.chownNewSiteRoot(ctx, owner, rootPin, payload.RootPath, rootExisted)
+		r.restrictSiteRoot(owner, rootPin, payload.RootPath)
+	}
+
+	// 2c. PHP runs in the site's own PHP-FPM pool, as the site owner (never
+	// a pool shared with other sites). Other runtimes have none.
+	phpSocket := ""
+	if payload.Runtime == "php" {
+		sock, err := r.ensurePHPPool(ctx, payload.SiteID, payload.PHPVersion, payload.SystemUser, payload.RootPath)
+		if err != nil {
+			return err
+		}
+		phpSocket = sock
+	} else {
+		r.removePHPPools(ctx, payload.SiteID, "")
 	}
 
 	// 3. Generate & write nginx config (always regenerate — supports port/command changes)
@@ -779,10 +835,11 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		}
 	}
 	certPath, keyPath := r.letsEncryptCert(payload.Domain)
-	config, err := nginx.GenerateVhostWithCert(site, payload.Port, security, certPath, keyPath)
+	config, err := nginx.GenerateVhostWithOptions(site, payload.Port, security, nginx.VhostOptions{CertPath: certPath, KeyPath: keyPath, PHPFPMSocket: phpSocket})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "config gen failed: "+err.Error())
 	}
+	config = nginx.ForHost(config) // no [::] listens on servers without IPv6
 	if security == nil || !security.BasicAuthEnabled {
 		_ = nginx.RemoveHtpasswd(payload.Domain)
 	}
@@ -839,6 +896,8 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		// level (all locations). Older agents only knew "location /" denies
 		// and no allowlist; the panel warns when this flag is missing.
 		"access_rules": true,
+		// php_pool: the site's PHP runs in its own pool (as the site user).
+		"php_pool": phpSocket != "",
 	})
 }
 
@@ -1138,6 +1197,11 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 		cleaned = append(cleaned, "nginx config")
 	}
 
+	// 2a. Remove the site's PHP-FPM pool(s).
+	if removed := r.removePHPPools(ctx, payload.SiteID, ""); len(removed) > 0 {
+		cleaned = append(cleaned, "PHP-FPM pool")
+	}
+
 	// 2b. Remove logrotate config
 	logrotatePath := "/etc/logrotate.d/sigarda_" + payload.Domain
 	if _, err := r.executor.RunShell(ctx, "rm", "-f", logrotatePath); err == nil {
@@ -1149,8 +1213,9 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 		r.executor.RunShell(ctx, "certbot", "delete", "--non-interactive", "--cert-name", payload.Domain)
 	}
 
-	// 4. Remove site directory
-	if err := r.executor.RemoveAll(ctx, payload.RootPath); err != nil {
+	// 4. Remove site directory: beneath its pinned parent, never through a
+	// symlink the site user put in place of the root or a parent.
+	if err := sitefs.RemoveTree(payload.RootPath); err != nil {
 		errs = append(errs, "site root: "+err.Error())
 	} else {
 		cleaned = append(cleaned, "site files")
@@ -1197,6 +1262,30 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 	})
 }
 
+// runAsSiteUser runs name in dir as uid:gid. The agent is root and site
+// accounts are UID >= 1000, so it drops privileges; only when uid already is
+// the agent's own (tests) it runs directly.
+func (r *Router) runAsSiteUser(ctx context.Context, uid, gid uint32, dir, name string, args ...string) (string, error) {
+	if int(uid) == os.Geteuid() && uid != 0 || (uid == 0 && deployAsSelf) {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return string(out), fmt.Errorf("%s failed: %w", name, err)
+		}
+		return string(out), nil
+	}
+	return r.executor.RunAsUser(ctx, uid, gid, dir, name, args...)
+}
+
+// deployAsSelf lets tests (running as root) deploy as themselves; it is never
+// set outside tests, and RunAsUser refuses uid 0 otherwise.
+var deployAsSelf = false
+
+// deployUserIDs resolves the account deploys run as (tests substitute it).
+var deployUserIDs = siteUserIDs
+
 func (r *Router) siteDeployTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
@@ -1226,60 +1315,87 @@ func (r *Router) siteDeployTask(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid root_path")
 	}
 
-	exists, _ := r.executor.Stat(ctx, payload.RootPath)
+	// Every git step runs as the site user inside a pinned directory: the
+	// site user owns ~/htdocs, so a path-based root rename/checkout/chown
+	// could be redirected by a symlink swapped in mid-deploy (into
+	// /etc/cron.d, or onto another tenant's site).
+	siteUID, siteGID, haveSiteUser := deployUserIDs(payload.SystemUser)
+	if !haveSiteUser {
+		return echo.NewHTTPError(http.StatusUnprocessableEntity, "deploy needs the site's system user (a regular login account)")
+	}
+	asUser := func(dir string, args ...string) (string, error) {
+		return r.runAsSiteUser(ctx, siteUID, siteGID, dir, "git", args...)
+	}
+	rootPin, err := sitefs.PinDir(payload.RootPath)
+	exists := err == nil
+	if err != nil && sitefs.StatusOf(err) != http.StatusNotFound {
+		return echo.NewHTTPError(sitefs.StatusOf(err), err.Error())
+	}
+	if exists {
+		defer rootPin.Close()
+		if st, ok := rootPin.Info.Sys().(*syscall.Stat_t); !ok || st.Uid != siteUID {
+			return echo.NewHTTPError(http.StatusConflict, "the site root is not owned by the site user")
+		}
+	}
 	isGitRepo := false
 	if exists {
-		gitDir := filepath.Join(payload.RootPath, ".git")
-		isGitRepo, _ = r.executor.Stat(ctx, gitDir)
+		if fi, err := os.Lstat(filepath.Join(rootPin.Path, ".git")); err == nil && fi.IsDir() {
+			isGitRepo = true
+		}
 	}
-	siteUID, siteGID, haveSiteUser := siteUserIDs(payload.SystemUser)
-	if !exists || !isGitRepo {
-		// Cloning never executes repository code, so root may do it; ownership is
-		// handed to the site user right after so every later git/npm/pip step
-		// runs unprivileged.
-		cloneArgs := []string{"clone"}
+	if !exists {
+		// Clone into the (pinned) parent, as the site user.
+		parent, base, err := sitefs.PinParent(payload.RootPath)
+		if err != nil {
+			return echo.NewHTTPError(sitefs.StatusOf(err), err.Error())
+		}
+		defer parent.Close()
+		if st, ok := parent.Info.Sys().(*syscall.Stat_t); !ok || st.Uid != siteUID {
+			return echo.NewHTTPError(http.StatusConflict, "the site's parent directory is not owned by the site user")
+		}
+		args := []string{"clone"}
 		if payload.Branch != "" {
-			cloneArgs = append(cloneArgs, "-b", payload.Branch)
+			args = append(args, "-b", payload.Branch)
 		}
-		if !exists {
-			cloneArgs = append(cloneArgs, "--", payload.Repo, payload.RootPath)
-			if output, err := r.executor.RunShell(ctx, "git", cloneArgs...); err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
-			}
-		} else {
-			// The root exists but is not a repository (site.create writes
-			// starter files): "git clone" refuses a non-empty directory, so
-			// clone the history next to it and check it out in place.
-			tmp, err := os.MkdirTemp(filepath.Dir(payload.RootPath), ".sigarda-clone-")
-			if err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "prepare clone failed: "+err.Error())
-			}
-			defer os.RemoveAll(tmp)
-			cloneArgs = append(cloneArgs, "--no-checkout", "--", payload.Repo, tmp)
-			if output, err := r.executor.RunShell(ctx, "git", cloneArgs...); err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
-			}
-			if err := os.Rename(filepath.Join(tmp, ".git"), filepath.Join(payload.RootPath, ".git")); err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "install repository failed: "+err.Error())
-			}
-			if output, err := r.executor.RunShell(ctx, "git", "-C", payload.RootPath, "checkout", "-f", "HEAD", "--", "."); err != nil {
-				_ = os.RemoveAll(filepath.Join(payload.RootPath, ".git"))
-				return echo.NewHTTPError(http.StatusInternalServerError, "git checkout failed: "+strings.TrimSpace(output))
-			}
+		args = append(args, "--", payload.Repo, base)
+		if output, err := asUser(parent.Path, args...); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
 		}
-		if haveSiteUser {
-			if out, err := r.executor.RunShell(ctx, "chown", "-R", fmt.Sprintf("%d:%d", siteUID, siteGID), payload.RootPath); err != nil {
-				slog.Warn("agent: deploy chown failed", "error", err, "output", strings.TrimSpace(out))
-			}
+		if rootPin, err = sitefs.PinDir(payload.RootPath); err != nil {
+			return echo.NewHTTPError(sitefs.StatusOf(err), err.Error())
+		}
+		defer rootPin.Close()
+	} else if !isGitRepo {
+		// The root exists but is not a repository (site.create writes
+		// starter files): "git clone" refuses a non-empty directory, so
+		// clone the history next to the files and check it out in place.
+		const tmp = ".sigarda-clone"
+		_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "rm", "-rf", "--", tmp)
+		args := []string{"clone", "--no-checkout"}
+		if payload.Branch != "" {
+			args = append(args, "-b", payload.Branch)
+		}
+		args = append(args, "--", payload.Repo, tmp)
+		if output, err := asUser(rootPin.Path, args...); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
+		}
+		out, err := r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "mv", "-T", "--", tmp+"/.git", ".git")
+		_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "rm", "-rf", "--", tmp)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "install repository failed: "+strings.TrimSpace(out))
+		}
+		if output, err := asUser(rootPin.Path, "checkout", "-f", "HEAD", "--", "."); err != nil {
+			_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "rm", "-rf", "--", ".git")
+			return echo.NewHTTPError(http.StatusInternalServerError, "git checkout failed: "+strings.TrimSpace(output))
 		}
 	} else {
-		output, err := r.runGit(ctx, payload.RootPath, "pull", "origin", payload.Branch)
+		output, err := asUser(rootPin.Path, "pull", "origin", payload.Branch)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "git pull failed: "+strings.TrimSpace(output))
 		}
 	}
 
-	commitOut, _ := r.runGit(ctx, payload.RootPath, "rev-parse", "HEAD")
+	commitOut, _ := asUser(rootPin.Path, "rev-parse", "HEAD")
 	commit := strings.TrimSpace(commitOut)
 
 	// ─── Step 2: Install dependencies based on runtime ───
@@ -1543,6 +1659,7 @@ func (r *Router) logsReadTask(c *echo.Context) error {
 		Type       string `json:"type"`
 		Lines      int    `json:"lines"`
 		PHPVersion string `json:"php_version"`
+		SystemUser string `json:"system_user"`
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
@@ -1557,6 +1674,20 @@ func (r *Router) logsReadTask(c *echo.Context) error {
 
 	if !isValidDomain(payload.Domain) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid domain")
+	}
+
+	// A site with its own PHP-FPM pool: its own PHP error log, never the
+	// server-wide one (which belongs to every site on the server).
+	if payload.Type == "php" && payload.SiteID > 0 && r.sitePoolExists(payload.SiteID) {
+		path, lines, exists, err := r.readSitePHPErrorLog(payload.SystemUser, payload.SiteID, payload.Lines)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "PHP error log: "+err.Error())
+		}
+		resp := map[string]any{"ok": true, "path": path, "lines": lines}
+		if !exists {
+			resp["message"] = "log file does not exist yet"
+		}
+		return c.JSON(http.StatusOK, resp)
 	}
 
 	logPath := filepath.Join(r.logDir, payload.Domain+"."+payload.Type+".log")
@@ -1637,17 +1768,32 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 	if err := r.executor.EnsureDir(ctx, globalBackupDir); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "ensure backup dir failed: "+err.Error())
 	}
+	// The site user can swap the root's parent or backups/ for symlinks:
+	// tar reads the root beneath its pinned parent (a root replaced by a link
+	// is archived as the link) and every file is written into the pinned
+	// backups directory, the archive itself with O_EXCL (RunToFileEnv).
+	backupPin, perr := sitefs.PinDir(globalBackupDir)
+	if perr != nil {
+		return echo.NewHTTPError(sitefs.StatusOf(perr), "backup dir: "+perr.Error())
+	}
+	defer backupPin.Close()
+	parentPin, rootBase, perr := sitefs.PinParent(payload.RootPath)
+	if perr != nil {
+		return echo.NewHTTPError(sitefs.StatusOf(perr), "site root: "+perr.Error())
+	}
+	defer parentPin.Close()
 
 	kind := "files"
 	if payload.BackupType == "both" || len(payload.Databases) > 0 {
 		kind = "full"
 	}
 	backupName := buildBackupFileName(kind, payload.BackupID, ".tar.gz")
-	backupFile := filepath.Join(globalBackupDir, backupName)
+	backupFile := filepath.Join(globalBackupDir, backupName) // reported to the panel
+	writeFile := filepath.Join(backupPin.Path, backupName)
 	var output string
 	var err error
 	if len(payload.Databases) > 0 {
-		bundleDir, err := os.MkdirTemp(globalBackupDir, "full-*")
+		bundleDir, err := os.MkdirTemp(backupPin.Path, "full-*")
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "create bundle temp failed: "+err.Error())
 		}
@@ -1669,9 +1815,9 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, "database dump failed: "+strings.TrimSpace(output))
 			}
 		}
-		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args := append([]string{"-czf", "-"}, siteBackupExcludes(payload.RootPath)...)
 		args = append(args, userExcludeArgs(patterns)...)
-		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath),
+		args = append(args, "-C", parentPin.Path, rootBase,
 			"-C", bundleDir, "database_dumps")
 		if len(patterns) > 0 {
 			if err := os.WriteFile(filepath.Join(bundleDir, excludeManifest), []byte(strings.Join(patterns, "\n")+"\n"), 0o600); err != nil {
@@ -1679,13 +1825,13 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 			}
 			args = append(args, excludeManifest)
 		}
-		output, err = r.executor.RunShell(ctx, "tar", args...)
+		output, err = r.executor.RunToFileEnv(ctx, nil, writeFile, "tar", args...)
 	} else {
-		args := append([]string{"-czf", backupFile}, siteBackupExcludes(payload.RootPath)...)
+		args := append([]string{"-czf", "-"}, siteBackupExcludes(payload.RootPath)...)
 		args = append(args, userExcludeArgs(patterns)...)
-		args = append(args, "-C", filepath.Dir(payload.RootPath), filepath.Base(payload.RootPath))
+		args = append(args, "-C", parentPin.Path, rootBase)
 		if len(patterns) > 0 {
-			manifestDir, merr := os.MkdirTemp(globalBackupDir, "excl-*")
+			manifestDir, merr := os.MkdirTemp(backupPin.Path, "excl-*")
 			if merr != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, "create temp dir failed: "+merr.Error())
 			}
@@ -1695,14 +1841,15 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 			}
 			args = append(args, "-C", manifestDir, excludeManifest)
 		}
-		output, err = r.executor.RunShell(ctx, "tar", args...)
+		output, err = r.executor.RunToFileEnv(ctx, nil, writeFile, "tar", args...)
 	}
 	if err != nil {
+		_ = os.Remove(writeFile)
 		return echo.NewHTTPError(http.StatusInternalServerError, "tar failed: "+strings.TrimSpace(output))
 	}
 
 	// Get file size using os.Stat for cross-platform compatibility
-	info, err := os.Stat(backupFile)
+	info, err := os.Stat(writeFile)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "stat backup failed: "+err.Error())
 	}
@@ -1724,7 +1871,7 @@ func (r *Router) backupCreateTask(c *echo.Context) error {
 
 		endpoint := normalizeS3Endpoint(payload.S3Config.Endpoint)
 		awsArgs := []string{
-			"s3", "cp", backupFile, s3Path,
+			"s3", "cp", writeFile, s3Path, // the pinned copy, not a path the user could swap
 			"--endpoint-url", endpoint,
 			"--region", payload.S3Config.Region,
 		}
@@ -1904,6 +2051,11 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "database " + db.Name + " restored", "databases_restored": []string{db.Name}})
 	}
 
+	// The base dir is not created by every install path (backups themselves
+	// live under the site root), so make it here instead of failing.
+	if err := os.MkdirAll(r.backupDir, 0o700); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "create restore temp dir failed: "+err.Error())
+	}
 	tmpDir, err := os.MkdirTemp(r.backupDir, "restore-*")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "create restore temp dir failed: "+err.Error())
@@ -1931,12 +2083,21 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 	if err := os.MkdirAll(filepath.Dir(payload.RootPath), 0755); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "create parent dir failed: "+err.Error())
 	}
+	// The site user owns the root's parent: every step of the swap names the
+	// root beneath the pinned parent, so a parent replaced by a symlink after
+	// the path check cannot redirect the moves, deletes or ownership changes.
+	parentPin, rootBase, perr := sitefs.PinParent(payload.RootPath)
+	if perr != nil {
+		return echo.NewHTTPError(sitefs.StatusOf(perr), "site root: "+perr.Error())
+	}
+	defer parentPin.Close()
+	siteRoot := filepath.Join(parentPin.Path, rootBase)
 
 	// Re-own the restored tree to whoever owns the site today (fall back to the
 	// parent directory's owner) and drop setuid/setgid/special files.
-	ownerRef := payload.RootPath
+	ownerRef := siteRoot
 	if _, err := os.Lstat(ownerRef); err != nil {
-		ownerRef = filepath.Dir(payload.RootPath)
+		ownerRef = filepath.Dir(siteRoot)
 	}
 	if fi, err := os.Lstat(ownerRef); err == nil {
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
@@ -1950,23 +2111,24 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 	// failure while installing the restored copy can be rolled back and never
 	// leaves the site with no data.
 	oldRoot := ""
-	if exists, _ := r.executor.Stat(ctx, payload.RootPath); exists {
-		oldRoot = fmt.Sprintf("%s.restore-old-%d", payload.RootPath, payload.BackupID)
+	if exists, _ := r.executor.Stat(ctx, siteRoot); exists {
+		oldRoot = fmt.Sprintf("%s.restore-old-%d", siteRoot, payload.BackupID)
 		_ = os.RemoveAll(oldRoot)
-		if err := movePath(payload.RootPath, oldRoot); err != nil {
+		if err := movePath(siteRoot, oldRoot); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "stage existing root failed: "+err.Error())
 		}
 	}
 
-	if err := movePath(extractedRoot, payload.RootPath); err != nil {
+	if err := movePath(extractedRoot, siteRoot); err != nil {
 		// Roll back: restore the original root from the staged copy.
 		if oldRoot != "" {
-			_ = os.RemoveAll(payload.RootPath)
-			if rbErr := movePath(oldRoot, payload.RootPath); rbErr != nil {
+			_ = os.RemoveAll(siteRoot)
+			if rbErr := movePath(oldRoot, siteRoot); rbErr != nil {
 				slog.Error("agent: backup.restore rollback failed", "backup_id", payload.BackupID,
 					"root_path", payload.RootPath, "staged", oldRoot, "error", rbErr)
 				return echo.NewHTTPError(http.StatusInternalServerError,
-					"move restored root failed and rollback failed; original site data preserved at "+oldRoot+": "+err.Error())
+					"move restored root failed and rollback failed; original site data preserved at "+
+						fmt.Sprintf("%s.restore-old-%d", payload.RootPath, payload.BackupID)+": "+err.Error())
 			}
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "move restored root failed: "+err.Error())
@@ -1978,7 +2140,7 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 	// nor deletes the site's local backups.
 	if oldRoot != "" {
 		for _, name := range siteBackupExcludedTop {
-			from, to := filepath.Join(oldRoot, name), filepath.Join(payload.RootPath, name)
+			from, to := filepath.Join(oldRoot, name), filepath.Join(siteRoot, name)
 			if _, err := os.Lstat(from); err != nil {
 				continue
 			}
@@ -1996,8 +2158,17 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 	if oldRoot != "" {
 		if raw, err := os.ReadFile(filepath.Join(tmpDir, excludeManifest)); err == nil {
 			if pats, err := cleanExcludePatterns(strings.Split(strings.TrimSpace(string(raw)), "\n")); err == nil && len(pats) > 0 {
-				carryExcluded(oldRoot, payload.RootPath, pats)
+				carryExcluded(oldRoot, siteRoot, pats)
 			}
+		}
+	}
+
+	// sanitizeRestoredTree drops setgid everywhere in the archive's tree:
+	// put the root back to owner:<nginx group> 2750 (restrictSiteRoot).
+	if _, _, ok := siteUserIDs(payload.SystemUser); ok {
+		if pin, err := sitefs.PinDir(payload.RootPath); err == nil {
+			r.restrictSiteRoot(&siteOwner{name: payload.SystemUser}, pin, payload.RootPath)
+			pin.Close()
 		}
 	}
 
@@ -2007,7 +2178,7 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 			slog.Warn("agent: backup.restore cleanup of staged old root failed", "backup_id", payload.BackupID, "staged", oldRoot, "error", err)
 		}
 	}
-	filesExtracted := countFiles(payload.RootPath)
+	filesExtracted := countFiles(siteRoot)
 
 	slog.Info("agent: backup.restore", "backup_id", payload.BackupID, "site_id", payload.SiteID)
 
@@ -2176,16 +2347,27 @@ func (r *Router) databaseCreateTask(c *echo.Context) error {
 	if !isValidDBIdentifier(payload.Name) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid database name")
 	}
+	if siteinput.ReservedDatabaseName(payload.Name) {
+		return echo.NewHTTPError(http.StatusBadRequest, "reserved database name")
+	}
 
+	// Never adopt an existing database (another tenant's, or the server's):
+	// plain CREATE fails when it exists, and the panel drops its record.
 	switch payload.Type {
 	case "mysql":
-		sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`;\n", payload.Name)
+		sql := fmt.Sprintf("CREATE DATABASE `%s`;\n", payload.Name)
 		if output, err := r.executor.RunWithInput(ctx, sql, "mysql"); err != nil {
+			if strings.Contains(output, "database exists") || strings.Contains(output, "1007") {
+				return echo.NewHTTPError(http.StatusConflict, "database already exists on the server")
+			}
 			return echo.NewHTTPError(http.StatusFailedDependency, "mysql create database failed: "+strings.TrimSpace(output))
 		}
 	case "postgres":
-		sql := fmt.Sprintf("SELECT 'CREATE DATABASE %s' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = %s)\\gexec\n", payload.Name, sqlQuote(payload.Name))
+		sql := fmt.Sprintf("CREATE DATABASE %s;\n", payload.Name)
 		if output, err := r.postgresAdmin(ctx, "postgres", sql); err != nil {
+			if strings.Contains(output, "already exists") {
+				return echo.NewHTTPError(http.StatusConflict, "database already exists on the server")
+			}
 			return echo.NewHTTPError(http.StatusFailedDependency, "postgres create database failed: "+pgErr(output, err))
 		}
 	default:
@@ -2211,6 +2393,9 @@ func (r *Router) databaseDeleteTask(c *echo.Context) error {
 	}
 	if !isValidDBIdentifier(payload.Name) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid database name")
+	}
+	if siteinput.ReservedDatabaseName(payload.Name) {
+		return echo.NewHTTPError(http.StatusBadRequest, "reserved database name")
 	}
 
 	switch payload.Type {
@@ -2250,6 +2435,9 @@ func (r *Router) dbUserCreateTask(c *echo.Context) error {
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+	}
+	if siteinput.ReservedDatabaseName(payload.DatabaseName) {
+		return echo.NewHTTPError(http.StatusBadRequest, "reserved database name")
 	}
 	if !isValidDBIdentifier(payload.DatabaseName) || !isValidDBIdentifier(payload.Username) || payload.Password == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid database user payload")

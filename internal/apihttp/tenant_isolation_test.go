@@ -67,9 +67,12 @@ func TestTenantIsolation_GitAndDocker(t *testing.T) {
 			t.Errorf("logs of container %q: got %d, want 404", id, rec.Code)
 		}
 	}
-	// admins still see everything; infra reads are admin-only.
-	if rec := get(base+"/docker/containers", adminToken); !strings.Contains(rec.Body.String(), "postgres") {
-		t.Errorf("admin should see all containers: %s", rec.Body.String())
+	// Only super_admin sees every container; an admin is filtered like a tenant.
+	if rec := get(base+"/docker/containers", adminToken); strings.Contains(rec.Body.String(), "postgres") || strings.Contains(rec.Body.String(), "site-mine") || !strings.Contains(rec.Body.String(), "site-theirs") {
+		t.Errorf("admin must not see other tenants' containers: %s", rec.Body.String())
+	}
+	if rec := get(base+"/docker/containers", newSuperAdminToken(t, s, ctx)); !strings.Contains(rec.Body.String(), "postgres") {
+		t.Errorf("super_admin should see all containers: %s", rec.Body.String())
 	}
 	for _, p := range []string{"/firewall/rules", "/firewall/status", "/docker/images", "/redis/info", "/fail2ban/status", "/security/overview"} {
 		if rec := get(base+p, userToken); rec.Code != http.StatusForbidden {

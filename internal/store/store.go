@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/dbserver"
@@ -12,32 +13,32 @@ import (
 
 // Store combines all repository interfaces under a single struct.
 type Store struct {
-	db            *sql.DB
-	Users         UserRepository
-	Sessions      SessionRepository
-	AuditLogs     audit.AuditLogStore
-	Servers       ServerRepository
-	Sites         SiteRepository
-	Jobs          JobRepository
-	JobLogs       JobLogRepository
-	Backups       BackupRepository
-	Metrics       MetricRepository
-	AlertChannels AlertChannelRepository
-	Alerts        AlertRepository
-	Databases     DatabaseRepository
-	DBUsers       DBUserRepository
-	DBStore       *dbserver.Store
-	Vhosts        VhostRepository
-	Varnish       VarnishRepository
-	Security      SecurityRepository
-	SSH           SSHRepository
-	Cron          CronRepository
-	Cloudflare    *CloudflareStore
-	UserSites     *SQLiteUserSiteStore
-	BackupProviders *SQLiteBackupStorageProviderStore
-	BackupSchedules BackupScheduleRepository
+	db                 *sql.DB
+	Users              UserRepository
+	Sessions           SessionRepository
+	AuditLogs          audit.AuditLogStore
+	Servers            ServerRepository
+	Sites              SiteRepository
+	Jobs               JobRepository
+	JobLogs            JobLogRepository
+	Backups            BackupRepository
+	Metrics            MetricRepository
+	AlertChannels      AlertChannelRepository
+	Alerts             AlertRepository
+	Databases          DatabaseRepository
+	DBUsers            DBUserRepository
+	DBStore            *dbserver.Store
+	Vhosts             VhostRepository
+	Varnish            VarnishRepository
+	Security           SecurityRepository
+	SSH                SSHRepository
+	Cron               CronRepository
+	Cloudflare         *CloudflareStore
+	UserSites          *SQLiteUserSiteStore
+	BackupProviders    *SQLiteBackupStorageProviderStore
+	BackupSchedules    BackupScheduleRepository
 	BackupConfigs      BackupConfigRepository
-	SecurityBaselines SecurityBaselineRepository
+	SecurityBaselines  SecurityBaselineRepository
 	ServiceTokens      ServiceTokenRepository
 	Notifications      NotificationRepository
 	RegistrationTokens RegistrationTokenRepository
@@ -53,31 +54,31 @@ type Store struct {
 // New returns a Store with all repositories backed by the given SQLite database.
 func New(db *sql.DB) *Store {
 	s := &Store{
-		db:            db,
-		Users:         NewUserStore(db),
-		Sessions:      NewSessionStore(db),
-		AuditLogs:     NewAuditLogStore(db),
-		Servers:       NewServerStore(db),
-		Sites:         NewSiteStore(db),
-		Jobs:          NewJobStore(db),
-		JobLogs:       NewJobLogStore(db),
-		Backups:       NewBackupStore(db),
-		Metrics:       NewMetricStore(db),
-		AlertChannels: NewAlertChannelStore(db),
-		Alerts:        NewAlertStore(db),
-		Databases:     NewDatabaseStore(db),
-		DBUsers:       NewDBUserStore(db),
-		Vhosts:        NewVhostStore(db),
-		Varnish:       NewVarnishStore(db),
-		Security:      NewSecurityStore(db),
-		SSH:           NewSSHStore(db),
-		Cron:          NewCronStore(db),
-		Cloudflare:    NewCloudflareStore(db),
-		UserSites:     NewUserSiteStore(db),
-		BackupProviders: NewBackupStorageProviderStore(db),
-		BackupSchedules: NewBackupScheduleStore(db),
+		db:                 db,
+		Users:              NewUserStore(db),
+		Sessions:           NewSessionStore(db),
+		AuditLogs:          NewAuditLogStore(db),
+		Servers:            NewServerStore(db),
+		Sites:              NewSiteStore(db),
+		Jobs:               NewJobStore(db),
+		JobLogs:            NewJobLogStore(db),
+		Backups:            NewBackupStore(db),
+		Metrics:            NewMetricStore(db),
+		AlertChannels:      NewAlertChannelStore(db),
+		Alerts:             NewAlertStore(db),
+		Databases:          NewDatabaseStore(db),
+		DBUsers:            NewDBUserStore(db),
+		Vhosts:             NewVhostStore(db),
+		Varnish:            NewVarnishStore(db),
+		Security:           NewSecurityStore(db),
+		SSH:                NewSSHStore(db),
+		Cron:               NewCronStore(db),
+		Cloudflare:         NewCloudflareStore(db),
+		UserSites:          NewUserSiteStore(db),
+		BackupProviders:    NewBackupStorageProviderStore(db),
+		BackupSchedules:    NewBackupScheduleStore(db),
 		BackupConfigs:      NewBackupConfigStore(db),
-		SecurityBaselines: NewSecurityBaselineStore(db),
+		SecurityBaselines:  NewSecurityBaselineStore(db),
 		ServiceTokens:      NewServiceTokenStore(db),
 		Notifications:      NewNotificationStore(db),
 		RegistrationTokens: NewRegistrationTokenStore(db),
@@ -99,6 +100,8 @@ func New(db *sql.DB) *Store {
 		encKey := sha256.Sum256(config.EncryptionKey())
 		return encKey[:]
 	})
+	// Every panel→agent TLS connection looks its pin up here.
+	agenttls.SetLoader(s.Servers.TLSPinForAddr)
 	return s
 }
 

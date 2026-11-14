@@ -40,7 +40,8 @@ func TestPanelHostRootActionsNeedSuperAdmin(t *testing.T) {
 		t.Errorf("admin root terminal on the panel host = %d %s", rec.Code, rec.Body.String())
 	}
 
-	// A remote server keeps the admin role check, and the action is audited.
+	// A remote server may host other tenants: root actions there are
+	// super_admin only too, and the action is audited.
 	ln, err := net.Listen("tcp", net.JoinHostPort(remoteIP(t), "0"))
 	if err != nil {
 		t.Skip(err)
@@ -51,8 +52,14 @@ func TestPanelHostRootActionsNeedSuperAdmin(t *testing.T) {
 	remoteAgent.Start()
 	defer remoteAgent.Close()
 	remote := strconv.FormatInt(addServer(t, s, ctx, "remote", remoteAgent.URL), 10)
-	if rec := doRequest(t, e, http.MethodPost, "/api/v1/servers/"+remote+"/firewall/deny", map[string]any{"from": "1.2.3.4"}, admin); rec.Code != http.StatusOK {
+	if rec := doRequest(t, e, http.MethodPost, "/api/v1/servers/"+remote+"/firewall/deny", map[string]any{"from": "1.2.3.4"}, admin); rec.Code != http.StatusForbidden {
 		t.Fatalf("admin firewall deny on a remote server = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, e, http.MethodPost, "/api/v1/terminal/tickets", map[string]any{"server_id": mustAtoi(remote)}, admin); rec.Code != http.StatusForbidden {
+		t.Fatalf("admin root terminal on a remote server = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, e, http.MethodPost, "/api/v1/servers/"+remote+"/firewall/deny", map[string]any{"from": "1.2.3.4"}, root); rec.Code != http.StatusOK {
+		t.Fatalf("super_admin firewall deny on a remote server = %d %s", rec.Code, rec.Body.String())
 	}
 	var n int
 	s.DB().QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action = 'server.firewall.deny'`).Scan(&n)

@@ -33,7 +33,7 @@
   let panelVersion = $state('');
   onMount(() => {
     loadServers();
-    fetch('/api/v1/version')
+    fetch('/api/proxy/version')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => (panelVersion = d?.data?.version ?? ''))
       .catch(() => {});
@@ -105,6 +105,11 @@
                     {#if s.agent_version}
                       <span class="ml-1.5 tabular-nums {versionMismatch(s) ? 'text-warning' : 'text-subtle'}" title={versionMismatch(s) ? `Agent ${s.agent_version}, panel ${panelVersion}: update the agent to the panel's version` : 'Agent version'}>
                         {#if versionMismatch(s)}<TriangleAlert size={11} class="inline -mt-0.5" />{/if} v{s.agent_version}
+                      </span>
+                    {/if}
+                    {#if s.insecure_transport}
+                      <span class="ml-1.5 text-warning" title="The panel reaches this agent over plain http: the token and all traffic are unencrypted. It switches to pinned TLS automatically once the agent is updated; or re-run the install command.">
+                        <TriangleAlert size={11} class="inline -mt-0.5" /> no TLS
                       </span>
                     {/if}
                   {:else}

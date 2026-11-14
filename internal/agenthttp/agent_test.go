@@ -102,6 +102,7 @@ func TestSiteDeleteTask_Success(t *testing.T) {
 }
 
 func TestSiteDeployTask_Success(t *testing.T) {
+	defer useCurrentDeployUser()()
 	repoDir := setupGitRepo(t)
 	rootDir := t.TempDir()
 	e := NewRouterWithOptions(RouterOptions{AllowStubSSL: true})
@@ -523,5 +524,48 @@ func TestBackupRestoreTask_Success(t *testing.T) {
 	extracted, ok := result["files_extracted"].(float64)
 	if !ok || extracted == 0 {
 		t.Fatal("expected files_extracted field")
+	}
+}
+
+// The central backup dir may not exist (backups live under the site root):
+// restore must create it for its temp dir instead of failing.
+func TestBackupRestoreTask_MissingBackupDir(t *testing.T) {
+	parentDir := t.TempDir()
+	rootDir := filepath.Join(parentDir, "missing.example.com")
+	if err := os.MkdirAll(filepath.Join(rootDir, "backups"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootDir, "index.html"), []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	sourceParent := t.TempDir()
+	sourceRoot := filepath.Join(sourceParent, "missing.example.com")
+	if err := os.MkdirAll(sourceRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "index.html"), []byte("restored"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(rootDir, "backups", "1.tar.gz")
+	if output, err := (&executor.Executor{}).RunShell(context.Background(), "tar", "-czf", backupPath, "-C", sourceParent, "missing.example.com"); err != nil {
+		t.Fatalf("create test tar: %v: %s", err, output)
+	}
+	missing := filepath.Join(t.TempDir(), "not", "yet")
+	e := NewRouterWithOptions(RouterOptions{BackupDir: missing})
+
+	body, _ := json.Marshal(map[string]any{"backup_id": 1, "site_id": 1, "backup_path": backupPath, "root_path": rootDir})
+	req := httptest.NewRequest(http.MethodPost, "/tasks/backup/restore", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(rootDir, "index.html"))
+	if string(got) != "restored" {
+		t.Fatalf("index.html = %q, want restored", got)
+	}
+	if _, err := os.Stat(missing); err != nil {
+		t.Fatalf("backup dir not created: %v", err)
 	}
 }

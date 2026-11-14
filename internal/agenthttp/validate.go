@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"sigardapanel/internal/sitefs"
 	"sigardapanel/internal/siteinput"
 )
 
@@ -73,6 +74,13 @@ func sqlQuote(value string) string {
 
 func (r *Router) isAllowedSitePath(path string) bool {
 	if !isValidPath(path) {
+		return false
+	}
+	// The agent is root and the site user owns the tree above the root
+	// (/home/<user>/htdocs): a component replaced by a symlink would point
+	// root operations at its target. Operations that act on the tree pin
+	// it as well (sitefs.PinDir) to close the race after this check.
+	if sitefs.CheckNoUserSymlinks(path) != nil {
 		return false
 	}
 	if r.siteRootDir == "" {

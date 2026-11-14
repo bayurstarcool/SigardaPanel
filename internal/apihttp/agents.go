@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/buildinfo"
@@ -99,7 +101,14 @@ type registerRequest struct {
 	Hostname          string `json:"hostname"`
 	IPAddress         string `json:"ip_address,omitempty"`
 	AgentToken        string `json:"agent_token"`
-	OSInfo            string `json:"os_info,omitempty"`
+	// PreviousAgentToken: on a re-install, the agent token the server had,
+	// proving it is the server already registered at this address.
+	PreviousAgentToken string `json:"previous_agent_token,omitempty"`
+	OSInfo             string `json:"os_info,omitempty"`
+	// TLSFingerprint: SHA-256 of the agent's self-signed certificate (DER).
+	// With it the agent is registered at https and every connection is
+	// pinned to that certificate; without it (installers before TLS) http.
+	TLSFingerprint string `json:"tls_fingerprint,omitempty"`
 }
 
 // registerAgent creates a server record from a registration token.
@@ -149,6 +158,14 @@ func (h *agentHandler) registerAgent(c *echo.Context) error {
 	}
 	agentHost := callbackIP.String()
 	agentURL := "http://" + net.JoinHostPort(agentHost, "7710")
+	fingerprint := ""
+	if strings.TrimSpace(req.TLSFingerprint) != "" {
+		fingerprint = agenttls.Normalize(req.TLSFingerprint)
+		if fingerprint == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "tls_fingerprint must be a SHA-256 fingerprint")
+		}
+		agentURL = "https://" + net.JoinHostPort(agentHost, "7710")
+	}
 
 	server := &store.Server{
 		Name:       req.Hostname,
@@ -157,12 +174,19 @@ func (h *agentHandler) registerAgent(c *echo.Context) error {
 		AgentToken: req.AgentToken,
 		AgentURL:   sql.NullString{String: agentURL, Valid: true},
 		SSHPort:    22,
+
+		AgentTLSFingerprint: fingerprint,
+
+		PreviousAgentToken: strings.TrimSpace(req.PreviousAgentToken),
 	}
 	if req.IPAddress != "" && net.ParseIP(req.IPAddress) != nil {
 		server.IPAddress = sql.NullString{String: req.IPAddress, Valid: true}
 	}
 
 	if err := h.store.ConsumeRegistrationTokenAndCreateServer(c.Request().Context(), rt.ID, server); err != nil {
+		if errors.Is(err, store.ErrServerAlreadyRegistered) {
+			return echo.NewHTTPError(http.StatusConflict, "a server is already registered at this address; re-run the installer on that server (it proves the current agent token) or remove the server in the panel first")
+		}
 		if strings.Contains(err.Error(), "already used") || strings.Contains(err.Error(), "expired") {
 			return echo.NewHTTPError(http.StatusConflict, "registration token already used or expired")
 		}
@@ -224,7 +248,13 @@ func (h *agentHandler) installScript(c *echo.Context) error {
 		allowPrivate = "1"
 	}
 
-	script := fmt.Sprintf(installScriptTemplate, shellQuote(panelURL), shellQuote(token), shellQuote(agentReleaseTag()), shellQuote(releasePublicKey), shellQuote(allowPrivate))
+	// The address the agent's firewall lets in on port 7710. Behind a CDN or
+	// NAT the panel host name does not resolve to it: SIGARDAPANEL_PANEL_IP.
+	panelIP := ""
+	if ip := net.ParseIP(strings.TrimSpace(os.Getenv("SIGARDAPANEL_PANEL_IP"))); ip != nil {
+		panelIP = ip.String()
+	}
+	script := fmt.Sprintf(installScriptTemplate, shellQuote(panelURL), shellQuote(token), shellQuote(agentReleaseTag()), shellQuote(releasePublicKey), shellQuote(allowPrivate), shellQuote(panelIP))
 
 	c.Response().Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	c.Response().Header().Set("Content-Disposition", "attachment; filename=\"install-agent.sh\"")
@@ -270,10 +300,10 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// installScriptTemplate is the bash install script with five %s placeholders:
-// PANEL_URL, REGISTRATION_TOKEN, RELEASE_TAG, minisign PUBKEY and
-// ALLOW_PRIVATE ("1" when the panel accepts private callback IPs), all
-// shell-quoted.
+// installScriptTemplate is the bash install script with six %s placeholders:
+// PANEL_URL, REGISTRATION_TOKEN, RELEASE_TAG, minisign PUBKEY,
+// ALLOW_PRIVATE ("1" when the panel accepts private callback IPs) and
+// PANEL_IP (SIGARDAPANEL_PANEL_IP, may be empty), all shell-quoted.
 const installScriptTemplate = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -283,6 +313,7 @@ REG_TOKEN=%s
 RELEASE_TAG=%s
 PUBKEY=%s
 ALLOW_PRIVATE=%s
+PANEL_IP_DEFAULT=%s
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sigardapanel"
 # Optional allowed root for site files. Empty (the default, like on the panel
@@ -338,6 +369,8 @@ esac
 
 # ── Generate agent token ──
 echo "[2/6] Generating agent token..."
+# A re-install proves it is the server already registered here.
+PREVIOUS_AGENT_TOKEN=$(sed -n 's/^SIGARDAPANEL_AGENT_TOKEN=//p' "$CONFIG_DIR/agent.env" 2>/dev/null | head -n1 || true)
 AGENT_TOKEN=$(openssl rand -hex 32)
 echo "  Agent token generated."
 
@@ -459,6 +492,30 @@ if [ -n "$SITE_ROOT" ]; then
 fi
 chmod 600 "$CONFIG_DIR/agent.env"
 
+# ── TLS: self-signed certificate, pinned by the panel ──
+# The panel stores this certificate's SHA-256 fingerprint at registration and
+# accepts no other certificate for this agent, so the agent token and all
+# traffic are encrypted and an attacker on the path cannot impersonate it.
+TLS_DIR="$CONFIG_DIR/agent-tls"
+mkdir -p "$TLS_DIR"
+chmod 700 "$TLS_DIR"
+if [ ! -s "$TLS_DIR/agent.crt" ] || [ ! -s "$TLS_DIR/agent.key" ]; then
+    ( umask 077
+      openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+          -subj "/CN=$HOSTNAME" -addext "subjectAltName=IP:$SERVER_IP" \
+          -keyout "$TLS_DIR/agent.key" -out "$TLS_DIR/agent.crt" >/dev/null 2>&1 )
+    chmod 600 "$TLS_DIR/agent.key"
+    chmod 644 "$TLS_DIR/agent.crt"
+fi
+TLS_FINGERPRINT=$(openssl x509 -in "$TLS_DIR/agent.crt" -noout -fingerprint -sha256 | sed 's/^.*=//; s/://g' | tr '[:upper:]' '[:lower:]')
+case "$TLS_FINGERPRINT" in
+    *[!0-9a-f]*|"") echo "Error: could not create the agent TLS certificate" >&2; exit 1 ;;
+esac
+[ "${#TLS_FINGERPRINT}" -eq 64 ] || { echo "Error: unexpected certificate fingerprint" >&2; exit 1; }
+echo "SIGARDAPANEL_AGENT_TLS_CERT=$TLS_DIR/agent.crt" >> "$CONFIG_DIR/agent.env"
+echo "SIGARDAPANEL_AGENT_TLS_KEY=$TLS_DIR/agent.key" >> "$CONFIG_DIR/agent.env"
+echo "  TLS fingerprint: $TLS_FINGERPRINT"
+
 # ── Install SSH status dashboard ──
 DASHBOARD_TMP=$(mktemp)
 
@@ -495,15 +552,45 @@ systemctl enable "$SERVICE_NAME" > /dev/null 2>&1
 systemctl restart "$SERVICE_NAME"
 
 sleep 2
-if systemctl is-active --quiet "$SERVICE_NAME" && curl -fsS --max-time 3 http://127.0.0.1:7710/health >/dev/null; then
+if systemctl is-active --quiet "$SERVICE_NAME" && curl -fsSk --max-time 3 https://127.0.0.1:7710/health >/dev/null; then
+# ── Firewall: port 7710 only for the panel ──
+# Only when ufw is already active (enabling it here could lock out SSH).
+# SIGARDAPANEL_AGENT_FIREWALL=0 skips this; SIGARDAPANEL_PANEL_IP overrides the
+# address (e.g. a panel behind a CDN or NAT).
+PANEL_IP="${SIGARDAPANEL_PANEL_IP:-$PANEL_IP_DEFAULT}"
+if [ -z "$PANEL_IP" ]; then
+    PANEL_HOST=$(printf '%%s' "$PANEL_URL" | sed -E 's#^https://([^/:]+).*#\1#')
+    PANEL_IP=$(getent ahosts "$PANEL_HOST" 2>/dev/null | awk 'NR==1 {print $1}')
+fi
+if [ -n "$PANEL_IP" ] && ! python3 -c 'import ipaddress,sys; ipaddress.ip_address(sys.argv[1])' "$PANEL_IP" 2>/dev/null; then
+    PANEL_IP=""
+fi
+FIREWALL_NOTE=""
+if [ "${SIGARDAPANEL_AGENT_FIREWALL:-1}" != "1" ]; then
+    FIREWALL_NOTE="skipped (SIGARDAPANEL_AGENT_FIREWALL=0)"
+elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "^Status: active"; then
+    if [ -n "$PANEL_IP" ]; then
+        ufw allow from "$PANEL_IP" to any port 7710 proto tcp >/dev/null
+        ufw deny 7710/tcp >/dev/null
+        FIREWALL_NOTE="ufw: port 7710 allowed only from $PANEL_IP"
+    else
+        FIREWALL_NOTE="WARNING: the panel's address is unknown; set SIGARDAPANEL_PANEL_IP and run: ufw allow from <panel-ip> to any port 7710 proto tcp && ufw deny 7710/tcp"
+    fi
+else
+    FIREWALL_NOTE="WARNING: ufw is not active; port 7710 is open to everyone (TLS + token protected). Restrict it: ufw allow from ${PANEL_IP:-<panel-ip>} to any port 7710 proto tcp && ufw deny 7710/tcp"
+fi
+echo "  Firewall: $FIREWALL_NOTE"
+
 # ── Register with panel ──
 echo "Registering with the panel..."
 REGISTER_RESPONSE=$("${PANEL_CURL[@]}" -sS -X POST "$PANEL_URL/api/v1/agents/register" \
     -H "Content-Type: application/json" \
     -d "$(jq -n --arg registration_token "$REG_TOKEN" --arg hostname "$HOSTNAME" \
         --arg ip_address "$SERVER_IP" --arg agent_token "$AGENT_TOKEN" \
+        --arg previous_agent_token "$PREVIOUS_AGENT_TOKEN" \
+        --arg tls_fingerprint "$TLS_FINGERPRINT" \
         --arg os_info "$(head -n5 /etc/os-release 2>/dev/null | tr '\n' '; ')" \
-        '{registration_token:$registration_token,hostname:$hostname,ip_address:$ip_address,agent_token:$agent_token,os_info:$os_info}')")
+        '{registration_token:$registration_token,hostname:$hostname,ip_address:$ip_address,agent_token:$agent_token,previous_agent_token:$previous_agent_token,tls_fingerprint:$tls_fingerprint,os_info:$os_info}')")
 
 if ! echo "$REGISTER_RESPONSE" | grep -q '"server_id"'; then
     echo "Error: registration failed"
@@ -520,15 +607,14 @@ echo "  Registered! Server ID: $SERVER_ID"
     echo "✅ Agent installed and running!"
     echo ""
     echo "  Server ID:   $SERVER_ID"
-    echo "  Agent URL:   http://$SERVER_IP:7710"
+    echo "  Agent URL:   https://$SERVER_IP:7710 (certificate pinned by the panel)"
     echo "  Panel URL:   $PANEL_URL"
     echo ""
     echo "  Status:  systemctl status $SERVICE_NAME"
     echo "  Logs:    journalctl -u $SERVICE_NAME -f"
-    echo "  Health:  curl http://localhost:7710/health"
+    echo "  Health:  curl -k https://localhost:7710/health"
     echo ""
-    echo "  The agent listens on port 7710 on all interfaces. Allow it only from"
-    echo "  the panel, e.g.: ufw allow from <panel-ip> to any port 7710 proto tcp"
+    echo "  Firewall:    $FIREWALL_NOTE"
     ROLLBACK_ACTIVE=0
     rm -rf "$ROLLBACK_DIR" "$INSTALL_DIR/.sigardapanel.previous"
 else

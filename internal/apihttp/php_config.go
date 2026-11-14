@@ -8,9 +8,11 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/jobmodel"
+	"sigardapanel/internal/siteinput"
 )
 
 // phpVersionRe validates a PHP version like "8.1".
@@ -121,6 +123,10 @@ func (h *siteHandler) updatePHPConfig(c *echo.Context) error {
 
 	// Sanitize php.ini directives: single line, no nginx-breaking chars.
 	ini := sanitizePHPIni(body.Ini)
+	ini, rejected := siteinput.FilterPHPIni(ini)
+	if len(rejected) > 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "php.ini settings not allowed (only limits, timeouts, error display, timezone, session lifetime, short_open_tag, output_buffering): "+strings.Join(rejected, "; "))
+	}
 
 	if err := h.store.Sites.UpdatePHPConfig(c.Request().Context(), site.ID, body.Version, ini); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update PHP config")

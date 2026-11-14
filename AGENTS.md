@@ -99,7 +99,26 @@ hanyawahyu       hanyawahyu      /home/hanyawahyu/htdocs/{domain}
   server lacks the PHP-FPM socket/port the vhost would use.
 - **Root path** → `/home/{system_user}/htdocs/{domain}`
 - **File ownership** → `{system_user}:{system_user}` (not www-data!)
-- **PHP-FPM** → pool runs as `www-data` (shared, for now)
+- **PHP-FPM** → one pool per site (`internal/agenthttp/php_pool.go`):
+  `/etc/php/<ver>/fpm/pool.d/sp-site-<id>.conf`, `user/group = system_user` (UID >= 1000,
+  never www-data/root/service accounts: a PHP site without a usable owner fails with
+  `422`), socket `/run/php/sp-site-<id>-php<ver>-fpm.sock` (nginx user, 0660; the version
+  in the name keeps the Stack "PHP version in use" check working), `pm = ondemand`,
+  `open_basedir = <root>:~/.php/<id>:/usr/share/php`, temp/sessions/`error_log` in
+  `~/.php/<id>/` (created through the pinned home, 0700, owned by the user),
+  `catch_workers_output = no` (the server-wide FPM log is shared). Written atomically,
+  checked with `php-fpm<ver> -t` (restored on failure), then `systemctl reload
+  php<ver>-fpm`. Version change / runtime change / site delete remove the old pool.
+  The allowlisted `php_ini` settings stay in the vhost's `PHP_VALUE` (with a per-site pool
+  they can no longer leak to other sites). Suspend keeps the pool (the placeholder vhost
+  does not use PHP). Hosts without a `pool.d` for the version (e.g. CloudPanel's own PHP)
+  keep the shared upstream (`php_pool: false` in the site.create result). Logs → `php`
+  reads `~/.php/<id>/error.log` (opened beneath the pinned home, no symlinks, regular
+  files only) for sites with a pool. Existing sites: the worker sends `system_user` on
+  every regeneration and records `php_pool_site_<id>` from the agent's answer; the
+  scheduler (`migratePHPPools`) queues one vhost regeneration per active PHP site without
+  that setting whose server's agent reports the panel's version (20 per tick, retry after
+  6 h on failure)
 - **SSH/FTP** → optional per-site user for site-level access
 - **Per-site terminal** → SSH tab in site detail runs shell as `system_user` via `?user=<system_user>`
 
@@ -514,6 +533,27 @@ These are enforced in code and covered by tests; keep them when changing handler
   reset, SSL renew-all, panel update/rollback, agent updates. Non-super admins see only
   their own audit entries and the site mappings of users they created, and can change or
   delete only `user`-role accounts they created.
+- **Servers = super_admin** (Nov 2026 audit): servers have no owner, so creating,
+  changing, deleting servers and every server-level action (command, docker
+  create/exec/compose/images/volumes/networks, firewall, fail2ban, redis, pm2, mail,
+  stack actions, server terminal) need super_admin on every server. Tenants keep the
+  server list, PHP versions and their own site containers (list/logs/start/stop/restart,
+  filtered for every non-super_admin). Docker sites are super_admin only (the container
+  runs as root with the site root mounted).
+- **Site accounts**: the agent never acts as an account in a privileged group (sudo,
+  wheel, admin, adm, docker, lxd, disk, shadow, root; the account's own personal group
+  excepted) or an SFTP jail account (root-owned home), unless the name is listed in
+  `/etc/sigardapanel/trusted-site-users` (root-owned; install.sh adds ADMIN_USER).
+  Panel usernames must pass `siteinput.SystemUser` and not be a site's system user or an
+  SSH/SFTP account name.
+- **Site roots** are `owner:<nginx group> 2750` (`restrictSiteRoot`, applied on
+  create/regen/restore): nginx reads through its group, nobody else can enter.
+  Root paths are pinned (`sitefs.PinDir` verifies the kernel path of the opened
+  directory); git deploy runs every git step as the site user inside pinned
+  directories; app units do not use `EnvironmentFile=` (the app's shell sources
+  `.env` as the site user).
+- **Proxy targets** for non-super_admin: IP literals or localhost only (no DNS
+  rebinding), never link-local, private or loopback service ports (panel, databases).
 - **Panel host = super_admin**: on the local server (loopback agent) container
   create/exec/compose/images/volumes/networks, firewall, fail2ban, bot blocker, pm2,
   mail, redis flush and the root terminal need super_admin
@@ -590,6 +630,20 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
   could not be removed.
 - **Panel→agent HTTP** uses `agentClient` (dial-time address check: no link-local,
   multicast, unspecified; loopback only when literal; private only when allowed).
+- **Agent TLS is pinned** (`internal/agenttls`): remote agents serve HTTPS with a
+  self-signed certificate; `servers.agent_tls_fingerprint` (hex SHA-256 of the DER
+  cert) is set at registration (`tls_fingerprint`, install script uses openssl) or by
+  the switch from http (`agenttls.Upgrade` → agent `POST /tasks/agent/tls/enable`,
+  token-authenticated, TOFU over the existing connection; run by the health checker
+  once per server and agent version, or `POST /api/v1/servers/:id/agent-tls`,
+  super_admin). Every agent-bound client (`agentTransport`, terminal websocket,
+  `agentclient`, health/metrics/security collectors) dials https through
+  `agenttls.DialTLS`, which looks the pin up by host:port (`store.TLSPinForAddr`,
+  loader set in `store.New`) and refuses an https agent without one. Loopback (panel
+  host) agents stay on http. The servers list shows `insecure_transport` /
+  `tls_pinned`. Re-registration matches the address over either scheme and replaces
+  URL and pin. The install script adds ufw rules for 7710 (panel IP from
+  `SIGARDAPANEL_PANEL_IP` or DNS) only when ufw is active, never enables it.
 - **Global settings that act on every tenant** (backup providers, global retention,
   order approval) are super_admin only; plans/usage/orders follow user ownership
   (`callerManagesUser`).

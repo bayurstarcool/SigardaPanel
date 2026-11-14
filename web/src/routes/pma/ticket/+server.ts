@@ -2,7 +2,7 @@ import type { RequestHandler } from "./$types";
 import { env } from "$env/dynamic/private";
 import { randomBytes, createCipheriv, createHash } from "crypto";
 import { createPmaRedemption } from "$lib/server/pma-redemptions";
-import { authHeaders } from "$lib/server/upstream";
+import { authHeaders, sameOrigin } from "$lib/server/upstream";
 
 const API_URL = env.SIGARDAPANEL_API_URL || "http://127.0.0.1:7700";
 
@@ -13,7 +13,8 @@ function encryptionKey(): Buffer | null {
     : null;
 }
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, url }) => {
+  if (!sameOrigin(request, url)) return new Response(null, { status: 403 });
   const key = encryptionKey();
   if (!key) return new Response(null, { status: 503 });
 

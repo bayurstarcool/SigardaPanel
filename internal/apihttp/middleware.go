@@ -110,6 +110,19 @@ func RequireAuth(s *store.Store) echo.MiddlewareFunc {
 				return echo.NewHTTPError(http.StatusUnauthorized, "session expired")
 			}
 
+			// An impersonation lasts only while the impersonator may still
+			// start it: still an admin (or super_admin) who manages the
+			// target. Demoting or deleting the admin ends it at once.
+			if sess.ImpersonatedBy.Valid {
+				if ok, err := impersonationStillAllowed(c.Request().Context(), s, sess); err != nil {
+					slog.Error("api: request failed", "route", c.Path(), "error", err)
+					return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+				} else if !ok {
+					_ = s.Sessions.RevokeByTokenHash(c.Request().Context(), tokenHash)
+					return echo.NewHTTPError(http.StatusUnauthorized, "session revoked")
+				}
+			}
+
 			// Until the user replaces a password someone else chose, a login
 			// session may only read itself, change the password and log out.
 			// Impersonation sessions are exempt: the admin must not be made
@@ -465,4 +478,27 @@ func cookieCSRFGuard(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 		return next(c)
 	}
+}
+
+// impersonationStillAllowed re-applies the impersonate rules to a running
+// impersonation session (see authHandler.impersonate).
+func impersonationStillAllowed(ctx context.Context, s *store.Store, sess *store.Session) (bool, error) {
+	admin, err := s.Users.GetByID(ctx, sess.ImpersonatedBy.Int64)
+	if err != nil {
+		return false, err
+	}
+	if admin == nil {
+		return false, nil
+	}
+	switch admin.Role {
+	case auth.RoleSuperAdmin:
+		return true, nil
+	case auth.RoleAdmin:
+		target, err := s.Users.GetByID(ctx, sess.UserID)
+		if err != nil {
+			return false, err
+		}
+		return target != nil && target.Role == auth.RoleUser && target.CreatedBy.Valid && target.CreatedBy.Int64 == admin.ID, nil
+	}
+	return false, nil
 }

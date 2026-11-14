@@ -38,6 +38,8 @@ func RunScheduler(ctx context.Context, s *store.Store, interval time.Duration) {
 }
 
 func runTick(ctx context.Context, s *store.Store) {
+	migratePHPPools(ctx, s, time.Now())
+
 	// Process legacy backup_schedules (DEPRECATED)
 	// Deprecated: backup_schedules is the legacy per-site scheduling system.
 	// Use backup_configs (global, multi-site) instead.

@@ -1,9 +1,11 @@
 package apihttp
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,6 +20,7 @@ import (
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/config"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -130,6 +133,12 @@ type usedTOTP struct {
 }
 
 func (u *usedTOTP) markUsed(userID int64, code string) bool {
+	// The validator trims whitespace, so " 123456" is the same code: key on
+	// the trimmed form, and only a 6-digit code is ever accepted.
+	code = strings.TrimSpace(code)
+	if len(code) != 6 || strings.Trim(code, "0123456789") != "" {
+		return false
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	now := time.Now()
@@ -204,7 +213,6 @@ type authHandler struct {
 	audit        *audit.Recorder
 	rateLimiter  *rateLimiter
 	userFailures *failureTracker
-	usedTOTP     usedTOTP
 	sessionTTL   time.Duration
 }
 
@@ -292,7 +300,7 @@ func (ah *authHandler) login(c *echo.Context) error {
 				ah.audit.RecordAction(c.Request().Context(), user.ID, "2fa_recovery_code_used", audit.ResourceSession, 0, map[string]any{"ip": ip})
 			}
 		} else if user.TOTPSecret != "" {
-			valid = totp.Validate(body.TOTPCode, user.TOTPSecret) && ah.usedTOTP.markUsed(user.ID, body.TOTPCode)
+			valid = totp.Validate(body.TOTPCode, user.TOTPSecret) && twoFAUsed.markUsed(user.ID, body.TOTPCode)
 		}
 		if !valid {
 			ah.userFailures.fail(failKey)
@@ -391,6 +399,10 @@ func (ah *authHandler) register(c *echo.Context) error {
 	if len(body.Password) < 8 {
 		return echo.NewHTTPError(http.StatusBadRequest, "password must be at least 8 characters")
 	}
+	body.Email = strings.TrimSpace(body.Email)
+	if len(body.Email) > 254 || !emailRegex.MatchString(body.Email) {
+		return echo.NewHTTPError(http.StatusBadRequest, "valid email required")
+	}
 
 	// Check if email already exists
 	existing, _ := ah.store.Users.GetByEmail(c.Request().Context(), body.Email)
@@ -398,9 +410,17 @@ func (ah *authHandler) register(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusConflict, "email already registered")
 	}
 
+	// The username becomes the account's Linux user on the servers its
+	// sites land on: derive a safe one that is not a system account, a
+	// panel user, a site's system user or an SSH/FTP account.
+	username, err := ah.freeUsername(c.Request().Context(), body.Email)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusConflict, "could not pick a username for this email; contact the administrator")
+	}
+
 	// Create user
 	user := &store.User{
-		Username:     body.Email,
+		Username:     username,
 		Email:        body.Email,
 		Role:         auth.RoleUser,
 		CreatedBy:    sql.NullInt64{Int64: 1, Valid: true},
@@ -571,4 +591,45 @@ func (ah *authHandler) updateProfile(c *echo.Context) error {
 		Data:      map[string]any{"updated": true},
 		RequestID: rid,
 	})
+}
+
+// freeUsername derives a Linux-safe account name from an email's local part
+// (siteinput.SystemUser rules) that nobody uses yet.
+func (ah *authHandler) freeUsername(ctx context.Context, email string) (string, error) {
+	local := strings.ToLower(email[:strings.IndexByte(email, '@')])
+	var b strings.Builder
+	for _, r := range local {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		}
+	}
+	base := b.String()
+	if base == "" || !(base[0] >= 'a' && base[0] <= 'z') {
+		base = "u" + base
+	}
+	if len(base) > 24 {
+		base = base[:24]
+	}
+	for i := 0; i < 1000; i++ {
+		name := base
+		if i > 0 {
+			name = fmt.Sprintf("%s%d", base, i)
+		}
+		if siteinput.SystemUser(name) != nil {
+			continue
+		}
+		if u, _ := ah.store.Users.GetByUsername(ctx, name); u != nil {
+			continue
+		}
+		var n int
+		if err := ah.store.DB().QueryRowContext(ctx,
+			`SELECT (SELECT COUNT(*) FROM sites WHERE system_user = ?) + (SELECT COUNT(*) FROM site_ssh_ftp WHERE username = ?)`, name, name).Scan(&n); err != nil {
+			return "", err
+		}
+		if n == 0 {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("no free username")
 }

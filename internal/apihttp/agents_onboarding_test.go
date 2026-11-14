@@ -11,7 +11,7 @@ import (
 
 func TestInstallScriptRendersAndParses(t *testing.T) {
 	script := fmt.Sprintf(installScriptTemplate, shellQuote("https://panel.example.com"), shellQuote("tok"),
-		shellQuote("v1.6.1"), shellQuote(releasePublicKey), shellQuote("1"))
+		shellQuote("v1.6.1"), shellQuote(releasePublicKey), shellQuote("1"), shellQuote("203.0.113.9"))
 	if strings.Contains(script, "%!") {
 		t.Fatalf("template placeholders do not match the arguments")
 	}
@@ -34,7 +34,7 @@ func createRegToken(t *testing.T, publicURL string) map[string]any {
 	t.Helper()
 	t.Setenv("SIGARDAPANEL_PUBLIC_URL", publicURL)
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 	rec := doRequest(t, e, "POST", "/api/v1/agents/tokens", nil, token)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create token: %d %s", rec.Code, rec.Body.String())
@@ -78,7 +78,7 @@ func TestRegisterAgentPrivateIPNeedsOptIn(t *testing.T) {
 				t.Setenv("SIGARDAPANEL_ALLOW_PRIVATE_AGENTS", "true")
 			}
 			e, s, ctx := newTestApp(t)
-			admin := newAdminToken(t, s, ctx)
+			admin := newSuperAdminToken(t, s, ctx)
 			rec := doRequest(t, e, "POST", "/api/v1/agents/tokens", nil, admin)
 			var tr struct {
 				Data struct {

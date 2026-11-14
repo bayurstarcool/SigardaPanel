@@ -12,6 +12,7 @@ import (
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -98,6 +99,24 @@ func (h *userHandler) create(c *echo.Context) error {
 	}
 	if body.Email == "" || !emailRegex.MatchString(body.Email) {
 		return echo.NewHTTPError(http.StatusBadRequest, "valid email required")
+	}
+	// The username becomes the user's Linux account on every server their
+	// sites land on: it must be a valid, non-reserved account name that no
+	// site or SSH/SFTP account already uses (taking such a name would hand
+	// over that account's files and shell).
+	if err := siteinput.SystemUser(body.Username); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, _ or - (starting with a letter) and not a system account name")
+	}
+	{
+		var n int
+		if err := h.store.DB().QueryRowContext(c.Request().Context(),
+			`SELECT (SELECT COUNT(*) FROM sites WHERE system_user = ?) + (SELECT COUNT(*) FROM site_ssh_ftp WHERE username = ?)`,
+			body.Username, body.Username).Scan(&n); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		if n > 0 {
+			return echo.NewHTTPError(http.StatusConflict, "this name is already used by a site or an SSH/SFTP account")
+		}
 	}
 	if body.Role == "" {
 		body.Role = "user"
@@ -197,6 +216,10 @@ func (h *userHandler) delete(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
 
+	if err := h.store.Sessions.DeleteImpersonationsBy(c.Request().Context(), id); err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
 	if err := h.store.Users.Delete(c.Request().Context(), id); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
 	}
@@ -258,11 +281,9 @@ func (h *userHandler) update(c *echo.Context) error {
 		}
 		ctx := c.Request().Context()
 		if id == sess.UserID {
-			// Your own password, chosen by you.
-			if err := h.store.Users.UpdatePassword(ctx, id, hash); err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
-			}
-			_ = h.store.Sessions.RevokeAllForUser(ctx, id, sess.ID)
+			// A stolen session must not take the account over: your own
+			// password changes through Profile, which asks for the current one.
+			return echo.NewHTTPError(http.StatusBadRequest, "change your own password in Profile (it asks for the current password)")
 		} else {
 			// Chosen by an admin: the user must replace it at the next
 			// login, and nobody keeps a session opened with the old one.

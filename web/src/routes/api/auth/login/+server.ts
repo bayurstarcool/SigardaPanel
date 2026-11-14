@@ -1,8 +1,10 @@
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
-import { API_URL, clientIpHeaders } from "$lib/server/upstream";
+import { API_URL, clientIpHeaders, sameOrigin } from "$lib/server/upstream";
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, url }) => {
+  // Login CSRF: another site must not sign the browser into an account.
+  if (!sameOrigin(request, url)) return json({ error: { message: "cross-site request refused" } }, { status: 403 });
   try {
     const body = await request.text();
     const res = await fetch(`${API_URL}/api/v1/auth/login`, {

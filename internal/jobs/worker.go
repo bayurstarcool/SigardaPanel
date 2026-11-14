@@ -21,6 +21,7 @@ import (
 	"sigardapanel/internal/nginx"
 	"sigardapanel/internal/notify"
 	"sigardapanel/internal/secrets"
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -247,6 +248,19 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	} else {
 		slog.Warn("worker: decrypt job payload failed", "job_id", job.ID, "error", derr)
 	}
+	// A database whose creation failed (e.g. the name already existed on
+	// the server) has no record any more: never grant on that name.
+	if job.Type == jobmodel.TypeDBUserCreate {
+		var p struct {
+			DatabaseID int64 `json:"database_id"`
+		}
+		if json.Unmarshal([]byte(job.Payload), &p) == nil && p.DatabaseID > 0 {
+			if d, err := w.store.Databases.GetByID(ctx, p.DatabaseID); err == nil && d == nil {
+				_ = w.store.Jobs.MarkCompleted(ctx, job.ID, false, "", "database record no longer exists")
+				return
+			}
+		}
+	}
 	// site.create is also how a site's vhost is regenerated (PHP, app port,
 	// security changes): the site's stored settings complete the payload,
 	// and the site's status before the job decides what success means.
@@ -291,6 +305,22 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 		if job.Type == jobmodel.TypeSiteCreate && job.SiteID.Valid && siteIsNew(siteBefore) {
 			if err := w.store.Sites.UpdateStatus(ctx, job.SiteID.Int64, "failed"); err != nil {
 				slog.Error("worker: mark site failed", "id", job.SiteID.Int64, "error", err)
+			}
+		}
+
+		// A database that could not be created must not stay recorded: its
+		// name may belong to someone else on the server (grants, backups and
+		// delete would then act on that database).
+		// Only a definite "not created" (the name exists on the server or is
+		// reserved) drops it; after a timeout the database may exist.
+		if job.Type == jobmodel.TypeDatabaseCreate && databaseCreateRefused(execErr, result) {
+			var p struct {
+				DatabaseID int64 `json:"database_id"`
+			}
+			if json.Unmarshal([]byte(job.Payload), &p) == nil && p.DatabaseID > 0 {
+				if err := w.store.Databases.Delete(ctx, p.DatabaseID); err != nil {
+					slog.Error("worker: drop failed database record", "id", p.DatabaseID, "error", err)
+				}
 			}
 		}
 
@@ -378,6 +408,16 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 				if s, _ := w.store.Sites.GetByID(ctx, siteID); s != nil {
 					w.store.NotifyAdmins(ctx, "agent_outdated", "Agent update needed", s.Domain+": "+msg, "warning", "site", siteID)
 				}
+			}
+
+			// Per-site PHP-FPM pools: remember that this site went through
+			// an agent that knows them (see migratePHPPools).
+			if result != nil && result.PHPPool != nil {
+				v := "0"
+				if *result.PHPPool {
+					v = "1"
+				}
+				_ = store.SetSetting(ctx, w.store.DB(), phpPoolSettingKey(siteID), v)
 			}
 
 			// Update conf_file from agent response
@@ -694,6 +734,18 @@ func (w *Worker) siteCreatePayload(ctx context.Context, site *store.Site, raw st
 	setIfMissing("proxy_pass_url", site.ProxyPassURL.String, site.ProxyPassURL.Valid && site.ProxyPassURL.String != "")
 	setIfMissing("php_version", site.PHPVersion.String, site.PHPVersion.Valid && site.PHPVersion.String != "")
 	setIfMissing("php_ini", site.PHPIni.String, site.PHPIni.Valid && site.PHPIni.String != "")
+	// The site's own PHP-FPM pool runs as its owner: regenerations need it
+	// too (an existing root keeps its ownership on the agent).
+	setIfMissing("system_user", site.SystemUser.String, site.SystemUser.Valid && site.SystemUser.String != "")
+	// Settings stored before the allowlist existed are dropped, not sent:
+	// the vhost keeps regenerating with the allowed ones.
+	if raw, ok := p["php_ini"].(string); ok {
+		if kept, _ := siteinput.FilterPHPIni(raw); kept != "" {
+			p["php_ini"] = kept
+		} else {
+			delete(p, "php_ini")
+		}
+	}
 	if !siteIsNew(site) {
 		// An existing site: regenerate the vhost only (no starter files, no
 		// container re-creation).
@@ -730,4 +782,18 @@ func (w *Worker) siteCreatePayload(ctx context.Context, site *store.Site, raw st
 		return raw, nil
 	}
 	return string(b), nil
+}
+
+// databaseCreateRefused reports the agent's definite refusals of a
+// database.create: the name already exists on the server, or is reserved.
+func databaseCreateRefused(execErr error, result *agentclient.TaskResult) bool {
+	var b strings.Builder
+	if execErr != nil {
+		b.WriteString(execErr.Error())
+	}
+	if result != nil {
+		b.WriteString(" " + result.Error + " " + result.Output)
+	}
+	msg := strings.ToLower(b.String())
+	return strings.Contains(msg, "already exists on the server") || strings.Contains(msg, "reserved database name")
 }

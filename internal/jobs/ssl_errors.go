@@ -46,6 +46,8 @@ func isPermanentJobError(jobType string, execErr error, result *agentclient.Task
 	case jobmodel.TypeSSLRenew, jobmodel.TypeSSLIssue:
 	case jobmodel.TypeSiteCreate:
 		markers = permanentSiteCreateErrorMarkers
+	case jobmodel.TypeDatabaseCreate, jobmodel.TypeDBUserCreate:
+		markers = []string{"already exists on the server", "reserved database name", "database record no longer exists"}
 	default:
 		return false
 	}

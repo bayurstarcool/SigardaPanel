@@ -5,11 +5,15 @@
 package siteinput
 
 import (
+	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -24,7 +28,25 @@ var (
 	dockerEnvRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=[^\x00-\x1f]*$`)
 	dockerTargetRe = regexp.MustCompile(`^/[A-Za-z0-9._/\-]*$`)
 	dockerRestarts = map[string]bool{"": true, "no": true, "always": true, "unless-stopped": true, "on-failure": true}
-	reservedUsers  = map[string]bool{"root": true, "daemon": true, "bin": true, "sys": true, "nobody": true, "www-data": true, "sigardapanel": true}
+	// reservedUsers are system and service accounts (and the sudo-capable
+	// default users of cloud images): a site, an SSH account or a panel
+	// sign-up must never run as, or become, one of them.
+	reservedUsers = map[string]bool{
+		"root": true, "daemon": true, "bin": true, "sys": true, "sync": true, "games": true, "man": true,
+		"lp": true, "mail": true, "news": true, "uucp": true, "proxy": true, "www-data": true, "backup": true,
+		"list": true, "irc": true, "gnats": true, "nobody": true, "_apt": true, "sigardapanel": true,
+		"systemd-network": true, "systemd-resolve": true, "systemd-timesync": true, "messagebus": true,
+		"syslog": true, "sshd": true, "uuidd": true, "tcpdump": true, "tss": true, "polkitd": true,
+		"landscape": true, "pollinate": true, "fwupd-refresh": true, "usbmux": true, "lxd": true,
+		"dnsmasq": true, "ntp": true, "chrony": true, "_chrony": true, "statd": true,
+		"mysql": true, "postgres": true, "redis": true, "memcache": true, "memcached": true, "mongodb": true,
+		"nginx": true, "apache": true, "httpd": true, "www": true, "varnish": true, "vcache": true,
+		"docker": true, "containerd": true, "postfix": true, "dovecot": true, "dovenull": true,
+		"opendkim": true, "clamav": true, "debian-exim": true, "bind": true, "ftp": true, "vsftpd": true,
+		"elasticsearch": true, "rabbitmq": true, "git": true,
+		"ubuntu": true, "debian": true, "centos": true, "ec2-user": true, "fedora": true, "rocky": true,
+		"almalinux": true, "azureuser": true, "opc": true,
+	}
 )
 
 // Domain accepts a hostname (optionally "*.example.com").
@@ -96,7 +118,7 @@ func SystemUser(s string) error {
 // the literal two-character "\n" separator), no control characters and no
 // nginx-significant braces/semicolons.
 func PHPIni(s string) error {
-	if strings.ContainsAny(s, "\"{};\r") {
+	if strings.ContainsAny(s, "\"{};\r$") {
 		return fmt.Errorf("invalid php_ini")
 	}
 	rest := strings.ReplaceAll(s, `\n`, "")
@@ -281,6 +303,131 @@ var dbHostRe = regexp.MustCompile(`^[a-zA-Z0-9_.%\-]{1,255}$`)
 func DBHost(s string) error {
 	if !dbHostRe.MatchString(s) {
 		return fmt.Errorf("invalid host_pattern")
+	}
+	return nil
+}
+
+// ReservedDatabaseName reports names that belong to the database server
+// itself (MySQL/MariaDB system schemas, PostgreSQL maintenance and template
+// databases, phpMyAdmin's storage). A tenant who could register one would get
+// GRANT ALL on it, which on mysql.* means every account on the server.
+func ReservedDatabaseName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch n {
+	case "mysql", "sys", "information_schema", "performance_schema", "phpmyadmin",
+		"postgres", "template0", "template1":
+		return true
+	}
+	return strings.HasPrefix(n, "template") || strings.HasPrefix(n, "pg_")
+}
+
+// phpIniAllowed are the php.ini settings a site may set through PHP_VALUE.
+// PHP-FPM keeps PHP_VALUE settings in the worker process, and the pool is
+// shared by every site, so anything that loads code or widens file access
+// (auto_prepend_file, open_basedir, extension, include_path, ...) would act
+// on other tenants' requests.
+var phpIniAllowed = map[string]bool{
+	"memory_limit": true, "upload_max_filesize": true, "post_max_size": true,
+	"max_execution_time": true, "max_input_time": true, "max_input_vars": true,
+	"display_errors": true, "error_reporting": true, "date.timezone": true,
+	"session.gc_maxlifetime": true, "short_open_tag": true, "output_buffering": true,
+}
+
+var phpIniValueRe = regexp.MustCompile(`^[A-Za-z0-9_./:+&~|^ -]{1,64}$`)
+
+// FilterPHPIni keeps the allowed "key = value" directives of a php_ini value
+// (lines separated by real newlines or the literal two-character "\n" used in
+// the stored form) and returns them in the stored form, with the rejected
+// lines.
+func FilterPHPIni(s string) (string, []string) {
+	var kept, rejected []string
+	for _, part := range strings.Split(strings.ReplaceAll(s, `\n`, "\n"), "\n") {
+		line := strings.TrimSpace(part)
+		if line == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if !ok || !phpIniAllowed[k] || !phpIniValueRe.MatchString(v) {
+			rejected = append(rejected, line)
+			continue
+		}
+		kept = append(kept, k+" = "+v)
+	}
+	return strings.Join(kept, `\n `), rejected
+}
+
+// loopbackServicePorts are local services a tenant's proxy must never reach:
+// the panel (API, agent, web) and data stores that listen on loopback.
+var loopbackServicePorts = map[int]bool{
+	7700: true, 7710: true, 7720: true, // panel API, root agent, web
+	22: true, 25: true, 53: true, 111: true, 2049: true,
+	3306: true, 33060: true, 5432: true, 6379: true, 11211: true, 27017: true,
+	9200: true, 9300: true, 5672: true, 15672: true, 2375: true, 2376: true,
+	8443: true, 10250: true, 6082: true, // varnish admin
+}
+
+// ProxyPassTarget checks where a proxy site would send requests (its host,
+// resolved when it is a name). Link-local (cloud metadata at 169.254.169.254),
+// unspecified and multicast targets are always refused. Without
+// allowInternal (the host operator): loopback is allowed for the tenant's own
+// app except the panel's ports (API, agent, web), private networks are not.
+func ProxyPassTarget(ctx context.Context, raw string, allowInternal bool) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("invalid proxy_pass_url")
+	}
+	host := u.Hostname()
+	// nginx reads the port as a number ("07700" is 7700): compare numbers.
+	port := 80
+	if u.Scheme == "https" {
+		port = 443
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("invalid proxy_pass_url port")
+		}
+		port = n
+	}
+	// A tenant's target must be a literal IP: a name is resolved again by
+	// nginx on every reload, so it could later point at metadata or private
+	// addresses (DNS rebinding) after this check passed.
+	isLocalhost := strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost")
+	if !allowInternal && net.ParseIP(host) == nil && !isLocalhost {
+		return fmt.Errorf("proxy_pass_url must use an IP address (ask an administrator to proxy to a host name)")
+	}
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+			ips = []net.IP{net.IPv4(127, 0, 0, 1)}
+		} else {
+			rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			addrs, err := net.DefaultResolver.LookupIPAddr(rctx, host)
+			if err != nil || len(addrs) == 0 {
+				return fmt.Errorf("proxy_pass_url host does not resolve")
+			}
+			for _, a := range addrs {
+				ips = append(ips, a.IP)
+			}
+		}
+	}
+	for _, ip := range ips {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+			return fmt.Errorf("proxy_pass_url may not point to a link-local, unspecified or multicast address")
+		}
+		if allowInternal {
+			continue
+		}
+		if ip.IsLoopback() && loopbackServicePorts[port] {
+			return fmt.Errorf("proxy_pass_url may not point to the panel or local database/system services")
+		}
+		if ip.IsPrivate() {
+			return fmt.Errorf("proxy_pass_url may not point to a private network address (ask an administrator)")
+		}
 	}
 	return nil
 }

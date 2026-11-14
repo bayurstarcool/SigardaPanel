@@ -112,6 +112,12 @@ download_release() {
   local n
   n="$(grep -cE " (sigardapanel-linux-${ARCH}|sigardapanel-web\.tar\.gz)\$" "${dir}/SHA256SUMS")"
   [ "$n" -eq 2 ] || die "SHA256SUMS does not list the expected files"
+  # The signature covers SHA256SUMS, not the tag: an older signed release
+  # published under a newer tag would otherwise install (a downgrade).
+  chmod +x "${dir}/sigardapanel-linux-${ARCH}"
+  local got
+  got="$("${dir}/sigardapanel-linux-${ARCH}" version --client 2>/dev/null | head -n1 || true)"
+  [ "${got#v}" = "${TAG#v}" ] || die "The downloaded binary reports version '${got}', expected ${TAG#v} - refusing to install."
   ok "Release ${TAG} verified (minisign key ${PUBKEY:0:12}...)"
 }
 
@@ -317,6 +323,21 @@ ${LISTEN6_443}
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
+    # The web UI signs in through its own route: same limit.
+    location = /api/auth/login {
+        limit_req zone=sigarda_login burst=5 nodelay;
+        proxy_pass http://127.0.0.1:7720;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # phpMyAdmin credentials for nginx's internal auth_request only
+    # (deploy/nginx/pma-per-database.conf proxies to it directly).
+    location = /api/pma-auth {
+        deny all;
+    }
+
     # Go API (also carries the terminal WebSocket)
     location ^~ /api/v1/ {
         limit_req zone=sigarda_panel burst=30 nodelay;
@@ -424,6 +445,13 @@ do_install() {
   runuser -u sigardapanel -- sqlite3 "${DATA_DIR}/sigardapanel.db" \
     "UPDATE users SET role='super_admin' WHERE username='${ADMIN_USER}' AND NOT EXISTS (SELECT 1 FROM users WHERE role='super_admin');" \
     || die "Could not grant super_admin to ${ADMIN_USER}"
+  # The super admin's Linux account may be a sudo-capable cloud default
+  # ("admin" on Debian images): the agent refuses privileged accounts as site
+  # owners unless the operator lists them here.
+  if ! grep -qxF "$ADMIN_USER" "$CONF_DIR/trusted-site-users" 2>/dev/null; then
+    printf '%s\n' "$ADMIN_USER" >> "$CONF_DIR/trusted-site-users"
+  fi
+  chown root:root "$CONF_DIR/trusted-site-users"; chmod 644 "$CONF_DIR/trusted-site-users"
   # The API refuses everything but the password change while
   # password_changed_at is NULL. Set it explicitly either way so the result
   # does not depend on what this release's "init" defaults to.

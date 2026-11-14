@@ -278,7 +278,10 @@ func (r *Router) runGit(ctx context.Context, rootPath string, args ...string) (s
 	return r.executor.RunShell(ctx, "git", full...)
 }
 
-// siteUserIDs resolves a validated, existing, non-root unix account.
+// siteUserIDs resolves a validated, existing regular login account (UID >=
+// minSiteUserUID, not nobody). Service accounts (postgres, mysql, redis,
+// www-data: UIDs below 1000) are refused: a terminal or file operation as
+// postgres is the PostgreSQL superuser, as www-data every site's PHP.
 func siteUserIDs(name string) (uid, gid uint32, ok bool) {
 	if siteinput.SystemUser(name) != nil {
 		return 0, 0, false
@@ -287,10 +290,76 @@ func siteUserIDs(name string) (uid, gid uint32, ok bool) {
 	if err != nil || u.Uid == "0" {
 		return 0, 0, false
 	}
-	a, err1 := strconv.ParseUint(u.Uid, 10, 32)
-	b, err2 := strconv.ParseUint(u.Gid, 10, 32)
-	if err1 != nil || err2 != nil {
+	a, err1 := strconv.ParseUint(u.Uid, 10, 31)
+	b, err2 := strconv.ParseUint(u.Gid, 10, 31)
+	if err1 != nil || err2 != nil || a < minSiteUserUID || a == 65534 {
+		return 0, 0, false
+	}
+	if accountPrivilegedOrJail(u) != nil {
 		return 0, 0, false
 	}
 	return uint32(a), uint32(b), true
+}
+
+// privilegedGroups give root (sudo, wheel, admin, docker, lxd) or read
+// access to secrets and raw disks (adm, disk, shadow): an account in one of
+// them is never a site owner, whatever its UID (cloud images ship such
+// "admin"/"debian"/"ubuntu" users with passwordless sudo).
+var privilegedGroups = map[string]bool{
+	"root": true, "sudo": true, "wheel": true, "admin": true, "adm": true,
+	"docker": true, "lxd": true, "disk": true, "shadow": true,
+}
+
+// accountPrivilegedOrJail refuses accounts the panel must never act as: members
+// of privileged groups, and SFTP jail accounts (their home is the root-owned
+// chroot; they share a site owner's UID and their name is unrelated to it).
+func accountPrivilegedOrJail(u *user.User) error {
+	if gids, err := u.GroupIds(); err == nil && !trustedSiteUser(u.Username) {
+		for _, gid := range gids {
+			// The account's own personal group (useradd's default: same name,
+			// its primary group) is not the legacy "admin" sudo group.
+			if gid == u.Gid {
+				if g, err := user.LookupGroupId(gid); err == nil && g.Name == u.Username {
+					continue
+				}
+			}
+			if g, err := user.LookupGroupId(gid); err == nil && privilegedGroups[g.Name] {
+				return fmt.Errorf("account %s is in the privileged group %s", u.Username, g.Name)
+			}
+		}
+	}
+	if u.HomeDir != "" {
+		if fi, err := os.Lstat(u.HomeDir); err == nil {
+			if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid == 0 && fi.IsDir() {
+				return fmt.Errorf("account %s has a root-owned home (an SFTP jail account)", u.Username)
+			}
+		}
+	}
+	return nil
+}
+
+// trustedSiteUsersFile lists privileged accounts the operator allows as site
+// owners (one name per line), e.g. the panel's own super admin "admin" on a
+// cloud image where that Linux account has sudo. install.sh adds ADMIN_USER.
+// The file must be root-owned and not writable by others.
+var trustedSiteUsersFile = "/etc/sigardapanel/trusted-site-users"
+
+func trustedSiteUser(name string) bool {
+	fi, err := os.Lstat(trustedSiteUsersFile)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o022 != 0 {
+		return false
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || st.Uid != 0 {
+		return false
+	}
+	data, err := os.ReadFile(trustedSiteUsersFile)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == name {
+			return true
+		}
+	}
+	return false
 }

@@ -13,7 +13,7 @@ import (
 
 func TestServerRegenerateToken_IsStored(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 	srv := &store.Server{Name: "r", Hostname: "r.example.com", AgentToken: "old-token",
 		AgentURL: sql.NullString{String: "http://203.0.113.5:7710", Valid: true}}
 	if err := s.Servers.Create(ctx, srv); err != nil {
@@ -38,7 +38,7 @@ func TestServerRegenerateToken_IsStored(t *testing.T) {
 
 func TestServerDelete_Guards(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	local := &store.Server{Name: "Local Server", Hostname: "panel", AgentToken: "t",
 		AgentURL: sql.NullString{String: "http://127.0.0.1:7710", Valid: true}}
@@ -70,7 +70,7 @@ func TestServerDelete_Guards(t *testing.T) {
 
 func TestServerUpdate_AgentURL(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 	srv := &store.Server{Name: "r", Hostname: "r.example.com", AgentToken: "secret-token",
 		AgentURL: sql.NullString{String: "http://1:7710", Valid: true}}
 	if err := s.Servers.Create(ctx, srv); err != nil {

@@ -11,6 +11,7 @@ import (
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/dbserver"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -130,6 +131,11 @@ func (h *dbServerHandler) importDatabases(c *echo.Context) error {
 	}
 
 	for _, dbName := range mysqlDBs {
+		// Server schemas (mysql, phpmyadmin, ...) are never attached to a
+		// site: whoever owned it would get GRANT ALL on them.
+		if siteinput.ReservedDatabaseName(dbName) {
+			continue
+		}
 		// Check if already exists in SigardaPanel
 		existing, _ := h.store.Databases.GetByName(ctx, dbName)
 		var dbID int64

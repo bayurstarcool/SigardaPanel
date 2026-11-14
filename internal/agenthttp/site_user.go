@@ -12,11 +12,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"sigardapanel/internal/sitefs"
 	"sigardapanel/internal/siteinput"
 )
+
+// siteUserMu serializes looking up and creating site owners' accounts.
+var siteUserMu sync.Mutex
 
 // minSiteUserUID is the lowest UID treated as a regular (login) account.
 // Site files are never handed to system accounts.
@@ -38,6 +44,12 @@ func (r *Router) ensureSiteUser(ctx context.Context, name string) (*siteOwner, e
 	if err := siteinput.SystemUser(name); err != nil {
 		return nil, fmt.Errorf("invalid system_user %q", name)
 	}
+	// The worker runs several site.create jobs at once. Without this lock,
+	// jobs for the same new user each saw it missing and each ran useradd;
+	// their /etc/passwd writes overwrote one another, leaving the home and
+	// some site roots owned by uids that no longer exist.
+	siteUserMu.Lock()
+	defer siteUserMu.Unlock()
 	u, err := user.Lookup(name)
 	if err != nil {
 		var unknown user.UnknownUserError
@@ -68,7 +80,16 @@ func (r *Router) ensureSiteUser(ctx context.Context, name string) (*siteOwner, e
 			return &siteOwner{name: name, home: home}, nil
 		}
 	}
-	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	uid, err := strconv.ParseUint(u.Uid, 10, 31)
+	if err == nil && uid >= minSiteUserUID && uid != 65534 {
+		// An existing account is adopted only when it is an ordinary
+		// account: never one with sudo/docker/... or an SFTP jail account
+		// (taking such a name would hand its owner's files, or root, to the
+		// tenant whose panel username matches it).
+		if perr := accountPrivilegedOrJail(u); perr != nil {
+			return nil, fmt.Errorf("refusing to use the existing Linux account %s as site owner: %v (choose another panel username, or, if this account is meant to own sites, add it to %s on this server)", name, perr, trustedSiteUsersFile)
+		}
+	}
 	if err != nil || uid < minSiteUserUID || uid == 65534 {
 		slog.Warn("agent: system_user is a system account; site files keep their owner", "user", name, "uid", u.Uid)
 		return nil, nil
@@ -96,20 +117,35 @@ func allowTraverse(dir string) {
 // files in it) to the owner, plus the owner's htdocs directory when the root
 // sits directly in it (Mkdir created that as root). A root that already
 // existed keeps its ownership: it may hold files deliberately owned by others.
-func (r *Router) chownNewSiteRoot(ctx context.Context, owner *siteOwner, rootPath string, rootExisted bool) {
+//
+// The site user can rename and replace entries in its own home at any time,
+// so nothing here goes through a path the user could swap: the root is the
+// pinned directory, entries are Lchown'ed (links are never followed) and
+// htdocs is changed through its own pinned descriptor.
+func (r *Router) chownNewSiteRoot(ctx context.Context, owner *siteOwner, root *sitefs.PinnedDir, rootPath string, rootExisted bool) {
 	if rootExisted {
 		slog.Info("agent: site root already existed; ownership left unchanged", "root", rootPath, "user", owner.name)
 		return
 	}
-	spec := owner.name + ":" // the user and its login group
-	if out, err := r.executor.RunShell(ctx, "chown", "-R", spec, rootPath); err != nil {
-		slog.Warn("agent: chown site root", "root", rootPath, "user", owner.name, "error", err, "output", strings.TrimSpace(out))
+	uid, gid, ok := siteUserIDs(owner.name)
+	if !ok {
+		slog.Warn("agent: chown site root: owner account not usable", "root", rootPath, "user", owner.name)
+		return
+	}
+	if err := sitefs.ChownTree(root, int(uid), int(gid)); err != nil {
+		slog.Warn("agent: chown site root", "root", rootPath, "user", owner.name, "error", err)
 		return
 	}
 	htdocs := filepath.Join(owner.home, "htdocs")
 	if filepath.Dir(filepath.Clean(rootPath)) == htdocs {
-		if out, err := r.executor.RunShell(ctx, "chown", spec, htdocs); err != nil {
-			slog.Warn("agent: chown htdocs", "dir", htdocs, "error", err, "output", strings.TrimSpace(out))
+		pin, err := sitefs.PinDir(htdocs)
+		if err != nil {
+			slog.Warn("agent: chown htdocs", "dir", htdocs, "error", err)
+			return
+		}
+		defer pin.Close()
+		if err := pin.Chown(int(uid), int(gid)); err != nil {
+			slog.Warn("agent: chown htdocs", "dir", htdocs, "error", err)
 		}
 	}
 }
@@ -163,8 +199,56 @@ func (r *Router) siteTransferTask(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "move files failed: "+err.Error())
 	}
 	if owner != nil {
-		r.chownNewSiteRoot(ctx, owner, p.NewRoot, false)
+		pin, err := sitefs.PinDir(p.NewRoot)
+		if err != nil {
+			return echo.NewHTTPError(sitefs.StatusOf(err), "new root: "+err.Error())
+		}
+		r.chownNewSiteRoot(ctx, owner, pin, p.NewRoot, false)
+		pin.Close()
 	}
 	slog.Info("agent: site.transfer", "site_id", p.SiteID, "from", p.OldRoot, "to", p.NewRoot, "user", p.SystemUser)
 	return c.JSON(http.StatusOK, map[string]any{"ok": true, "root_path": p.NewRoot})
+}
+
+// restrictSiteRoot makes the site root owner:<nginx group> 2750: the web
+// server reads it through its group, the owner's PHP pool, apps, cron and
+// SSH run as the owner, and no other account on the server can enter it.
+// Site files are 0644 by default, so with a traversable root another
+// tenant's shell, cron job or PHP exec() could read wp-config.php/.env (and
+// with them the database). Only a root the owner already owns is changed;
+// setgid keeps new subdirectories in the nginx group.
+func (r *Router) restrictSiteRoot(owner *siteOwner, root *sitefs.PinnedDir, rootPath string) {
+	uid, _, ok := siteUserIDs(owner.name)
+	if !ok {
+		return
+	}
+	st, ok := root.Info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return
+	}
+	if cur, err := os.Stat(root.Path); err == nil {
+		if s2, ok := cur.Sys().(*syscall.Stat_t); ok {
+			st = s2
+		}
+	}
+	if st.Uid != uid {
+		slog.Info("agent: site root not owned by its owner; permissions left unchanged", "root", rootPath, "user", owner.name)
+		return
+	}
+	g, err := user.Lookup(r.nginxUser())
+	if err != nil {
+		slog.Warn("agent: restrict site root: nginx user not found", "user", r.nginxUser(), "error", err)
+		return
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return
+	}
+	if err := root.Chown(int(uid), gid); err != nil {
+		slog.Warn("agent: restrict site root: chown", "root", rootPath, "error", err)
+		return
+	}
+	if err := root.Chmod(os.ModeSetgid | 0o750); err != nil {
+		slog.Warn("agent: restrict site root: chmod", "root", rootPath, "error", err)
+	}
 }

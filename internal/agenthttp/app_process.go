@@ -32,9 +32,6 @@ func systemdUnitContent(domain, systemUser, rootPath, command string, port, memo
 		userLine = fmt.Sprintf("User=%s", systemUser)
 	}
 
-	// Build EnvironmentFile line: load .env if present
-	envFileLine := fmt.Sprintf("%s/.env", rootPath)
-
 	return fmt.Sprintf(`[Unit]
 Description=SigardaPanel App: %s
 After=network.target postgresql.service redis-server.service
@@ -46,7 +43,6 @@ ExecStart=/bin/sh -lc %s
 Restart=always
 RestartSec=5
 %s
-EnvironmentFile=-%s
 Environment=PORT=%d
 Environment=NODE_ENV=production
 Environment=PATH=/root/.hermes/node/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
@@ -61,8 +57,14 @@ PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
-`, domain, rootPath, systemdQuote("exec "+command), userLine, envFileLine, port, memoryMaxMB, memoryHighMB)
+`, domain, rootPath, systemdQuote(appEnvPrelude+"exec "+command), userLine, port, memoryMaxMB, memoryHighMB)
 }
+
+// appEnvPrelude loads the site's .env in the app's own shell, which already
+// runs as the site user. systemd's EnvironmentFile= is read by PID 1 as root
+// and follows symlinks: a tenant's .env -> /etc/sigardapanel/agent.env handed
+// the agent token (root) to the app.
+const appEnvPrelude = "if [ -f ./.env ] && [ -r ./.env ]; then set -a; . ./.env; set +a; fi; "
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
@@ -92,6 +94,9 @@ func validateAppUnitInput(domain, systemUser, rootPath, command string) error {
 	u, err := user.Lookup(systemUser)
 	if err != nil || u.Uid == "0" {
 		return fmt.Errorf("system_user %q does not exist or is root", systemUser)
+	}
+	if _, _, ok := siteUserIDs(systemUser); !ok {
+		return fmt.Errorf("system_user %q is not a regular site account", systemUser)
 	}
 	if command == "" || len(command) > 1024 {
 		return fmt.Errorf("invalid app command")

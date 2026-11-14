@@ -1,10 +1,12 @@
 package apihttp
 
 import (
+	"database/sql"
 	"net/http"
 	"strings"
 	"testing"
 
+	"sigardapanel/internal/auth"
 	"sigardapanel/internal/store"
 )
 
@@ -31,8 +33,8 @@ func TestCreateSite_RejectsRootEscalationInputs(t *testing.T) {
 			b["runtime"] = "docker"
 			b["docker_image"] = "nginx"
 			b["docker_volume"] = "/:/host"
-		}, http.StatusBadRequest},
-		"docker option-like image": {func(b map[string]any) { b["runtime"] = "docker"; b["docker_image"] = "--privileged" }, http.StatusBadRequest},
+		}, http.StatusForbidden}, // docker sites are super_admin only
+		"docker option-like image": {func(b map[string]any) { b["runtime"] = "docker"; b["docker_image"] = "--privileged" }, http.StatusForbidden},
 		"bad php version":          {func(b map[string]any) { b["runtime"] = "php"; b["php_version"] = "8.3;x" }, http.StatusBadRequest},
 	}
 	for name, tc := range cases {
@@ -61,6 +63,11 @@ func TestCreateSite_RejectsRootEscalationInputs(t *testing.T) {
 func TestCreateSite_JobPayloadCarriesSystemUser(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
 	token := newAdminToken(t, s, ctx)
+	admin, _ := s.Users.GetByUsername(ctx, "admin")
+	// A tenant admin runs sites as one of the users it created.
+	if err := s.Users.Create(ctx, &store.User{Username: "alice", Email: "alice@example.com", PasswordHash: "x", Role: auth.RoleUser, CreatedBy: sql.NullInt64{Int64: admin.ID, Valid: true}}); err != nil {
+		t.Fatal(err)
+	}
 	srvID := createServer(t, s, ctx)
 	rec := doRequest(t, e, "POST", "/api/v1/sites", map[string]any{
 		"server_id": srvID, "name": "x", "domain": "owner.example.com", "runtime": "static", "system_user": "alice",

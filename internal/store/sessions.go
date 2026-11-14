@@ -28,6 +28,8 @@ type SessionRepository interface {
 	// RevokeAllForUser revokes every active session of userID except
 	// exceptID (0 = revoke all). Used after a password change.
 	RevokeAllForUser(ctx context.Context, userID, exceptID int64) error
+	// DeleteImpersonationsBy removes the impersonation sessions userID started.
+	DeleteImpersonationsBy(ctx context.Context, userID int64) error
 	CleanupExpired(ctx context.Context) error
 	RevokeOldest(ctx context.Context, userID int64, maxSessions int) error
 	CountActive(ctx context.Context, userID int64) (int, error)
@@ -90,12 +92,24 @@ func (s *SQLiteSessionStore) Revoke(ctx context.Context, id int64) error {
 	return nil
 }
 
-// RevokeAllForUser revokes every active session of a user except exceptID.
+// RevokeAllForUser revokes every active session of a user except exceptID,
+// including the impersonation sessions the user started (they carry the
+// target's user_id): a reset or stolen admin account must not keep them.
 func (s *SQLiteSessionStore) RevokeAllForUser(ctx context.Context, userID, exceptID int64) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id != ? AND revoked_at IS NULL`, userID, exceptID)
+		`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE (user_id = ? OR impersonated_by = ?) AND id != ? AND revoked_at IS NULL`, userID, userID, exceptID)
 	if err != nil {
 		return fmt.Errorf("revoke sessions for user: %w", err)
+	}
+	return nil
+}
+
+// DeleteImpersonationsBy removes the impersonation sessions a user started
+// (sessions.impersonated_by references users without ON DELETE, so they would
+// block deleting that user).
+func (s *SQLiteSessionStore) DeleteImpersonationsBy(ctx context.Context, userID int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE impersonated_by = ?`, userID); err != nil {
+		return fmt.Errorf("delete impersonation sessions: %w", err)
 	}
 	return nil
 }
@@ -163,19 +177,19 @@ func scanSession(row *sql.Row) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
 	}
-	
+
 	// Parse expires_at — handle both new UTC format and legacy Go default format
 	sess.ExpiresAt, err = parseTimestamp(expiresAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse expires_at: %w", err)
 	}
-	
+
 	// Parse created_at — same dual-format handling
 	sess.CreatedAt, err = parseTimestamp(createdAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse created_at: %w", err)
 	}
-	
+
 	// Parse revoked_at (nullable)
 	if revokedAtStr.Valid {
 		revokedTime, err := parseTimestamp(revokedAtStr.String)
@@ -184,7 +198,7 @@ func scanSession(row *sql.Row) (*Session, error) {
 		}
 		sess.RevokedAt = sql.NullTime{Time: revokedTime, Valid: true}
 	}
-	
+
 	return &sess, nil
 }
 

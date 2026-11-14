@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v5"
+	"sigardapanel/internal/agenttls"
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
@@ -114,8 +115,10 @@ func (h *terminalHandler) createTicket(c *echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "site has no valid system user")
 		}
 		serverID, runAs = site.ServerID, site.SystemUser.String
-	} else if !auth.HasRole(user.Role, auth.RoleAdmin) {
-		return echo.NewHTTPError(http.StatusForbidden, "server terminal requires an admin")
+	} else if user.Role != auth.RoleSuperAdmin {
+		// A server terminal is a root shell on that server, which may host
+		// other tenants' sites: super_admin only.
+		return echo.NewHTTPError(http.StatusForbidden, "server terminal requires a super admin")
 	}
 	if serverID <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "server_id required")
@@ -211,7 +214,7 @@ func (h *terminalHandler) serve(c *echo.Context) error {
 	}
 
 	// Same dial-time address checks as every other panel→agent call.
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, NetDialContext: dialAgent}
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, NetDialContext: dialAgent, NetDialTLSContext: agenttls.DialTLS(dialAgent)}
 	agentConn, resp, err := dialer.Dial(target.String(), http.Header{"Authorization": {"Bearer " + t.token}})
 	if err != nil {
 		status := 0

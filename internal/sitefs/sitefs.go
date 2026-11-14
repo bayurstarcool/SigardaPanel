@@ -89,7 +89,14 @@ func (f *FS) open() (*os.Root, error) {
 	if f.Root == "" {
 		return nil, fail(http.StatusBadRequest, "site root path not configured")
 	}
-	r, err := os.OpenRoot(filepath.Clean(f.Root))
+	// The root itself must not be reached through a symlink the site user
+	// planted (os.Root confines paths beneath the root, not the root path).
+	pin, err := PinDir(f.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer pin.Close()
+	r, err := os.OpenRoot(pin.Path)
 	if err != nil {
 		return nil, fail(http.StatusNotFound, "site root not found on this server")
 	}
@@ -227,7 +234,9 @@ func (f *FS) Read(rel string) ([]byte, os.FileInfo, error) {
 		return nil, nil, err
 	}
 	defer r.Close()
-	fh, err := r.OpenFile(clean, os.O_RDONLY, 0) // os.Root follows links only beneath the root
+	// O_NONBLOCK: opening a FIFO the site user planted must not hang the
+	// agent (os.Root follows links only beneath the root).
+	fh, err := r.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, pathErr(err, http.StatusNotFound, "file not found")
 	}
@@ -238,6 +247,9 @@ func (f *FS) Read(rel string) ([]byte, os.FileInfo, error) {
 	}
 	if info.IsDir() {
 		return nil, nil, fail(http.StatusBadRequest, "is a directory")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, fail(http.StatusBadRequest, "not a regular file")
 	}
 	if info.Size() > MaxReadSize {
 		return nil, nil, fail(http.StatusBadRequest, "file too large (>1MB)")
@@ -540,7 +552,7 @@ func addRootToZip(zw *zip.Writer, r *os.Root, src, baseName, skip string) error 
 		if err != nil {
 			return err
 		}
-		fh, err := r.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		fh, err := r.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return err
 		}
@@ -600,7 +612,7 @@ func writeZipFile(zw *zip.Writer, path, zipName string, fi os.FileInfo) error {
 	if err != nil {
 		return err
 	}
-	fh, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	fh, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return err
 	}
@@ -665,8 +677,10 @@ func (f *FS) OpenDownload(rel string) (*os.File, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	defer r.Close()                              // an open file stays usable after its Root is closed
-	fh, err := r.OpenFile(clean, os.O_RDONLY, 0) // links resolve only beneath the root
+	defer r.Close() // an open file stays usable after its Root is closed
+	// Links resolve only beneath the root; O_NONBLOCK keeps a FIFO from
+	// blocking the open (it is then refused as not regular).
+	fh, err := r.OpenFile(clean, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, pathErr(err, http.StatusNotFound, "file not found")
 	}
@@ -758,7 +772,7 @@ func (f *FS) Extract(archiveRel, dest string) (int, int, error) {
 	if info, err := r.Stat(destClean); err != nil || !info.IsDir() {
 		return 0, 0, pathErr(err, http.StatusBadRequest, "destination is not a directory")
 	}
-	fh, err := r.OpenFile(archive, os.O_RDONLY, 0)
+	fh, err := r.OpenFile(archive, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return 0, 0, pathErr(err, http.StatusNotFound, "archive not found")
 	}

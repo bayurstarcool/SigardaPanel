@@ -31,8 +31,9 @@ func TestTwoFactorManagementNeedsOwnInteractiveSession(t *testing.T) {
 	if rec := f.do("POST", "/api/v1/auth/2fa/recovery-codes", nil, created.Data.Token); rec.Code != http.StatusForbidden {
 		t.Fatalf("API key minting recovery codes = %d %s", rec.Code, rec.Body.String())
 	}
+	root, _ := f.user("root2fa", auth.RoleSuperAdmin)
 	imp, _ := auth.NewToken()
-	f.s.Sessions.Create(f.ctx, &store.Session{UserID: alice.ID, TokenHash: auth.HashToken(imp), ExpiresAt: time.Now().Add(time.Hour), ImpersonatedBy: nullInt(1)})
+	f.s.Sessions.Create(f.ctx, &store.Session{UserID: alice.ID, TokenHash: auth.HashToken(imp), ExpiresAt: time.Now().Add(time.Hour), ImpersonatedBy: nullInt(root.ID)})
 	if rec := f.do("POST", "/api/v1/auth/2fa/disable", map[string]any{"code": "000000"}, imp); rec.Code != http.StatusForbidden {
 		t.Fatalf("impersonator changing 2FA = %d", rec.Code)
 	}

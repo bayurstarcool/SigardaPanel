@@ -15,7 +15,7 @@ import (
 
 func TestSecurityBaselineSaveAndCompare(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
-	adminToken := newAdminToken(t, s, ctx)
+	adminToken := newSuperAdminToken(t, s, ctx)
 
 	var hash atomic.Value
 	hash.Store("aaaa1111")
