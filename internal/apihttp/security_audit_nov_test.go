@@ -2,6 +2,7 @@ package apihttp
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -184,5 +185,47 @@ func TestSiteRootOwnershipAndOverlap(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s at %s = %d, want %d", tc.domain, tc.root, got, tc.want)
 		}
+	}
+}
+
+// DELETE /sites/:id?delete_files=false keeps the site's files on the server
+// (the agent job says keep_files); without the parameter they are deleted.
+func TestDeleteSiteKeepFilesOption(t *testing.T) {
+	f := newAuthzFixture(t)
+	owner, tok := f.user("owner", auth.RoleUser)
+	payloadOf := func(jobID int64) map[string]any {
+		job, err := f.s.Jobs.GetByID(f.ctx, jobID)
+		if err != nil || job == nil {
+			t.Fatalf("job %d: %v", jobID, err)
+		}
+		var p map[string]any
+		json.Unmarshal([]byte(job.Payload), &p)
+		return p
+	}
+	del := func(siteName, query string) (int, map[string]any) {
+		st := f.site(owner, siteName, "static")
+		rec := f.do("DELETE", "/api/v1/sites/"+strconv.FormatInt(st.ID, 10)+query, nil, tok)
+		var out struct {
+			Data struct {
+				JobID int64 `json:"job_id"`
+			} `json:"data"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &out)
+		if rec.Code != http.StatusOK {
+			return rec.Code, nil
+		}
+		return rec.Code, payloadOf(out.Data.JobID)
+	}
+	if code, p := del("keep", "?delete_files=false"); code != http.StatusOK || p["keep_files"] != true {
+		t.Errorf("delete_files=false: %d %v", code, p)
+	}
+	if code, p := del("wipe", ""); code != http.StatusOK || p["keep_files"] != false {
+		t.Errorf("default: %d %v", code, p)
+	}
+	if code, p := del("wipe2", "?delete_files=true"); code != http.StatusOK || p["keep_files"] != false {
+		t.Errorf("delete_files=true: %d %v", code, p)
+	}
+	if code, _ := del("bad", "?delete_files=maybe"); code != http.StatusBadRequest {
+		t.Errorf("invalid value = %d", code)
 	}
 }

@@ -266,7 +266,7 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `GET /api/v1/sites` — List sites
 - `POST /api/v1/sites` — Create site
 - `GET /api/v1/sites/:id` — Site detail
-- `DELETE /api/v1/sites/:id` — Delete site
+- `DELETE /api/v1/sites/:id` — Delete site (`?delete_files=false` keeps the root directory and its files; default deletes them; CLI `site delete --keep-files`)
 - `POST /api/v1/sites/:id/deploy` — Deploy site
 - `POST /api/v1/sites/:id/config` — Update config
 - `POST /api/v1/sites/:id/reload-nginx` — Reload nginx

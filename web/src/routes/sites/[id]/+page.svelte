@@ -7,6 +7,7 @@
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import StatCard from '$components/StatCard.svelte';
+  import Modal from '$components/Modal.svelte';
   import EmptyState from '$components/EmptyState.svelte';
   import LoadError from '$components/LoadError.svelte';
   import StatusPill from '$components/StatusPill.svelte';
@@ -59,6 +60,7 @@
 
   // Databases count (for stats)
   let dbsCount = $state(0);
+  let dbNames = $state<string[]>([]);
   // Disk usage, measured by du on the site's server: null = loading,
   // '' = could not be measured.
   let diskUsed = $state<number | null | ''>(null);
@@ -132,11 +134,11 @@
 
   async function initSite() {
     if (!auth.user) { window.location.href = '/login'; return; }
-    site = null; loading = true; activeTab = new URL(window.location.href).searchParams.get('tab') || 'info'; dockerContainer = null; dbsCount = 0;
+    site = null; loading = true; activeTab = new URL(window.location.href).searchParams.get('tab') || 'info'; dockerContainer = null; dbsCount = 0; dbNames = [];
     await loadSite();
     if (site) void loadDiskUsage();
     // Load db count for stats
-    try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbsCount = (d?.databases || []).length; } catch {}
+    try { const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/databases`); dbNames = (d?.databases || []).map((x: any) => x.name); dbsCount = dbNames.length; } catch {}
     // Load Docker container info for docker runtime sites
     if (site?.runtime === 'docker' && site?.server_id) {
       try {
@@ -206,10 +208,22 @@
     } catch (e: any) { toasts.error(e.message); } finally { toggleBusy = false; }
   }
 
+  // Delete dialog: everything that belongs to the site goes; its files only
+  // when asked (unchecked by default, so a mistaken delete keeps the data).
+  let showDelete = $state(false);
+  let deleteFiles = $state(false);
+  let deleteConfirm = $state('');
+  let deleteBusy = $state(false);
+  function openDelete() { deleteFiles = false; deleteConfirm = ''; showDelete = true; }
   async function deleteSite() {
-    if (!confirm(`DELETE site "${site?.domain}" permanently? This cannot be undone.`)) return;
-    try { await apiFetch(auth.token, 'DELETE', `sites/${siteId}`); goto('/sites'); }
-    catch (e: any) { toasts.error(e.message); }
+    if (!site || deleteConfirm.trim().toLowerCase() !== site.domain.toLowerCase()) return;
+    deleteBusy = true;
+    try {
+      await apiFetch(auth.token, 'DELETE', `sites/${siteId}?delete_files=${deleteFiles}`);
+      toasts.success(deleteFiles ? `${site.domain} and its files are being deleted` : `${site.domain} deleted; its files were kept`);
+      showDelete = false;
+      goto('/sites');
+    } catch (e: any) { toasts.error(e.message); } finally { deleteBusy = false; }
   }
 
   const allTabs = [
@@ -322,7 +336,7 @@
           </button>
         {/if}
         {#if canDelete}
-          <button onclick={deleteSite} class="btn btn-danger-ghost btn-sm"><Trash2 size={14} /> Delete</button>
+          <button onclick={openDelete} class="btn btn-danger-ghost btn-sm"><Trash2 size={14} /> Delete</button>
         {/if}
       {/snippet}
     </PageHeader>
@@ -531,3 +545,43 @@
   {/if}
 {/key}
 </DashboardLayout>
+
+{#if site}
+  <Modal bind:open={showDelete} title="Delete {site.domain}" maxWidth="md">
+    <div class="space-y-4 text-[13px]">
+      <div>
+        <p class="text-muted">Always removed from the panel and the server:</p>
+        <ul class="mt-2 space-y-1 text-fg">
+          <li class="flex gap-2"><span class="text-subtle">•</span> Nginx vhost, SSL certificate and logs</li>
+          <li class="flex gap-2"><span class="text-subtle">•</span> {site.runtime === 'php' ? 'PHP-FPM pool' : 'App service'}, cron jobs and SSH/SFTP accounts</li>
+          <li class="flex gap-2"><span class="text-subtle">•</span>
+            {#if dbNames.length}Databases: <span class="font-mono">{dbNames.join(', ')}</span>{:else}Databases: none{/if}
+          </li>
+        </ul>
+      </div>
+
+      <label class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors {deleteFiles ? 'border-danger/40 bg-danger/5' : 'border-line'}">
+        <input type="checkbox" bind:checked={deleteFiles} class="checkbox mt-0.5" />
+        <span class="min-w-0">
+          <span class="block font-medium text-fg">Also delete all site files</span>
+          <span class="mt-0.5 block font-mono text-[12px] break-all text-muted">{site.root_path}</span>
+          <span class="mt-1 block text-xs text-subtle">
+            {deleteFiles ? 'The folder and everything in it (including local backups inside it) is deleted for good.' : 'Unchecked: the folder and its files stay on the server, and a new site can use it again later.'}
+          </span>
+        </span>
+      </label>
+
+      <div>
+        <label for="delete-confirm" class="label">Type <span class="font-mono text-fg">{site.domain}</span> to confirm</label>
+        <input id="delete-confirm" bind:value={deleteConfirm} class="input font-mono" autocomplete="off" spellcheck="false" placeholder={site.domain} />
+      </div>
+    </div>
+    {#snippet footer()}
+      <button onclick={() => (showDelete = false)} class="btn btn-ghost btn-sm">Cancel</button>
+      <button onclick={deleteSite} disabled={deleteBusy || deleteConfirm.trim().toLowerCase() !== site.domain.toLowerCase()} class="btn btn-danger btn-sm">
+        <Trash2 size={14} /> {deleteFiles ? 'Delete site and files' : 'Delete site'}
+      </button>
+    {/snippet}
+  </Modal>
+{/if}
+

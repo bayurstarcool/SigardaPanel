@@ -560,6 +560,18 @@ func (h *siteHandler) delete(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
+	// ?delete_files=false keeps the site's root directory (and the files in
+	// it) on the server; everything else that belongs to the site is removed.
+	// Absent, the files are deleted as before (API and CLI clients).
+	deleteFiles := true
+	switch strings.ToLower(strings.TrimSpace(c.QueryParam("delete_files"))) {
+	case "", "1", "true", "yes":
+	case "0", "false", "no":
+		deleteFiles = false
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, "delete_files must be true or false")
+	}
+
 	// SSH/FTP jails bind-mount the site root: remove them on the server
 	// first (their rows used to vanish with the site while the Linux users,
 	// mounts and keys stayed, and lost their chroot on the next sshd sync).
@@ -625,15 +637,20 @@ func (h *siteHandler) delete(c *echo.Context) error {
 
 	// Send cleanup payload to agent — site.delete job handles files, SSL, logs, services
 	payload, _ := json.Marshal(map[string]any{
-		"site_id":   site.ID,
-		"domain":    site.Domain,
-		"root_path": site.RootPath,
+		"site_id":    site.ID,
+		"domain":     site.Domain,
+		"root_path":  site.RootPath,
+		"keep_files": !deleteFiles,
 	})
+	desc := fmt.Sprintf("Delete site %s", site.Domain)
+	if !deleteFiles {
+		desc += " (files kept)"
+	}
 	job := &jobmodel.Job{
 		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
 		SiteID:      sql.NullInt64{Int64: site.ID, Valid: true},
 		Type:        jobmodel.TypeSiteDelete,
-		Description: fmt.Sprintf("Delete site %s", site.Domain),
+		Description: desc,
 		Payload:     string(payload),
 	}
 	if err := h.store.Jobs.Create(c.Request().Context(), job); err != nil {
@@ -647,13 +664,16 @@ func (h *siteHandler) delete(c *echo.Context) error {
 	}
 
 	h.audit.RecordAction(c.Request().Context(), userID, audit.ActionSiteDelete, audit.ResourceSite, id, map[string]any{
-		"domain": site.Domain,
+		"domain":       site.Domain,
+		"delete_files": deleteFiles,
+		"root_path":    site.RootPath,
 	})
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
-			"site_id": id,
-			"job_id":  job.ID,
+			"site_id":       id,
+			"job_id":        job.ID,
+			"files_deleted": deleteFiles,
 		},
 		RequestID: rid,
 	})

@@ -307,6 +307,7 @@ func (a *App) siteUpdate(verb string, args []string) int {
 
 func (a *App) siteDelete(args []string) int {
 	flags := a.newFlags("site delete", "<id>")
+	keepFiles := flags.Bool("keep-files", false, "keep the site's root directory and files on the server")
 	pos, code, ok := a.parseFlags(flags, args)
 	if !ok {
 		return code
@@ -319,7 +320,11 @@ func (a *App) siteDelete(args []string) int {
 	if !ok {
 		return exitError
 	}
-	resp, ok := a.call(client, http.MethodDelete, fmt.Sprintf("/api/v1/sites/%d", id), nil, http.StatusOK, http.StatusAccepted)
+	path := fmt.Sprintf("/api/v1/sites/%d", id)
+	if *keepFiles {
+		path += "?delete_files=false"
+	}
+	resp, ok := a.call(client, http.MethodDelete, path, nil, http.StatusOK, http.StatusAccepted)
 	if !ok {
 		return exitError
 	}
@@ -327,7 +332,11 @@ func (a *App) siteDelete(args []string) int {
 		JobID int64 `json:"job_id"`
 	}
 	a.decode(resp, &data)
-	fmt.Fprintf(a.stdout, "site %d deleted (cleanup job_id=%d)\n", id, data.JobID)
+	if *keepFiles {
+		fmt.Fprintf(a.stdout, "site %d deleted, files kept (cleanup job_id=%d)\n", id, data.JobID)
+	} else {
+		fmt.Fprintf(a.stdout, "site %d deleted (cleanup job_id=%d)\n", id, data.JobID)
+	}
 	return exitOK
 }
 
