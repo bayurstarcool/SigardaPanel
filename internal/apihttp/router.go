@@ -204,8 +204,11 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// Site management advanced tabs
 	e.GET("/api/v1/sites/:id/vhost", sitesH.getVhost, RequireAuth(s))
 	// Raw vhost editing can read/write arbitrary files via nginx directives, so it is admin-only.
-	e.PUT("/api/v1/sites/:id/vhost", sitesH.updateVhost, RequireAuth(s), RequireAdmin(s))
-	e.POST("/api/v1/sites/:id/vhost/validate", sitesH.validateVhost, RequireAuth(s), RequireAdmin(s))
+	// Raw vhost text is accepted when nginx -t passes: include, access_log or
+	// proxy_pass in it read files, write files as root or reach the agent, so
+	// writing (and validating) it is super_admin only, like server management.
+	e.PUT("/api/v1/sites/:id/vhost", sitesH.updateVhost, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.POST("/api/v1/sites/:id/vhost/validate", sitesH.validateVhost, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
 	e.GET("/api/v1/sites/:id/varnish", sitesH.getVarnish, RequireAuth(s))
 	e.POST("/api/v1/sites/:id/varnish/purge", sitesH.purgeVarnish, RequireAuth(s))
 	e.GET("/api/v1/sites/:id/security", sitesH.getSecurity, RequireAuth(s))
@@ -415,8 +418,9 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// ─── License & Feature Gating ───────────────────────────────
 	licH := newLicenseHandler(s)
 	e.GET("/api/v1/license", licH.getLicense, RequireAuth(s))
-	e.POST("/api/v1/license/activate", licH.activateLicense, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/license", licH.deactivateLicense, RequireAuth(s), RequireAdmin(s))
+	// The license applies to the whole panel: super_admin only.
+	e.POST("/api/v1/license/activate", licH.activateLicense, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.DELETE("/api/v1/license", licH.deactivateLicense, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
 	e.GET("/api/v1/license/features", licH.getFeatures, RequireAuth(s))
 
 	// ─── Stack Management (install/manage software on servers) ──

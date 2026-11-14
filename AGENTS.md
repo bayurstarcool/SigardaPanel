@@ -539,7 +539,8 @@ These are enforced in code and covered by tests; keep them when changing handler
   stack actions, server terminal) need super_admin on every server. Tenants keep the
   server list, PHP versions and their own site containers (list/logs/start/stop/restart,
   filtered for every non-super_admin). Docker sites are super_admin only (the container
-  runs as root with the site root mounted).
+  runs as root with the site root mounted), and so are raw vhost put/validate (nginx text
+  can include files, write logs as root, proxy to the agent) and license activate/delete.
 - **Site accounts**: the agent never acts as an account in a privileged group (sudo,
   wheel, admin, adm, docker, lxd, disk, shadow, root; the account's own personal group
   excepted) or an SFTP jail account (root-owned home), unless the name is listed in
@@ -874,3 +875,8 @@ v1.7.1 fixes v1.7.0's owner-only web bundle (built under the workflow's umask 07
 update failed its health check and rolled back): release.sh normalizes and checks the
 bundle modes, the workflow keeps the umask to the key file, the installer makes the web
 directory readable.
+v1.10.0 security release from two audits: per-site PHP-FPM pools as the site owner and
+2750 site roots, symlink-safe root agent (pinned roots, deploy as the site user, no
+EnvironmentFile), pinned TLS to remote agents, server management / docker sites / raw
+vhost / license super_admin only, reserved database names, privileged Linux accounts
+refused as site owners (trusted-site-users), backup database dumps fixed.

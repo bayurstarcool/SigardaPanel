@@ -131,3 +131,23 @@ func TestTOTPReplayIgnoresWhitespace(t *testing.T) {
 		t.Fatal("non 6-digit code accepted")
 	}
 }
+
+// Raw vhost text and the panel license are super_admin only (an admin is a
+// tenant; raw nginx config can read files and reach the agent).
+func TestRawVhostAndLicenseNeedSuperAdmin(t *testing.T) {
+	f := newAuthzFixture(t)
+	admin, adminTok := f.user("reseller", auth.RoleAdmin)
+	st := f.site(admin, "own", "php")
+	id := strconv.FormatInt(st.ID, 10)
+	for _, c := range []struct{ method, path string }{
+		{"PUT", "/api/v1/sites/" + id + "/vhost"},
+		{"POST", "/api/v1/sites/" + id + "/vhost/validate"},
+		{"POST", "/api/v1/license/activate"},
+		{"DELETE", "/api/v1/license"},
+	} {
+		rec := f.do(c.method, c.path, map[string]any{"vhost_config": "server { include /etc/shadow; }", "license_key": "x"}, adminTok)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("admin %s %s = %d, want 403", c.method, c.path, rec.Code)
+		}
+	}
+}
