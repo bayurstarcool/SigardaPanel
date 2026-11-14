@@ -94,7 +94,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/auth/2fa/setup", tfaH.setup2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
 	e.POST("/api/v1/auth/2fa/enable", tfaH.enable2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
 	e.POST("/api/v1/auth/2fa/disable", tfaH.disable2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
-	e.POST("/api/v1/auth/2fa/verify", tfaH.verify2FA, RequireAuth(s))
+	e.POST("/api/v1/auth/2fa/verify", tfaH.verify2FA, RequireAuth(s), RequireUserSession, rejectImpersonation)
 	e.GET("/api/v1/auth/2fa/status", tfaH.status2FA, RequireAuth(s))
 	e.POST("/api/v1/auth/2fa/recovery-codes", tfaH.generateRecoveryCodes, RequireAuth(s), RequireUserSession, rejectImpersonation)
 
@@ -142,7 +142,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.DELETE("/api/v1/servers/:id", sh.delete, RequireAuth(s), RequireAdmin(s))
 	e.GET("/api/v1/servers/health", sh.getHealthAll, RequireAuth(s))
 	e.GET("/api/v1/servers/:id/health", sh.getHealth, RequireAuth(s))
-	e.POST("/api/v1/servers/:id/token", sh.regenerateToken, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/servers/:id/token", sh.regenerateToken, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	sitesH := newSiteHandler(s, auditRec)
 	termH := newTerminalHandler(s, auditRec, sitesH)
@@ -318,10 +318,10 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 
 	// Alert endpoints (admin only)
 	alertH := newAlertHandler(s, auditRec)
-	e.POST("/api/v1/alert-channels", alertH.createChannel, RequireAuth(s), RequireAdmin(s))
-	e.GET("/api/v1/alert-channels", alertH.listChannels, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/alert-channels/:id", alertH.deleteChannel, RequireAuth(s), RequireAdmin(s))
-	e.GET("/api/v1/alerts", alertH.listAlerts, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/alert-channels", alertH.createChannel, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/alert-channels", alertH.listChannels, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.DELETE("/api/v1/alert-channels/:id", alertH.deleteChannel, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.GET("/api/v1/alerts", alertH.listAlerts, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
 	// In-app notifications (per-user)
 	notifH := newNotificationHandler(s)
 	e.GET("/api/v1/notifications", notifH.list, RequireAuth(s))
@@ -388,7 +388,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.POST("/api/v1/agents/register", agH.registerAgent)
 	e.GET("/api/v1/agents/install", agH.installScript)
 	e.GET("/api/v1/agents/status-dashboard", agH.statusDashboard)
-	e.POST("/api/v1/agents/tokens", agH.createRegistrationToken, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/agents/tokens", agH.createRegistrationToken, RequireAuth(s), RequireUserSession, RequireRole(s, auth.RoleSuperAdmin))
 
 	// ─── Cloudflare Integration ──────────────────────────────
 	cfH := newCloudflareHandler(s, auditRec)
@@ -504,10 +504,10 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// ─── Plans ─────────────────────────────────────────────────
 	planH := newPlanHandler(s)
 	e.GET("/api/v1/plans", planH.listPlans, RequireAuth(s))
-	e.POST("/api/v1/plans", planH.createPlan, RequireAuth(s), RequireAdmin(s))
+	e.POST("/api/v1/plans", planH.createPlan, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
 	e.GET("/api/v1/plans/:id", planH.getPlan, RequireAuth(s))
-	e.PATCH("/api/v1/plans/:id", planH.updatePlan, RequireAuth(s), RequireAdmin(s))
-	e.DELETE("/api/v1/plans/:id", planH.deletePlan, RequireAuth(s), RequireAdmin(s))
+	e.PATCH("/api/v1/plans/:id", planH.updatePlan, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
+	e.DELETE("/api/v1/plans/:id", planH.deletePlan, RequireAuth(s), RequireRole(s, auth.RoleSuperAdmin))
 
 	// ─── License Orders ────────────────────────────────────────
 	orderH := newOrderHandler(s)

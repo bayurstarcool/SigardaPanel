@@ -112,6 +112,12 @@ download_release() {
   local n
   n="$(grep -cE " (sigardapanel-linux-${ARCH}|sigardapanel-web\.tar\.gz)\$" "${dir}/SHA256SUMS")"
   [ "$n" -eq 2 ] || die "SHA256SUMS does not list the expected files"
+  # The signature covers SHA256SUMS, not the tag: an older signed release
+  # published under a newer tag would otherwise install (a downgrade).
+  chmod +x "${dir}/sigardapanel-linux-${ARCH}"
+  local got
+  got="$("${dir}/sigardapanel-linux-${ARCH}" version --client 2>/dev/null | head -n1 || true)"
+  [ "${got#v}" = "${TAG#v}" ] || die "The downloaded binary reports version '${got}', expected ${TAG#v} - refusing to install."
   ok "Release ${TAG} verified (minisign key ${PUBKEY:0:12}...)"
 }
 
@@ -315,6 +321,21 @@ ${LISTEN6_443}
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # The web UI signs in through its own route: same limit.
+    location = /api/auth/login {
+        limit_req zone=sigarda_login burst=5 nodelay;
+        proxy_pass http://127.0.0.1:7720;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # phpMyAdmin credentials for nginx's internal auth_request only
+    # (deploy/nginx/pma-per-database.conf proxies to it directly).
+    location = /api/pma-auth {
+        deny all;
     }
 
     # Go API (also carries the terminal WebSocket)

@@ -12,7 +12,7 @@ import (
 
 func TestAlertChannelCreate_Success(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	body := map[string]any{
 		"name":   "Test Telegram",
@@ -42,7 +42,7 @@ func TestAlertChannelCreate_Success(t *testing.T) {
 
 func TestAlertChannelCreate_InvalidType(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	body := map[string]any{
 		"name":   "Test",
@@ -57,7 +57,7 @@ func TestAlertChannelCreate_InvalidType(t *testing.T) {
 
 func TestAlertChannelCreate_MissingConfig(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	body := map[string]any{
 		"name": "Test",
@@ -71,7 +71,7 @@ func TestAlertChannelCreate_MissingConfig(t *testing.T) {
 
 func TestAlertChannelList_Success(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	s.AlertChannels.Create(ctx, &store.AlertChannel{Name: "ch1", Type: "webhook", Config: `{}`})
 	s.AlertChannels.Create(ctx, &store.AlertChannel{Name: "ch2", Type: "email", Config: `{}`})
@@ -95,7 +95,7 @@ func TestAlertChannelList_Success(t *testing.T) {
 
 func TestAlertChannelDelete_Success(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	ch := &store.AlertChannel{Name: "to-delete", Type: "webhook", Config: `{}`}
 	s.AlertChannels.Create(ctx, ch)
@@ -113,7 +113,7 @@ func TestAlertChannelDelete_Success(t *testing.T) {
 
 func TestAlertChannelDelete_NotFound(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	rec := doRequest(t, e, "DELETE", "/api/v1/alert-channels/99999", nil, token)
 	if rec.Code != http.StatusNotFound {
@@ -133,7 +133,7 @@ func TestAlertChannelList_UserForbidden(t *testing.T) {
 
 func TestAlertsList_Success(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	ch := &store.AlertChannel{Name: "test", Type: "webhook", Config: `{}`}
 	s.AlertChannels.Create(ctx, ch)

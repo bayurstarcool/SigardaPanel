@@ -651,9 +651,15 @@ func (s *SQLiteSiteStore) Transfer(ctx context.Context, siteID, newOwnerID int64
 	}
 	defer tx.Rollback()
 
-	// Update owner, root_path, and system_user in sites table
+	// Update owner, root_path, and system_user in sites table. What the
+	// previous owner configured to run code (git deploy + webhook secret,
+	// the app start command) is cleared: the sender could otherwise trigger
+	// a deploy that runs as the new owner's Linux user.
 	res, err := tx.ExecContext(ctx,
-		`UPDATE sites SET owner_id = ?, root_path = ?, system_user = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		`UPDATE sites SET owner_id = ?, root_path = ?, system_user = ?,
+		 git_repo = NULL, git_branch = 'main', git_commit = NULL, deploy_key = NULL, webhook_secret = NULL,
+		 app_command = '', app_status = 'stopped',
+		 updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		newOwnerID, newRoot, newUsername, siteID,
 	)
 	if err != nil {
@@ -667,8 +673,9 @@ func (s *SQLiteSiteStore) Transfer(ctx context.Context, siteID, newOwnerID int64
 		return fmt.Errorf("site not found")
 	}
 
-	// Update user_sites: remove old owner assignment, add new owner with admin
-	if _, err := tx.ExecContext(ctx, `DELETE FROM user_sites WHERE user_id = ? AND site_id = ?`, newOwnerID, siteID); err != nil {
+	// Assignments made by the previous owner end with the transfer; the new
+	// owner gets admin.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM user_sites WHERE site_id = ?`, siteID); err != nil {
 		return fmt.Errorf("transfer site user_sites delete: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO user_sites (user_id, site_id, permission) VALUES (?, ?, 'admin') ON CONFLICT(user_id, site_id) DO UPDATE SET permission = 'admin'`, newOwnerID, siteID); err != nil {

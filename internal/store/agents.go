@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -86,6 +88,10 @@ func (s *SQLiteRegistrationTokenStore) MarkUsed(ctx context.Context, id int64) e
 	return nil
 }
 
+// ErrServerAlreadyRegistered: a server with the same agent address exists
+// and the registration did not prove it holds that server's agent token.
+var ErrServerAlreadyRegistered = errors.New("a server is already registered at this address")
+
 // ConsumeRegistrationTokenAndCreateServer claims a one-time token and creates
 // its server record in one transaction. Any insert failure rolls back token use.
 func (s *Store) ConsumeRegistrationTokenAndCreateServer(ctx context.Context, tokenID int64, srv *Server) error {
@@ -120,11 +126,18 @@ func (s *Store) ConsumeRegistrationTokenAndCreateServer(ctx context.Context, tok
 	// Re-running the installer on a server the panel already knows (same
 	// agent address) re-binds that server: its sites, jobs and settings stay
 	// attached and the new agent token replaces the old one, instead of a
-	// duplicate row while the sites keep pointing at a dead token.
+	// duplicate row while the sites keep pointing at a dead token. Only the
+	// holder of the current agent token may do that (the installer reads it
+	// from agent.env): anyone else with a registration token could otherwise
+	// take over another server's record by naming its address.
 	if srv.AgentURL.Valid && srv.AgentURL.String != "" {
 		var existingID int64
-		err := tx.QueryRowContext(ctx, `SELECT id FROM servers WHERE agent_url = ? ORDER BY id LIMIT 1`, srv.AgentURL.String).Scan(&existingID)
+		var existingToken string
+		err := tx.QueryRowContext(ctx, `SELECT id, agent_token FROM servers WHERE agent_url = ? ORDER BY id LIMIT 1`, srv.AgentURL.String).Scan(&existingID, &existingToken)
 		if err == nil && existingID > 0 {
+			if srv.PreviousAgentToken == "" || subtle.ConstantTimeCompare([]byte(srv.PreviousAgentToken), []byte(existingToken)) != 1 {
+				return ErrServerAlreadyRegistered
+			}
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE servers SET hostname = ?, ip_address = ?, agent_token = ?, status = ?, health_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 				srv.Hostname, srv.IPAddress, srv.AgentToken, srv.Status, srv.HealthStatus, existingID); err != nil {

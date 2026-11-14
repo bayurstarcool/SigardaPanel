@@ -1,10 +1,12 @@
 package apihttp
 
 import (
+	"database/sql"
 	"net/http"
 	"strings"
 	"testing"
 
+	"sigardapanel/internal/auth"
 	"sigardapanel/internal/store"
 )
 
@@ -61,6 +63,11 @@ func TestCreateSite_RejectsRootEscalationInputs(t *testing.T) {
 func TestCreateSite_JobPayloadCarriesSystemUser(t *testing.T) {
 	e, s, ctx := newTestAppWithAllMigrations(t)
 	token := newAdminToken(t, s, ctx)
+	admin, _ := s.Users.GetByUsername(ctx, "admin")
+	// A tenant admin runs sites as one of the users it created.
+	if err := s.Users.Create(ctx, &store.User{Username: "alice", Email: "alice@example.com", PasswordHash: "x", Role: auth.RoleUser, CreatedBy: sql.NullInt64{Int64: admin.ID, Valid: true}}); err != nil {
+		t.Fatal(err)
+	}
 	srvID := createServer(t, s, ctx)
 	rec := doRequest(t, e, "POST", "/api/v1/sites", map[string]any{
 		"server_id": srvID, "name": "x", "domain": "owner.example.com", "runtime": "static", "system_user": "alice",

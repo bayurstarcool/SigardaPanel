@@ -53,7 +53,7 @@ func TestNormalizeAgentURL(t *testing.T) {
 
 func TestLocalServerTokenRegenRefused(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	tok := newAdminToken(t, s, ctx)
+	tok := newSuperAdminToken(t, s, ctx)
 	id := addServer(t, s, ctx, "local", "http://127.0.0.1:7710")
 	if rec := doRequest(t, e, http.MethodPost, "/api/v1/servers/"+strconv.FormatInt(id, 10)+"/token", nil, tok); rec.Code != http.StatusConflict {
 		t.Fatalf("local token regen = %d %s", rec.Code, rec.Body.String())

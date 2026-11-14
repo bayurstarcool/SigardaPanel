@@ -415,3 +415,9 @@ func TestServerList_NoToken(t *testing.T) {
 		}
 	}
 }
+
+// newSuperAdminToken is newAdminToken for routes that are the host operator's.
+func newSuperAdminToken(t *testing.T, s *store.Store, ctx context.Context) string {
+	t.Helper()
+	return roleToken(t, s, ctx, "root", auth.RoleSuperAdmin)
+}

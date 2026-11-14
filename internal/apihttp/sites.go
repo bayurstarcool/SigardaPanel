@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -207,6 +208,7 @@ func (h *siteHandler) create(c *echo.Context) error {
 	if _, ok := allowedRuntimes[body.Runtime]; !ok {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid runtime")
 	}
+	rootDefaulted := body.RootPath == ""
 	if body.RootPath == "" {
 		// Future-only default: /home/<user>/htdocs/<domain>
 		// Existing sites keep their stored root_path unchanged.
@@ -238,21 +240,41 @@ func (h *siteHandler) create(c *echo.Context) error {
 		if err := siteinput.SystemUser(body.SystemUser); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid system_user")
 		}
-	} else {
-		home := "/home/"
-		body.SystemUser = ""
-		if requester != nil {
-			home = "/home/" + requester.Username + "/"
-			if siteinput.SystemUser(requester.Username) == nil {
-				body.SystemUser = requester.Username
+		if rootDefaulted {
+			body.RootPath = defaultSiteRootPath(body.SystemUser, body.Domain)
+		}
+		// Tenant admins pick only among their own account and the accounts
+		// they created, inside that account's home: another tenant's user
+		// (their files, terminal) or a path like /var/lib/sigardapanel (the
+		// panel database) must stay out of reach. super_admin is the host
+		// operator and keeps the choice.
+		if requester.Role != auth.RoleSuperAdmin {
+			if !h.adminManagesSystemUser(c.Request().Context(), requester, body.SystemUser) {
+				return echo.NewHTTPError(http.StatusForbidden, "system_user must be your own account or one of the users you created")
+			}
+			if !strings.HasPrefix(path.Clean(body.RootPath)+"/", "/home/"+body.SystemUser+"/") {
+				return echo.NewHTTPError(http.StatusForbidden, "root_path must be inside /home/"+body.SystemUser+"/")
 			}
 		}
-		if !strings.HasPrefix(body.RootPath, home) {
+	} else {
+		// The site runs as the requester's own Linux account in its home;
+		// a panel name that is a system/service account gets no site (its
+		// home is not a tenant's, e.g. ubuntu or postgres).
+		if requester == nil || siteinput.SystemUser(requester.Username) != nil {
+			return echo.NewHTTPError(http.StatusForbidden, "your account name cannot own sites on a server; ask an administrator")
+		}
+		home := "/home/" + requester.Username + "/"
+		body.SystemUser = requester.Username
+		if !strings.HasPrefix(path.Clean(body.RootPath)+"/", home) {
 			return echo.NewHTTPError(http.StatusForbidden, "root_path must be inside your home directory")
 		}
 	}
 	if body.ProxyPassURL != "" {
 		if err := siteinput.ProxyPassURL(body.ProxyPassURL); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		superAdmin := requester != nil && requester.Role == auth.RoleSuperAdmin
+		if err := siteinput.ProxyPassTarget(c.Request().Context(), body.ProxyPassURL, superAdmin); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 	}
@@ -736,6 +758,9 @@ func (h *siteHandler) updateConfig(c *echo.Context) error {
 			if err := siteinput.ProxyPassURL(*body.ProxyPassURL); err != nil {
 				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 			}
+			if err := siteinput.ProxyPassTarget(c.Request().Context(), *body.ProxyPassURL, h.isSuperAdminSession(c.Request().Context(), sess)); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+			}
 		}
 		changed := *body.ProxyPassURL != site.ProxyPassURL.String
 		if changed && site.Runtime == "proxy" {
@@ -970,10 +995,11 @@ func (h *siteHandler) transfer(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "new_owner_email required")
 	}
 
-	// Look up target user by email
+	// Look up target user by email. One answer for "no such account" and
+	// "not allowed", so the endpoint does not reveal who has an account.
 	target, err := h.store.Users.GetByEmail(c.Request().Context(), body.NewOwnerEmail)
 	if err != nil || target == nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "user not found with that email")
+		return echo.NewHTTPError(http.StatusBadRequest, "the site cannot be transferred to that account")
 	}
 
 	site, err := h.store.Sites.GetByID(c.Request().Context(), id)
@@ -1478,4 +1504,27 @@ func (h *siteHandler) appUpdateResourceLimits(c *echo.Context) error {
 		},
 		RequestID: rid,
 	})
+}
+
+// adminManagesSystemUser: a tenant admin may run sites as their own Linux
+// account or as one of the panel users they created (same name).
+func (h *siteHandler) adminManagesSystemUser(ctx context.Context, admin *store.User, name string) bool {
+	if name == admin.Username {
+		return true
+	}
+	u, err := h.store.Users.GetByUsername(ctx, name)
+	if err != nil || u == nil {
+		return false
+	}
+	return u.Role == auth.RoleUser && u.CreatedBy.Valid && u.CreatedBy.Int64 == admin.ID
+}
+
+// isSuperAdminSession reports whether the session's user is super_admin
+// (service tokens never are).
+func (h *siteHandler) isSuperAdminSession(ctx context.Context, sess *store.Session) bool {
+	if sess == nil || sess.UserID == 0 {
+		return false
+	}
+	u, err := h.store.Users.GetByID(ctx, sess.UserID)
+	return err == nil && u != nil && u.Role == auth.RoleSuperAdmin
 }

@@ -90,19 +90,27 @@ func TestReRegistrationRebindsTheExistingServer(t *testing.T) {
 	s := New(database)
 	ctx := context.Background()
 	url := sql.NullString{String: "http://203.0.113.5:7710", Valid: true}
-	register := func(hash, token string) *Server {
+	register := func(hash, token, previous string) (*Server, error) {
 		rt := &RegistrationToken{TokenHash: hash, ExpiresAt: time.Now().Add(time.Hour)}
 		if err := s.RegistrationTokens.Create(ctx, rt); err != nil {
 			t.Fatal(err)
 		}
-		srv := &Server{Name: "web1", Hostname: "web1", Status: "online", AgentToken: token, AgentURL: url, SSHPort: 22}
-		if err := s.ConsumeRegistrationTokenAndCreateServer(ctx, rt.ID, srv); err != nil {
-			t.Fatal(err)
-		}
-		return srv
+		srv := &Server{Name: "web1", Hostname: "web1", Status: "online", AgentToken: token, AgentURL: url, SSHPort: 22, PreviousAgentToken: previous}
+		return srv, s.ConsumeRegistrationTokenAndCreateServer(ctx, rt.ID, srv)
 	}
-	first := register("t1", "token-one")
-	second := register("t2", "token-two")
+	first, err := register("t1", "token-one", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Someone else naming the same address cannot take the record over.
+	if _, err := register("t-x", "attacker", "wrong"); err != ErrServerAlreadyRegistered {
+		t.Fatalf("rebind without the agent token = %v", err)
+	}
+	// The re-installed server proves it holds the current agent token.
+	second, err := register("t2", "token-two", "token-one")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if second.ID != first.ID || !second.Rebound || first.Rebound {
 		t.Fatalf("first=%d second=%d rebound=%v", first.ID, second.ID, second.Rebound)
 	}

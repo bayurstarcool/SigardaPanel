@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -99,7 +100,10 @@ type registerRequest struct {
 	Hostname          string `json:"hostname"`
 	IPAddress         string `json:"ip_address,omitempty"`
 	AgentToken        string `json:"agent_token"`
-	OSInfo            string `json:"os_info,omitempty"`
+	// PreviousAgentToken: on a re-install, the agent token the server had,
+	// proving it is the server already registered at this address.
+	PreviousAgentToken string `json:"previous_agent_token,omitempty"`
+	OSInfo             string `json:"os_info,omitempty"`
 }
 
 // registerAgent creates a server record from a registration token.
@@ -157,12 +161,17 @@ func (h *agentHandler) registerAgent(c *echo.Context) error {
 		AgentToken: req.AgentToken,
 		AgentURL:   sql.NullString{String: agentURL, Valid: true},
 		SSHPort:    22,
+
+		PreviousAgentToken: strings.TrimSpace(req.PreviousAgentToken),
 	}
 	if req.IPAddress != "" && net.ParseIP(req.IPAddress) != nil {
 		server.IPAddress = sql.NullString{String: req.IPAddress, Valid: true}
 	}
 
 	if err := h.store.ConsumeRegistrationTokenAndCreateServer(c.Request().Context(), rt.ID, server); err != nil {
+		if errors.Is(err, store.ErrServerAlreadyRegistered) {
+			return echo.NewHTTPError(http.StatusConflict, "a server is already registered at this address; re-run the installer on that server (it proves the current agent token) or remove the server in the panel first")
+		}
 		if strings.Contains(err.Error(), "already used") || strings.Contains(err.Error(), "expired") {
 			return echo.NewHTTPError(http.StatusConflict, "registration token already used or expired")
 		}
@@ -338,6 +347,8 @@ esac
 
 # ── Generate agent token ──
 echo "[2/6] Generating agent token..."
+# A re-install proves it is the server already registered here.
+PREVIOUS_AGENT_TOKEN=$(sed -n 's/^SIGARDAPANEL_AGENT_TOKEN=//p' "$CONFIG_DIR/agent.env" 2>/dev/null | head -n1 || true)
 AGENT_TOKEN=$(openssl rand -hex 32)
 echo "  Agent token generated."
 
@@ -502,8 +513,9 @@ REGISTER_RESPONSE=$("${PANEL_CURL[@]}" -sS -X POST "$PANEL_URL/api/v1/agents/reg
     -H "Content-Type: application/json" \
     -d "$(jq -n --arg registration_token "$REG_TOKEN" --arg hostname "$HOSTNAME" \
         --arg ip_address "$SERVER_IP" --arg agent_token "$AGENT_TOKEN" \
+        --arg previous_agent_token "$PREVIOUS_AGENT_TOKEN" \
         --arg os_info "$(head -n5 /etc/os-release 2>/dev/null | tr '\n' '; ')" \
-        '{registration_token:$registration_token,hostname:$hostname,ip_address:$ip_address,agent_token:$agent_token,os_info:$os_info}')")
+        '{registration_token:$registration_token,hostname:$hostname,ip_address:$ip_address,agent_token:$agent_token,previous_agent_token:$previous_agent_token,os_info:$os_info}')")
 
 if ! echo "$REGISTER_RESPONSE" | grep -q '"server_id"'; then
     echo "Error: registration failed"

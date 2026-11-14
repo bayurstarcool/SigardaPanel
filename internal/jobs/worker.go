@@ -21,6 +21,7 @@ import (
 	"sigardapanel/internal/nginx"
 	"sigardapanel/internal/notify"
 	"sigardapanel/internal/secrets"
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -721,6 +722,15 @@ func (w *Worker) siteCreatePayload(ctx context.Context, site *store.Site, raw st
 	setIfMissing("proxy_pass_url", site.ProxyPassURL.String, site.ProxyPassURL.Valid && site.ProxyPassURL.String != "")
 	setIfMissing("php_version", site.PHPVersion.String, site.PHPVersion.Valid && site.PHPVersion.String != "")
 	setIfMissing("php_ini", site.PHPIni.String, site.PHPIni.Valid && site.PHPIni.String != "")
+	// Settings stored before the allowlist existed are dropped, not sent:
+	// the vhost keeps regenerating with the allowed ones.
+	if raw, ok := p["php_ini"].(string); ok {
+		if kept, _ := siteinput.FilterPHPIni(raw); kept != "" {
+			p["php_ini"] = kept
+		} else {
+			delete(p, "php_ini")
+		}
+	}
 	if !siteIsNew(site) {
 		// An existing site: regenerate the vhost only (no starter files, no
 		// container re-creation).

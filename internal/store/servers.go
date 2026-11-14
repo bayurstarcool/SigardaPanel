@@ -26,9 +26,12 @@ type Server struct {
 	AgentVersion    sql.NullString // reported by the agent's /health
 	// Rebound is set by agent registration when an existing server (same
 	// agent address) was re-bound instead of a new one created.
-	Rebound   bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Rebound bool
+	// PreviousAgentToken (registration only, not stored) proves the caller
+	// controls the server already registered at the same agent address.
+	PreviousAgentToken string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // ServerRepository defines server persistence operations.
