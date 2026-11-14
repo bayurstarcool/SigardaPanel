@@ -303,6 +303,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 
 	// System specifications and benchmarks
 	tasks.GET("/system/spec", r.systemSpecTask)
+	tasks.GET("/system/public-ip", r.publicIPTask)
 	tasks.GET("/system/benchmark", r.systemBenchmarkTask)
 
 	// Stack management (install/manage software on the server)

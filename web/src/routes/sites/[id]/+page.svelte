@@ -472,7 +472,7 @@
                 {#if dns.zone}
                   <dl class="space-y-1.5">
                     <div class="flex justify-between gap-3"><dt class="text-subtle">Zone</dt><dd class="font-mono text-[12.5px] text-fg">{dns.zone}</dd></div>
-                    {#if dns.content}<div class="flex justify-between gap-3"><dt class="text-subtle">Server IP</dt><dd class="font-mono text-[12.5px] text-fg">{dns.content}</dd></div>{/if}
+                    {#if dns.content}<div class="flex justify-between gap-3"><dt class="text-subtle">Server IP</dt><dd class="text-right"><span class="font-mono text-[12.5px] text-fg">{dns.content}</span>{#if dns.content_source}<span class="block text-[11.5px] text-subtle">{dns.content_source}</span>{/if}</dd></div>{/if}
                   </dl>
                 {/if}
                 {#if dns.existing?.length}

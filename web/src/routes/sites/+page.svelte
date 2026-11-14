@@ -194,6 +194,19 @@
       })
       .catch(() => { if (form.server_id === sid) serverPhp = null; });
   });
+  // The IPv4 the site's DNS record will point at (the server's public
+  // address, or the one its agent detects behind NAT).
+  let dnsIP = $state<{ ip: string; source: string; error?: string } | null>(null);
+  let dnsIPFor = 0;
+  $effect(() => {
+    const sid = form.server_id;
+    if (!cfEnabled || sid <= 0 || sid === dnsIPFor) return;
+    dnsIPFor = sid;
+    dnsIP = null;
+    apiFetch(auth.token, 'GET', `servers/${sid}/public-ip`)
+      .then((d: any) => { if (form.server_id === sid) dnsIP = d; })
+      .catch(() => { if (form.server_id === sid) dnsIPFor = 0; });
+  });
   const phpChoices = $derived(serverPhp && serverPhp.length ? serverPhp : phpVersions);
 
   const sortedSites = $derived((() => {
@@ -325,6 +338,13 @@
               <input type="checkbox" bind:checked={cfEnabled} class="checkbox" />
               Cloudflare DNS
             </label>
+            {#if cfEnabled && form.server_id > 0}
+              <p class="hint mt-0 ml-6">
+                {#if !dnsIP}Detecting the server's public IP…
+                {:else if dnsIP.ip}Points to <span class="font-mono text-muted">{dnsIP.ip}</span> <span class="text-subtle">({dnsIP.source})</span>
+                {:else}<span class="text-warning">{dnsIP.error || 'Public IP unknown'}</span>{/if}
+              </p>
+            {/if}
             {#if cfEnabled}
               <label class="ml-6 flex cursor-pointer items-center gap-2 text-[13px] text-muted">
                 <input type="checkbox" bind:checked={cfOverwrite} class="checkbox" />

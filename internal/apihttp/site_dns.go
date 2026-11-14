@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,12 +49,14 @@ type dnsRecordView struct {
 // that the panel did not create), replaced, conflict (other records, left
 // alone), missing (check only: nothing there yet), skipped, error.
 type siteDNSResult struct {
-	Status   string          `json:"status"`
-	Zone     string          `json:"zone,omitempty"`
-	Name     string          `json:"name,omitempty"`
-	Content  string          `json:"content,omitempty"`
-	Message  string          `json:"message"`
-	Existing []dnsRecordView `json:"existing,omitempty"`
+	Status  string `json:"status"`
+	Zone    string `json:"zone,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Content string `json:"content,omitempty"`
+	// ContentSource says where the server IP came from (server address, detected).
+	ContentSource string          `json:"content_source,omitempty"`
+	Message       string          `json:"message"`
+	Existing      []dnsRecordView `json:"existing,omitempty"`
 	// Provisioned keeps the old response field for clients that read it.
 	Provisioned bool   `json:"provisioned"`
 	Error       string `json:"error,omitempty"`
@@ -63,43 +64,6 @@ type siteDNSResult struct {
 
 func dnsFail(msg string) siteDNSResult {
 	return siteDNSResult{Status: "error", Message: msg, Error: msg}
-}
-
-// publicServerIP is the IPv4 address DNS should point at: the server's
-// address when it is public. Cloud VMs often report a private one (10.x,
-// 172.16/12, 192.168.x, 100.64/10); pointing a domain there breaks it.
-func publicServerIP(server *store.Server) (string, error) {
-	if server == nil || !server.IPAddress.Valid || strings.TrimSpace(server.IPAddress.String) == "" {
-		return "", fmt.Errorf("the server has no IP address; set its public IP on the Servers page")
-	}
-	raw := strings.TrimSpace(server.IPAddress.String)
-	ip := net.ParseIP(raw).To4()
-	if ip == nil {
-		return "", fmt.Errorf("the server's address %s is not an IPv4 address; set its public IPv4 on the Servers page", raw)
-	}
-	if !isPublicIPv4(ip) {
-		return "", fmt.Errorf("the server's address %s is private or reserved; set its public IP on the Servers page so DNS can point to it", raw)
-	}
-	return ip.String(), nil
-}
-
-var reservedV4 = func() []*net.IPNet {
-	var out []*net.IPNet
-	for _, c := range []string{"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
-		"192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/3"} {
-		_, n, _ := net.ParseCIDR(c)
-		out = append(out, n)
-	}
-	return out
-}()
-
-func isPublicIPv4(ip net.IP) bool {
-	for _, n := range reservedV4 {
-		if n.Contains(ip) {
-			return false
-		}
-	}
-	return true
 }
 
 // siteDNS runs the DNS logic for a site with its owner's Cloudflare account
@@ -121,7 +85,7 @@ func (h *siteHandler) siteDNS(ctx context.Context, site *store.Site, actorID int
 		return siteDNSResult{Status: "skipped", Message: msg}
 	}
 	server, _ := h.store.Servers.GetByID(ctx, site.ServerID)
-	ip, err := publicServerIP(server)
+	ip, ipSource, err := dnsTargetIP(ctx, h.store, server)
 	if err != nil {
 		return dnsFail(err.Error())
 	}
@@ -145,7 +109,7 @@ func (h *siteHandler) siteDNS(ctx context.Context, site *store.Site, actorID int
 		}
 		return dnsFail("No Cloudflare zone in the site owner's account contains " + site.Domain + ".")
 	}
-	res := siteDNSResult{Zone: zone.Name, Name: site.Domain, Content: ip}
+	res := siteDNSResult{Zone: zone.Name, Name: site.Domain, Content: ip, ContentSource: ipSource}
 	marker := dnsMarker(site.ID)
 
 	// A record this site already owns: keep it pointing at the server.

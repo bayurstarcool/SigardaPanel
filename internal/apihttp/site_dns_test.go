@@ -1,6 +1,7 @@
 package apihttp
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/cloudflare"
+	"sigardapanel/internal/publicip"
 	"sigardapanel/internal/store"
 )
 
@@ -91,7 +93,11 @@ func dnsFixture(t *testing.T, serverIP string, cf *fakeCF) (*authzFixture, *stor
 	}
 	prev := newDNSClient
 	newDNSClient = func(token, email string) dnsAPI { return cf }
-	t.Cleanup(func() { newDNSClient = prev })
+	prevIP := fetchAgentPublicIP
+	fetchAgentPublicIP = func(ctx context.Context, srv *store.Server, refresh bool) (publicip.Result, error) {
+		return publicip.Result{}, fmt.Errorf("agent offline")
+	}
+	t.Cleanup(func() { newDNSClient = prev; fetchAgentPublicIP = prevIP })
 	return f, owner, tok
 }
 
@@ -350,5 +356,47 @@ func TestSiteDNSFailedRemovalIsKept(t *testing.T) {
 	}
 	if recs, _ := f.s.SiteDNS.ListBySite(f.ctx, id); len(recs) != 1 {
 		t.Fatalf("tracking row dropped although the record is still there: %+v", recs)
+	}
+}
+
+func TestSiteDNSDetectsPublicIPBehindNAT(t *testing.T) {
+	cf := newFakeCF("example.com")
+	f, _, tok := dnsFixture(t, "10.0.0.5", cf)
+	calls := 0
+	fetchAgentPublicIP = func(ctx context.Context, srv *store.Server, refresh bool) (publicip.Result, error) {
+		calls++
+		return publicip.Result{IP: "43.173.51.154", Source: "lookup"}, nil
+	}
+	_, dns := createSiteDNS(t, f, tok, "nat.example.com", false)
+	if dns["status"] != "created" || dns["content"] != "43.173.51.154" || !strings.Contains(fmt.Sprint(dns["content_source"]), "detected") {
+		t.Fatalf("dns = %v", dns)
+	}
+	if recs := cf.byName("nat.example.com"); len(recs) != 1 || recs[0].Content != "43.173.51.154" {
+		t.Fatalf("records = %+v", recs)
+	}
+	// Cached: the next site does not ask the agent again.
+	createSiteDNS(t, f, tok, "nat2.example.com", false)
+	if calls != 1 {
+		t.Fatalf("agent asked %d times", calls)
+	}
+	// The endpoint the create form uses.
+	rec := f.do("GET", "/api/v1/servers/"+strconv.FormatInt(f.serverID, 10)+"/public-ip", nil, tok)
+	if !strings.Contains(rec.Body.String(), `"ip":"43.173.51.154"`) {
+		t.Fatalf("public-ip = %s", rec.Body.String())
+	}
+	if rec := f.do("GET", "/api/v1/servers/"+strconv.FormatInt(f.serverID, 10)+"/public-ip?refresh=1", nil, tok); rec.Code != http.StatusForbidden {
+		t.Fatalf("tenant refresh = %d", rec.Code)
+	}
+}
+
+func TestSiteDNSManualPublicAddressWins(t *testing.T) {
+	cf := newFakeCF("example.com")
+	f, _, tok := dnsFixture(t, "203.0.114.10", cf)
+	fetchAgentPublicIP = func(ctx context.Context, srv *store.Server, refresh bool) (publicip.Result, error) {
+		t.Fatal("agent asked although the server address is public")
+		return publicip.Result{}, nil
+	}
+	if _, dns := createSiteDNS(t, f, tok, "m.example.com", false); dns["content"] != "203.0.114.10" {
+		t.Fatalf("dns = %v", dns)
 	}
 }
