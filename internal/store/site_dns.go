@@ -70,3 +70,11 @@ func (s *SiteDNSStore) DeleteBySite(ctx context.Context, siteID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM site_dns_records WHERE site_id = ?`, siteID)
 	return err
 }
+
+// MarkUnmanagedBySite stops the panel from changing or removing the site's
+// records (they were made with another account's token, e.g. before a
+// transfer); they stay in Cloudflare and are only reported.
+func (s *SiteDNSStore) MarkUnmanagedBySite(ctx context.Context, siteID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE site_dns_records SET managed = 0 WHERE site_id = ?`, siteID)
+	return err
+}

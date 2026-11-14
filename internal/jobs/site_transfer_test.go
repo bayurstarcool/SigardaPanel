@@ -57,9 +57,18 @@ func TestSiteTransferUpdatesRecordAfterAgent(t *testing.T) {
 		t.Fatalf("a failed move changed the record: owner=%d root=%s", got.OwnerID.Int64, got.RootPath)
 	}
 
+	// Alice's DNS record: the panel stops managing it with her token.
+	if err := s.SiteDNS.Add(ctx, &store.SiteDNSRecord{SiteID: site.ID, UserID: alice.ID, ZoneID: "z", ZoneName: "example.com",
+		RecordID: "r", Name: site.Domain, Type: "A", Content: "203.0.114.1", Managed: true}); err != nil {
+		t.Fatal(err)
+	}
+
 	fail = false
 	newJob()
 	w.processOne(ctx)
+	if recs, _ := s.SiteDNS.ListBySite(ctx, site.ID); len(recs) != 1 || recs[0].Managed {
+		t.Fatalf("dns records after transfer = %+v", recs)
+	}
 	got, _ := s.Sites.GetByID(ctx, site.ID)
 	if got.OwnerID.Int64 != bob.ID || got.RootPath != "/home/bob/htdocs/t.example.com" {
 		t.Fatalf("record after transfer: owner=%d root=%s", got.OwnerID.Int64, got.RootPath)

@@ -34,7 +34,12 @@ var newDNSClient = func(token, email string) dnsAPI {
 // is only changed or removed by the panel while it still carries it.
 func dnsMarker(siteID int64) string { return "SigardaPanel site:" + strconv.FormatInt(siteID, 10) }
 
+// hasDNSMarker is an exact match: "SigardaPanel site:1" must not match the
+// record of site 12, nor a comment someone wrote around the marker.
+func hasDNSMarker(comment, marker string) bool { return strings.TrimSpace(comment) == marker }
+
 type dnsRecordView struct {
+	ID      string `json:"id,omitempty"`
 	Type    string `json:"type"`
 	Content string `json:"content"`
 	Proxied bool   `json:"proxied"`
@@ -97,14 +102,23 @@ func isPublicIPv4(ip net.IP) bool {
 	return true
 }
 
-// siteDNS runs the DNS logic for a site with userID's Cloudflare account.
-// dryRun only reports. overwrite (explicit consent) replaces A/AAAA/CNAME
-// records at the site's name that point elsewhere; without it they are left
-// alone and reported as a conflict.
-func (h *siteHandler) siteDNS(ctx context.Context, site *store.Site, userID int64, dryRun, overwrite bool) siteDNSResult {
-	cfg, err := h.store.Cloudflare.GetConfig(userID)
+// siteDNS runs the DNS logic for a site with its owner's Cloudflare account
+// (actorID is who asked, for the audit log). dryRun only reports. overwrite
+// (explicit consent) replaces A/AAAA/CNAME records at the site's name that
+// point elsewhere; without it they are left alone and reported as a conflict.
+// replaceIDs, when not nil, limits that consent to the records the user saw.
+func (h *siteHandler) siteDNS(ctx context.Context, site *store.Site, actorID int64, dryRun, overwrite bool, replaceIDs map[string]bool) siteDNSResult {
+	if !site.OwnerID.Valid {
+		return siteDNSResult{Status: "skipped", Message: "The site has no owner, so no Cloudflare account to use."}
+	}
+	ownerID := site.OwnerID.Int64
+	cfg, err := h.store.Cloudflare.GetConfig(ownerID)
 	if err != nil || cfg == nil || cfg.APIToken == "" {
-		return siteDNSResult{Status: "skipped", Message: "No Cloudflare account is connected (Cloudflare page)."}
+		msg := "No Cloudflare account is connected (Cloudflare page)."
+		if actorID != ownerID {
+			msg = "The site owner has not connected a Cloudflare account."
+		}
+		return siteDNSResult{Status: "skipped", Message: msg}
 	}
 	server, _ := h.store.Servers.GetByID(ctx, site.ServerID)
 	ip, err := publicServerIP(server)
@@ -116,9 +130,20 @@ func (h *siteHandler) siteDNS(ctx context.Context, site *store.Site, userID int6
 	if err != nil {
 		return dnsFail("Cloudflare: " + err.Error())
 	}
-	zone := cloudflare.FindMatchingZone(zones, site.Domain)
+	// Only active zones: a pending zone's records are not served yet, and a
+	// moved or deactivated one belongs to nameservers elsewhere.
+	var active []cloudflare.Zone
+	for _, z := range zones {
+		if z.Status == "" || z.Status == "active" {
+			active = append(active, z)
+		}
+	}
+	zone := cloudflare.FindMatchingZone(active, site.Domain)
 	if zone == nil {
-		return dnsFail("No Cloudflare zone in your account contains " + site.Domain + ".")
+		if z := cloudflare.FindMatchingZone(zones, site.Domain); z != nil {
+			return dnsFail(fmt.Sprintf("The Cloudflare zone %s is %s, not active; finish its setup in Cloudflare first.", z.Name, z.Status))
+		}
+		return dnsFail("No Cloudflare zone in the site owner's account contains " + site.Domain + ".")
 	}
 	res := siteDNSResult{Zone: zone.Name, Name: site.Domain, Content: ip}
 	marker := dnsMarker(site.ID)
@@ -147,10 +172,10 @@ func (h *siteHandler) siteDNS(ctx context.Context, site *store.Site, userID int6
 			res.Message = fmt.Sprintf("%s points to this server (%s).", site.Domain, ip)
 			return res
 		}
-		if rec.Managed && strings.Contains(live.Comment, marker) && live.Type == "A" {
+		if rec.Managed && hasDNSMarker(live.Comment, marker) && live.Type == "A" {
 			if dryRun {
 				res.Status, res.Message = "conflict", fmt.Sprintf("The panel's record points to %s, not this server (%s); update it.", live.Content, ip)
-				res.Existing = []dnsRecordView{{Type: live.Type, Content: live.Content, Proxied: live.Proxied}}
+				res.Existing = []dnsRecordView{{ID: live.ID, Type: live.Type, Content: live.Content, Proxied: live.Proxied}}
 				return res
 			}
 			if _, err := cf.UpdateDNSRecordPartial(rec.ZoneID, rec.RecordID, map[string]any{"content": ip}); err != nil {
@@ -188,51 +213,115 @@ func (h *siteHandler) siteDNS(ctx context.Context, site *store.Site, userID int6
 		if !dryRun {
 			for _, r := range records {
 				if r.Type == "A" && r.Content == ip {
-					managed := strings.Contains(r.Comment, marker)
-					h.rememberDNS(ctx, site.ID, userID, zone, r, managed)
+					managed := hasDNSMarker(r.Comment, marker)
+					h.rememberDNS(ctx, site.ID, ownerID, zone, r, managed)
 					break
 				}
 			}
 		}
 		return res
 	}
-	if len(conflicts) > 0 && !overwrite {
+	view := func(r cloudflare.DNSRecord) dnsRecordView {
+		return dnsRecordView{ID: r.ID, Type: r.Type, Content: r.Content, Proxied: r.Proxied}
+	}
+	// replaceIDs (from the replace dialog) lists the records the user saw and
+	// confirmed; any other conflicting record means the name changed since.
+	unconfirmed := false
+	if replaceIDs != nil {
+		for _, r := range conflicts {
+			if !replaceIDs[r.ID] {
+				unconfirmed = true
+			}
+		}
+	}
+	if len(conflicts) > 0 && (!overwrite || unconfirmed) {
 		res.Status = "conflict"
 		for _, r := range conflicts {
-			res.Existing = append(res.Existing, dnsRecordView{Type: r.Type, Content: r.Content, Proxied: r.Proxied})
+			res.Existing = append(res.Existing, view(r))
 		}
 		res.Message = fmt.Sprintf("%s already has DNS records pointing elsewhere; nothing was changed.", site.Domain)
+		if overwrite {
+			res.Message = fmt.Sprintf("The DNS records for %s changed since you confirmed; nothing was changed. Review them and confirm again.", site.Domain)
+		}
 		return res
 	}
 	if dryRun {
 		res.Status, res.Message = "missing", fmt.Sprintf("No record for %s yet.", site.Domain)
 		return res
 	}
-	for _, r := range conflicts {
+
+	deleteConflict := func(r cloudflare.DNSRecord) error {
 		if err := cf.DeleteDNSRecord(zone.ID, r.ID); err != nil {
-			return dnsFail("Cloudflare: could not replace the existing " + r.Type + " record: " + err.Error())
+			return fmt.Errorf("Cloudflare: could not remove the existing %s record (%s): %w", r.Type, r.Content, err)
 		}
-		res.Existing = append(res.Existing, dnsRecordView{Type: r.Type, Content: r.Content, Proxied: r.Proxied})
+		res.Existing = append(res.Existing, view(r))
+		h.audit.RecordAction(ctx, actorID, "dns_replace", audit.ResourceSite, site.ID, map[string]any{
+			"name": site.Domain, "zone": zone.Name, "deleted": view(r), "content": ip,
+		})
+		return nil
+	}
+	partial := func(err error) siteDNSResult {
+		out := dnsFail(err.Error())
+		out.Zone, out.Name, out.Content, out.Existing = res.Zone, res.Name, res.Content, res.Existing
+		if len(res.Existing) > 0 {
+			out.Message += fmt.Sprintf(" (%d record(s) were already removed; see the audit log)", len(res.Existing))
+			out.Error = out.Message
+		}
+		return out
+	}
+
+	// A correct A record already there: only the conflicting ones go.
+	if correct > 0 {
+		for _, r := range conflicts {
+			if err := deleteConflict(r); err != nil {
+				return partial(err)
+			}
+		}
+		for _, r := range records {
+			if r.Type == "A" && r.Content == ip {
+				h.rememberDNS(ctx, site.ID, ownerID, zone, r, hasDNSMarker(r.Comment, marker))
+				break
+			}
+		}
+		res.Status = "replaced"
+		res.Message = fmt.Sprintf("Removed %d record(s) for %s; the existing A record to this server (%s) was kept.", len(conflicts), site.Domain, ip)
+		return res
+	}
+
+	// A CNAME cannot coexist with an A record, so it goes first; A/AAAA
+	// records go only once the new record exists, so a failed create leaves
+	// the name resolving as before.
+	var later []cloudflare.DNSRecord
+	for _, r := range conflicts {
+		if r.Type == "CNAME" {
+			if err := deleteConflict(r); err != nil {
+				return partial(err)
+			}
+		} else {
+			later = append(later, r)
+		}
 	}
 	proxied := true
 	created, err := cf.CreateDNSRecord(zone.ID, cloudflare.CreateDNSRecordRequest{
 		Name: site.Domain, Type: "A", Content: ip, TTL: 1, Proxied: &proxied, Comment: marker,
 	})
 	if err != nil {
-		return dnsFail("Cloudflare: " + err.Error())
+		return partial(fmt.Errorf("Cloudflare: %w", err))
 	}
-	h.rememberDNS(ctx, site.ID, userID, zone, *created, true)
+	h.rememberDNS(ctx, site.ID, ownerID, zone, *created, true)
 	res.Provisioned = true
+	for _, r := range later {
+		if err := deleteConflict(r); err != nil {
+			return partial(err)
+		}
+	}
 	if len(conflicts) > 0 {
 		res.Status = "replaced"
 		res.Message = fmt.Sprintf("Replaced %d record(s) for %s with an A record to this server (%s).", len(conflicts), site.Domain, ip)
-		h.audit.RecordAction(ctx, userID, "dns_replace", audit.ResourceSite, site.ID, map[string]any{
-			"name": site.Domain, "zone": zone.Name, "replaced": res.Existing, "content": ip,
-		})
 	} else {
 		res.Status = "created"
 		res.Message = fmt.Sprintf("Created an A record for %s pointing to this server (%s), proxied by Cloudflare.", site.Domain, ip)
-		h.audit.RecordAction(ctx, userID, "dns_create", audit.ResourceSite, site.ID, map[string]any{"name": site.Domain, "zone": zone.Name, "content": ip})
+		h.audit.RecordAction(ctx, actorID, "dns_create", audit.ResourceSite, site.ID, map[string]any{"name": site.Domain, "zone": zone.Name, "content": ip})
 	}
 	return res
 }
@@ -266,35 +355,44 @@ func (h *siteHandler) removeSiteDNS(ctx context.Context, site *store.Site) []str
 	for _, rec := range stored {
 		if !rec.Managed {
 			notes = append(notes, rec.Name+": existing record left in place")
+			_ = h.store.SiteDNS.Delete(ctx, rec.ID)
 			continue
 		}
 		cfg, err := h.store.Cloudflare.GetConfig(rec.UserID)
 		if err != nil || cfg == nil || cfg.APIToken == "" {
-			notes = append(notes, rec.Name+": Cloudflare account no longer connected; record left in place")
+			notes = append(notes, rec.Name+": Cloudflare account no longer connected; record left in place, remove it in Cloudflare")
+			_ = h.store.SiteDNS.Delete(ctx, rec.ID)
 			continue
 		}
 		cf := newDNSClient(cfg.APIToken, cfg.Email)
 		live, err := cf.GetDNSRecord(rec.ZoneID, rec.RecordID)
+		handled := true
 		switch {
 		case err != nil:
-			notes = append(notes, rec.Name+": "+err.Error())
+			notes = append(notes, rec.Name+": could not check the record ("+err.Error()+"); remove it in Cloudflare if it is no longer needed")
+			handled = false
 		case live == nil:
 			notes = append(notes, rec.Name+": already removed")
-		case live.Content != rec.Content || !strings.Contains(live.Comment, marker):
+		case live.Content != rec.Content || !hasDNSMarker(live.Comment, marker):
 			notes = append(notes, rec.Name+": changed outside the panel; left in place")
 		default:
 			if err := cf.DeleteDNSRecord(rec.ZoneID, rec.RecordID); err != nil {
-				notes = append(notes, rec.Name+": "+err.Error())
+				notes = append(notes, rec.Name+": could not remove the record ("+err.Error()+"); remove it in Cloudflare")
+				handled = false
 			} else {
 				notes = append(notes, rec.Name+": DNS record removed")
 			}
 		}
+		// A row whose removal failed stays, as the record of what is left
+		// in Cloudflare (site ids are never reused).
+		if handled {
+			_ = h.store.SiteDNS.Delete(ctx, rec.ID)
+		}
 	}
-	_ = h.store.SiteDNS.DeleteBySite(ctx, site.ID)
 	return notes
 }
 
-// GET /api/v1/sites/:id/dns: the site's DNS state with the caller's
+// GET /api/v1/sites/:id/dns: the site's DNS state with the site owner's
 // Cloudflare account (nothing is changed).
 func (h *siteHandler) getSiteDNS(c *echo.Context) error {
 	site, err := h.getSiteForUser(c)
@@ -305,11 +403,14 @@ func (h *siteHandler) getSiteDNS(c *echo.Context) error {
 	if sess == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
 	}
-	res := h.siteDNS(c.Request().Context(), site, sess.UserID, true, false)
+	res := h.siteDNS(c.Request().Context(), site, sess.UserID, true, false, nil)
 	return c.JSON(http.StatusOK, httpjson.Success{Data: res, RequestID: c.Response().Header().Get(echo.HeaderXRequestID)})
 }
 
-// POST /api/v1/sites/:id/dns {overwrite}: create or repair the site's record.
+// POST /api/v1/sites/:id/dns {overwrite, replace_ids}: create or repair the
+// site's record with the owner's Cloudflare account. Only the owner (or a
+// super_admin) may use that account; replace_ids are the conflicting record
+// ids the user confirmed, and nothing else is deleted.
 func (h *siteHandler) syncSiteDNS(c *echo.Context) error {
 	site, err := h.getSiteForUserPerm(c, sitePermWrite)
 	if err != nil {
@@ -319,11 +420,24 @@ func (h *siteHandler) syncSiteDNS(c *echo.Context) error {
 	if sess == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
 	}
-	var body struct {
-		Overwrite bool `json:"overwrite"`
+	if !h.isSiteOwnerOrSuperAdmin(c.Request().Context(), sess, site) {
+		return echo.NewHTTPError(http.StatusForbidden, "only the site owner can change its DNS records")
 	}
-	_ = c.Bind(&body)
-	res := h.siteDNS(c.Request().Context(), site, sess.UserID, false, body.Overwrite)
+	var body struct {
+		Overwrite  bool     `json:"overwrite"`
+		ReplaceIDs []string `json:"replace_ids"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+	var replace map[string]bool
+	if body.Overwrite {
+		replace = map[string]bool{}
+		for _, id := range body.ReplaceIDs {
+			replace[id] = true
+		}
+	}
+	res := h.siteDNS(c.Request().Context(), site, sess.UserID, false, body.Overwrite, replace)
 	code := http.StatusOK
 	if res.Status == "error" {
 		code = http.StatusUnprocessableEntity

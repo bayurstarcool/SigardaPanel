@@ -251,3 +251,104 @@ func TestFindMatchingZone(t *testing.T) {
 		}
 	}
 }
+
+func dnsSiteID(t *testing.T, f *authzFixture, tok, domain string) string {
+	t.Helper()
+	id, _ := createSiteDNS(t, f, tok, domain, false)
+	return strconv.FormatInt(id, 10)
+}
+
+func TestSiteDNSOverwriteKeepsCorrectRecordAndOrder(t *testing.T) {
+	cf := newFakeCF("example.com")
+	keep := cf.add("z1", "both.example.com", "A", "203.0.114.10", "")
+	stale := cf.add("z1", "both.example.com", "A", "198.51.99.9", "")
+	f, _, tok := dnsFixture(t, "203.0.114.10", cf)
+	_, dns := createSiteDNS(t, f, tok, "both.example.com", true)
+	if dns["status"] != "replaced" {
+		t.Fatalf("dns = %v", dns)
+	}
+	if _, ok := cf.records[keep]; !ok {
+		t.Fatal("the correct existing A record was removed")
+	}
+	if _, ok := cf.records[stale]; ok {
+		t.Fatal("the conflicting A record was kept")
+	}
+	if recs := cf.byName("both.example.com"); len(recs) != 1 {
+		t.Fatalf("a duplicate record was created: %+v", recs)
+	}
+}
+
+func TestSiteDNSReplaceOnlyConfirmedRecords(t *testing.T) {
+	cf := newFakeCF("example.com")
+	seen := cf.add("z1", "c.example.com", "A", "198.51.99.1", "")
+	f, _, tok := dnsFixture(t, "203.0.114.10", cf)
+	sid := dnsSiteID(t, f, tok, "c.example.com")
+	// A record appears after the user opened the dialog.
+	late := cf.add("z1", "c.example.com", "AAAA", "2001:db8::1", "")
+	rec := f.do("POST", "/api/v1/sites/"+sid+"/dns", map[string]any{"overwrite": true, "replace_ids": []string{seen}}, tok)
+	if !strings.Contains(rec.Body.String(), `"status":"conflict"`) {
+		t.Fatalf("unconfirmed record replaced: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := cf.records[seen]; !ok {
+		t.Fatal("deleted although another record was unconfirmed")
+	}
+	rec = f.do("POST", "/api/v1/sites/"+sid+"/dns", map[string]any{"overwrite": true, "replace_ids": []string{seen, late}}, tok)
+	if !strings.Contains(rec.Body.String(), `"status":"replaced"`) {
+		t.Fatalf("confirmed replace = %d %s", rec.Code, rec.Body.String())
+	}
+	if recs := cf.byName("c.example.com"); len(recs) != 1 || recs[0].Content != "203.0.114.10" {
+		t.Fatalf("after replace = %+v", recs)
+	}
+}
+
+func TestSiteDNSUsesOwnerAccountAndOwnerOnlySync(t *testing.T) {
+	cf := newFakeCF("example.com")
+	f, owner, tok := dnsFixture(t, "203.0.114.10", cf)
+	sid := dnsSiteID(t, f, tok, "own.example.com")
+	id, _ := strconv.ParseInt(sid, 10, 64)
+	writer, wtok := f.user("writer", auth.RoleUser)
+	if err := f.s.UserSites.Assign(f.ctx, writer.ID, id, "write"); err != nil {
+		t.Fatal(err)
+	}
+	// The writer has no Cloudflare account; the check still uses the owner's.
+	rec := f.do("GET", "/api/v1/sites/"+sid+"/dns", nil, wtok)
+	if !strings.Contains(rec.Body.String(), `"status":"managed"`) {
+		t.Fatalf("writer check = %s", rec.Body.String())
+	}
+	if rec := f.do("POST", "/api/v1/sites/"+sid+"/dns", map[string]any{}, wtok); rec.Code != http.StatusForbidden {
+		t.Fatalf("writer sync = %d", rec.Code)
+	}
+	_ = owner
+}
+
+func TestSiteDNSExactMarkerAndInactiveZone(t *testing.T) {
+	if hasDNSMarker("SigardaPanel site:12", dnsMarker(1)) || hasDNSMarker("x SigardaPanel site:1", dnsMarker(1)) || !hasDNSMarker(" SigardaPanel site:1 ", dnsMarker(1)) {
+		t.Fatal("marker match is not exact")
+	}
+	cf := newFakeCF("example.com")
+	cf.zones[0].Status = "pending"
+	f, _, tok := dnsFixture(t, "203.0.114.10", cf)
+	_, dns := createSiteDNS(t, f, tok, "p.example.com", false)
+	if dns["status"] != "error" || !strings.Contains(fmt.Sprint(dns["message"]), "pending") || len(cf.records) != 0 {
+		t.Fatalf("pending zone: %v", dns)
+	}
+}
+
+type failingDeleteCF struct{ *fakeCF }
+
+func (f failingDeleteCF) DeleteDNSRecord(zoneID, id string) error { return fmt.Errorf("rate limited") }
+
+func TestSiteDNSFailedRemovalIsKept(t *testing.T) {
+	cf := newFakeCF("example.com")
+	f, _, tok := dnsFixture(t, "203.0.114.10", cf)
+	sid := dnsSiteID(t, f, tok, "gone.example.com")
+	id, _ := strconv.ParseInt(sid, 10, 64)
+	newDNSClient = func(token, email string) dnsAPI { return failingDeleteCF{cf} }
+	rec := f.do("DELETE", "/api/v1/sites/"+sid, nil, tok)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "remove it in Cloudflare") {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
+	}
+	if recs, _ := f.s.SiteDNS.ListBySite(f.ctx, id); len(recs) != 1 {
+		t.Fatalf("tracking row dropped although the record is still there: %+v", recs)
+	}
+}

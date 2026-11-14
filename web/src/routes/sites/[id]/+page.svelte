@@ -82,6 +82,8 @@
   const canWrite = $derived(!!site?.can_write);
   const canDelete = $derived(!!site?.can_delete);
   const canTransfer = $derived(!!site?.can_transfer);
+  // DNS changes use the owner's Cloudflare account: owner or super_admin only.
+  const canDNS = $derived(!!site?.can_delete);
   const noRoot = $derived(site?.runtime === 'proxy'); // a reverse proxy serves no files of its own
   const noGit = $derived(site?.runtime === 'proxy' || site?.runtime === 'docker');
   const hasSSL = $derived(!!site?.ssl_status && site.ssl_status !== 'none');
@@ -209,7 +211,7 @@
     } catch (e: any) { toasts.error(e.message); } finally { toggleBusy = false; }
   }
 
-  // Cloudflare DNS for the site (with the viewer's Cloudflare account).
+  // Cloudflare DNS for the site (with the site owner's Cloudflare account).
   let dns = $state<any>(null);
   let dnsBusy = $state(false);
   let showDnsReplace = $state(false);
@@ -219,7 +221,10 @@
   async function syncDNS(overwrite = false) {
     dnsBusy = true;
     try {
-      const r = await apiFetch(auth.token, 'POST', `sites/${siteId}/dns`, { overwrite });
+      // Replacing sends the records the user saw in the dialog; the API
+      // refuses if anything else is there now.
+      const replace_ids = overwrite ? (dns?.existing || []).map((r: any) => r.id).filter(Boolean) : [];
+      const r = await apiFetch(auth.token, 'POST', `sites/${siteId}/dns`, { overwrite, replace_ids });
       dns = r;
       if (r?.status === 'conflict') toasts.warning(r.message); else toasts.success(r?.message || 'DNS updated');
       showDnsReplace = false;
@@ -243,8 +248,14 @@
     if (!site || deleteConfirm.trim().toLowerCase() !== site.domain.toLowerCase()) return;
     deleteBusy = true;
     try {
-      await apiFetch(auth.token, 'DELETE', `sites/${siteId}?delete_files=${deleteFiles}`);
+      const d = await apiFetch(auth.token, 'DELETE', `sites/${siteId}?delete_files=${deleteFiles}`);
       toasts.success(deleteFiles ? `${site.domain} and its files are being deleted` : `${site.domain} deleted; its files were kept`);
+      // DNS outcome: records the panel created are removed; anything it could
+      // not remove has to be cleaned up in Cloudflare.
+      for (const note of (d?.dns || []) as string[]) {
+        if (/could not|remove it in Cloudflare/.test(note)) toasts.warning(`DNS: ${note}`);
+        else toasts.info(`DNS: ${note}`);
+      }
       showDelete = false;
       goto('/sites');
     } catch (e: any) { toasts.error(e.message); } finally { deleteBusy = false; }
@@ -472,7 +483,10 @@
                     {/each}
                   </div>
                 {/if}
-                {#if canWrite}
+                {#if !canDNS && ['missing', 'error', 'conflict'].includes(dns.status)}
+                  <p class="text-xs text-subtle">Uses the site owner's Cloudflare account; only the owner can change these records.</p>
+                {/if}
+                {#if canDNS}
                   <div class="flex flex-wrap gap-2 pt-1">
                     {#if dns.status === 'missing' || dns.status === 'error'}
                       <button onclick={() => syncDNS(false)} disabled={dnsBusy} class="btn btn-secondary btn-sm">{dnsBusy ? 'Working…' : dns.status === 'error' ? 'Try again' : 'Create DNS record'}</button>

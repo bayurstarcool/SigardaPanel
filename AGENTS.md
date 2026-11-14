@@ -662,6 +662,15 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
   container actions match name, full id or 12-char short id only.
 - **Agent re-registration** from a known agent URL re-binds that server row.
 - **Cloudflare API tokens** are encrypted at rest (`secrets.Encrypt`).
+- **Site DNS** (`internal/apihttp/site_dns.go`, `GET/POST /api/v1/sites/:id/dns`): always the
+  site owner's Cloudflare account; changes (POST) owner or super_admin only. Only active zones,
+  longest label-boundary match, public IPv4 only. Records the panel creates carry the exact
+  comment `SigardaPanel site:<id>` and are tracked in `site_dns_records`; existing records are
+  never replaced without consent (`cloudflare_overwrite` on create, or the replace dialog's
+  `replace_ids`, refused if other records appeared). Overwrite keeps a correct A record, deletes
+  a CNAME before creating the A and A/AAAA conflicts after it, each delete audited. Delete
+  removes only tracked, unchanged records (rows whose removal failed are kept); a transfer
+  marks the site's records unmanaged.
 - **Never run SQL clients as root on site content**: dump imports run as the site's
   Linux user (nobody without one) with one of the database's own accounts
   (`RunAsUserInput`, dump on stdin). Dumps and archives live in user-writable trees.

@@ -474,7 +474,7 @@ func (h *siteHandler) create(c *echo.Context) error {
 	var dnsResult *siteDNSResult
 	if body.CloudflareProvision == nil || *body.CloudflareProvision {
 		overwrite := body.CloudflareOverwrite != nil && *body.CloudflareOverwrite
-		if r := h.siteDNS(c.Request().Context(), site, userID, false, overwrite); r.Status != "skipped" {
+		if r := h.siteDNS(c.Request().Context(), site, userID, false, overwrite, nil); r.Status != "skipped" {
 			dnsResult = &r
 		}
 	}
