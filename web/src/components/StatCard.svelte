@@ -28,16 +28,17 @@
 <svelte:element
   this={href ? 'a' : 'div'}
   {href}
-  class="card block p-4 {href ? 'transition-colors hover:border-line-strong' : ''}"
+  class="card block p-5 {href ? 'transition-colors hover:border-line-strong' : ''}"
 >
   <div class="flex items-center justify-between gap-2">
     <span class="stat-label">{label}</span>
     {#if icon}
       {@const Icon = icon}
-      <Icon size={16} strokeWidth={1.75} class={toneCls[tone] ?? 'text-subtle'} />
+      <span class="icon-tile size-7"><Icon size={15} strokeWidth={1.75} class={toneCls[tone] ?? 'text-muted'} /></span>
     {/if}
   </div>
-  <div class="stat-value">{value}</div>
-  {#if hint}<div class="mt-1 text-xs text-subtle">{hint}</div>{/if}
+  <!-- Words ("Configured", "php") read better smaller than figures. -->
+  <div class="stat-value {typeof value === 'string' && !/^[\d.,%\s–—-]*$/.test(value) ? 'text-[20px]' : ''}">{value}</div>
+  {#if hint}<div class="mt-2 text-xs text-subtle">{hint}</div>{/if}
   {#if children}{@render children()}{/if}
 </svelte:element>

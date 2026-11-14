@@ -89,14 +89,15 @@
     </div>
   {/if}
 
-  <div class="flex h-14 items-center justify-between gap-3 border-b border-line bg-bg px-4 lg:px-8">
+  <div class="flex h-14 items-center justify-between gap-3 border-b border-line bg-bg/95 px-4 lg:px-8">
     <div class="flex min-w-0 items-center gap-2">
       <button onclick={onToggleMobile} class="btn btn-ghost btn-icon btn-sm lg:hidden" aria-label="Toggle navigation">
         {#if mobileOpen}<X size={18} />{:else}<Menu size={18} />{/if}
       </button>
       <button
         onclick={() => onSearchOpen?.()}
-        class="flex h-8 w-56 cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface px-2.5 text-left text-[13px] text-subtle transition-colors hover:border-line-strong max-sm:w-auto lg:w-72"
+        class="flex h-8 w-56 cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface px-2.5 text-left text-[13px] text-subtle transition-colors hover:border-line-strong hover:text-muted max-sm:w-auto lg:w-72"
+        style="box-shadow: var(--shadow-card)"
       >
         <Search size={14} />
         <span class="max-sm:hidden">Search…</span>
@@ -137,7 +138,7 @@
           aria-haspopup="menu"
           aria-expanded={showUserMenu}
         >
-          <span class="flex size-6 items-center justify-center rounded-md bg-accent/15 text-xs font-semibold text-accent">{initial}</span>
+          <span class="flex size-6 items-center justify-center rounded-full bg-gradient-to-br from-accent to-accent-hover text-[11px] font-semibold text-accent-fg ring-2 ring-accent/15">{initial}</span>
           <span class="hidden text-[13px] font-medium text-fg md:inline">{auth.user?.username || 'User'}</span>
           <ChevronDown size={14} class="text-subtle" />
         </button>

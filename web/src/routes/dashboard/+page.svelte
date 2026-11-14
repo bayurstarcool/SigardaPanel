@@ -239,7 +239,7 @@
           </EmptyState>
         </div>
       {:else}
-        <div class="grid gap-3 md:grid-cols-2">
+        <div class="grid gap-3 {servers.length > 1 ? 'md:grid-cols-2' : ''}">
           {#each servers as srv (srv.id)}
             {@const st = metrics[srv.id] ?? { state: 'loading' }}
             <article class="card min-w-0 p-5">

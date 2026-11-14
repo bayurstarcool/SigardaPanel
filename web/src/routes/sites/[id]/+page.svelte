@@ -252,7 +252,7 @@
 {#snippet row(label: string, value: string, opts: { mono?: boolean; copy?: string } = {})}
   <div class="flex items-center justify-between gap-4 py-2.5">
     <dt class="shrink-0 text-[13px] text-muted">{label}</dt>
-    <dd class="flex min-w-0 items-center gap-1 text-right {opts.mono ? 'font-mono text-[13px]' : 'text-sm'} text-fg">
+    <dd class="flex min-w-0 items-center gap-1 text-right {opts.mono ? 'font-mono text-[12.5px]' : 'text-[13px]'} text-fg">
       <span class="truncate" title={value}>{value}</span>
       {#if opts.copy}
         <button onclick={() => copyText(value, opts.copy!)} class="btn btn-ghost btn-icon btn-xs" aria-label="Copy {label.toLowerCase()}">

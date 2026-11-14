@@ -53,15 +53,15 @@
   <title>Sign in · SigardaPanel</title>
 </svelte:head>
 
-<div class="flex min-h-dvh flex-col items-center justify-center bg-bg px-4 py-10">
-  <div class="w-full max-w-sm animate-fade-in">
+<div class="login-bg relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-bg px-4 py-10">
+  <div class="relative w-full max-w-[380px] animate-fade-in">
     <div class="mb-8 flex flex-col items-center text-center">
-      <a href="/" aria-label="SigardaPanel home"><Logo size={36} /></a>
-      <h1 class="mt-5 text-xl font-semibold tracking-tight text-fg">Welcome back</h1>
-      <p class="mt-1 text-sm text-muted">Sign in to your control panel</p>
+      <a href="/" aria-label="SigardaPanel home" class="rounded-2xl p-2 ring-1 ring-line" style="background: var(--c-surface); box-shadow: var(--shadow-raised)"><Logo size={36} /></a>
+      <h1 class="mt-6 text-[24px] font-semibold tracking-[-0.025em] text-fg">Welcome back</h1>
+      <p class="mt-1.5 text-sm text-muted">Sign in to your control panel</p>
     </div>
 
-    <div class="card p-6 shadow-sm">
+    <div class="card p-7" style="box-shadow: var(--shadow-raised)">
       <form onsubmit={submit} class:login-shake={shake}>
         {#if err}
           <div class="mb-5 flex items-start gap-2 rounded-lg bg-danger/10 px-3 py-2.5 text-[13px] text-danger ring-1 ring-danger/20 ring-inset" role="alert">
@@ -148,4 +148,16 @@
     40%, 80% { transform: translateX(4px); }
   }
   .login-shake { animation: shake 0.35s ease-in-out; }
+  /* A soft accent glow and a faint grid behind the card (static gradients, no blur). */
+  .login-bg::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(60% 45% at 50% 0%, color-mix(in oklab, var(--c-accent) 14%, transparent), transparent 70%),
+      linear-gradient(to right, color-mix(in oklab, var(--c-line) 55%, transparent) 1px, transparent 1px) 0 0 / 44px 44px,
+      linear-gradient(to bottom, color-mix(in oklab, var(--c-line) 55%, transparent) 1px, transparent 1px) 0 0 / 44px 44px;
+    mask-image: radial-gradient(70% 60% at 50% 30%, #000 30%, transparent 75%);
+    pointer-events: none;
+  }
 </style>

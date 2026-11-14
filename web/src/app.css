@@ -11,58 +11,72 @@
 
 :root,
 html.dark {
-  --c-bg: #09090b;
-  --c-surface: #111113;
-  --c-surface-2: #18181b;
-  --c-elevated: #1a1a1d;
-  --c-line: #26262a;
-  --c-line-strong: #3a3a40;
-  --c-fg: #f4f4f5;
+  --c-bg: #0b0b0d;
+  --c-sidebar: #0e0e11;
+  --c-surface: #131316;
+  --c-surface-2: #1a1a1e;
+  --c-elevated: #1c1c21;
+  --c-line: #232328;
+  --c-line-strong: #33333a;
+  --c-fg: #ededef;
   --c-muted: #a1a1aa;
-  --c-subtle: #71717a;
+  --c-subtle: #6f6f78;
 
-  --c-accent: #6d7cff;
-  --c-accent-hover: #8290ff;
+  --c-accent: #8286f8;
+  --c-accent-hover: #9598fa;
   --c-accent-fg: #ffffff;
 
-  --c-success: #34d399;
-  --c-warning: #fbbf24;
-  --c-danger: #f87171;
+  --c-success: #3ecf8e;
+  --c-warning: #f5b544;
+  --c-danger: #f27474;
   --c-danger-solid: #dc2626;
-  --c-info: #38bdf8;
+  --c-info: #4cb4f0;
+
+  /* Depth: a hairline highlight instead of a shadow on dark surfaces. */
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.035), 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-raised: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 8px 24px -6px rgb(0 0 0 / 0.6);
+  --shadow-btn: inset 0 1px 0 rgb(255 255 255 / 0.16), 0 1px 2px rgb(0 0 0 / 0.5);
 
   color-scheme: dark;
 }
 
 html.light {
-  --c-bg: #f7f7f8;
+  --c-bg: #fbfbfc;
+  --c-sidebar: #f5f5f7;
   --c-surface: #ffffff;
-  --c-surface-2: #f2f2f4;
+  --c-surface-2: #f4f4f6;
   --c-elevated: #ffffff;
-  --c-line: #e4e4e7;
-  --c-line-strong: #d4d4d8;
-  --c-fg: #18181b;
-  --c-muted: #52525b;
-  --c-subtle: #71717a;
+  --c-line: #e8e8ec;
+  --c-line-strong: #d8d8de;
+  --c-fg: #111114;
+  --c-muted: #55555f;
+  --c-subtle: #8b8b95;
 
-  --c-accent: #4f5df0;
-  --c-accent-hover: #4350dc;
+  --c-accent: #5b5bd6;
+  --c-accent-hover: #4f4fc4;
   --c-accent-fg: #ffffff;
 
-  --c-success: #059669;
-  --c-warning: #b45309;
-  --c-danger: #dc2626;
+  --c-success: #12a36d;
+  --c-warning: #c27c0e;
+  --c-danger: #dc3c3c;
   --c-danger-solid: #dc2626;
-  --c-info: #0284c7;
+  --c-info: #1683c9;
+
+  --shadow-card: 0 1px 2px rgb(16 16 24 / 0.04), 0 1px 1px rgb(16 16 24 / 0.02);
+  --shadow-raised: 0 1px 2px rgb(16 16 24 / 0.05), 0 12px 32px -8px rgb(16 16 24 / 0.14);
+  --shadow-btn: inset 0 1px 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(16 16 24 / 0.18);
 
   color-scheme: light;
 }
 
 @theme inline {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
   --color-bg: var(--c-bg);
+  --color-sidebar: var(--c-sidebar);
   --color-surface: var(--c-surface);
   --color-surface-2: var(--c-surface-2);
   --color-elevated: var(--c-elevated);
@@ -90,7 +104,8 @@ html.light {
     background: var(--c-bg);
     color: var(--c-fg);
     font-family: var(--font-sans);
-    font-feature-settings: "cv11", "ss01";
+    font-feature-settings: "cv11", "ss01", "ss03";
+    letter-spacing: -0.006em;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -133,12 +148,13 @@ html.light {
   /* --- Surfaces --- */
   .card {
     @apply rounded-xl border border-line bg-surface;
+    box-shadow: var(--shadow-card);
   }
   .card-header {
     @apply flex items-center justify-between gap-3 border-b border-line px-5 py-3.5;
   }
   .card-title {
-    @apply text-sm font-semibold text-fg;
+    @apply text-[13.5px] font-semibold tracking-[-0.01em] text-fg;
   }
   .card-body {
     @apply p-5;
@@ -151,15 +167,18 @@ html.light {
   }
   .btn-primary {
     @apply bg-accent text-accent-fg hover:bg-accent-hover;
+    box-shadow: var(--shadow-btn);
   }
   .btn-secondary {
     @apply border border-line bg-surface text-fg hover:border-line-strong hover:bg-surface-2;
+    box-shadow: var(--shadow-card);
   }
   .btn-ghost {
     @apply text-muted hover:bg-surface-2 hover:text-fg;
   }
   .btn-danger {
     @apply bg-danger-solid text-white hover:bg-red-700;
+    box-shadow: var(--shadow-btn);
   }
   .btn-danger-ghost {
     @apply text-danger hover:bg-danger/10;
@@ -185,7 +204,8 @@ html.light {
     @apply mb-1.5 block text-[13px] font-medium text-muted;
   }
   .input {
-    @apply h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm text-fg placeholder:text-subtle;
+    @apply h-9 w-full rounded-lg border border-line bg-surface px-3 text-sm text-fg placeholder:text-subtle;
+    box-shadow: var(--shadow-card);
     @apply transition-colors duration-150 hover:border-line-strong focus:border-accent focus:ring-3 focus:ring-accent/20 focus:outline-none;
     @apply disabled:cursor-not-allowed disabled:opacity-60;
   }
@@ -205,23 +225,23 @@ html.light {
 
   /* --- Badges --- */
   .badge {
-    @apply inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium whitespace-nowrap ring-1 ring-inset;
+    @apply inline-flex h-[22px] items-center gap-1.5 rounded-full px-2.5 text-[11.5px] font-medium whitespace-nowrap ring-1 ring-inset;
     @apply bg-surface-2 text-muted ring-line;
   }
   .badge-success {
-    @apply bg-success/10 text-success ring-success/20;
+    @apply bg-success/8 text-success ring-success/15;
   }
   .badge-warning {
-    @apply bg-warning/10 text-warning ring-warning/20;
+    @apply bg-warning/8 text-warning ring-warning/15;
   }
   .badge-danger {
-    @apply bg-danger/10 text-danger ring-danger/20;
+    @apply bg-danger/8 text-danger ring-danger/15;
   }
   .badge-info {
-    @apply bg-info/10 text-info ring-info/20;
+    @apply bg-info/8 text-info ring-info/15;
   }
   .badge-accent {
-    @apply bg-accent/10 text-accent ring-accent/20;
+    @apply bg-accent/8 text-accent ring-accent/15;
   }
   .dot {
     @apply inline-block size-1.5 shrink-0 rounded-full bg-current;
@@ -234,13 +254,13 @@ html.light {
     @apply relative overflow-x-auto;
   }
   .table {
-    @apply w-full border-collapse text-sm;
+    @apply w-full border-collapse text-[13px];
   }
   .table th {
-    @apply border-b border-line px-4 py-2.5 text-left text-xs font-medium whitespace-nowrap text-subtle;
+    @apply border-b border-line bg-surface-2/40 px-4 py-2.5 text-left text-[12px] font-medium whitespace-nowrap text-subtle;
   }
   .table td {
-    @apply border-b border-line px-4 py-3 align-middle text-fg;
+    @apply border-b border-line px-4 py-3.5 align-middle text-fg;
   }
   .table tbody tr:last-child td {
     @apply border-b-0;
@@ -268,7 +288,8 @@ html.light {
     @apply inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted transition-colors duration-150 hover:text-fg;
   }
   .segment-active {
-    @apply bg-surface text-fg shadow-xs;
+    @apply bg-surface text-fg;
+    box-shadow: var(--shadow-card);
   }
 
   /* --- Misc --- */
@@ -285,10 +306,10 @@ html.light {
     @apply rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.85em] text-fg;
   }
   .stat-label {
-    @apply text-xs font-medium text-subtle;
+    @apply text-[12.5px] font-medium text-muted;
   }
   .stat-value {
-    @apply mt-1 text-2xl font-semibold tracking-tight text-fg tabular-nums;
+    @apply mt-2 text-[28px] leading-none font-semibold tracking-[-0.025em] text-fg tabular-nums;
   }
   .progress {
     @apply h-1.5 w-full overflow-hidden rounded-full bg-surface-2;
@@ -297,10 +318,20 @@ html.light {
     @apply h-full rounded-full bg-accent;
   }
   .overlay {
-    @apply fixed inset-0 z-50 bg-black/60;
+    @apply fixed inset-0 z-50 bg-black/50;
   }
   .popover {
-    @apply rounded-xl border border-line bg-elevated shadow-lg shadow-black/20;
+    @apply rounded-xl border border-line bg-elevated;
+    box-shadow: var(--shadow-raised);
+  }
+  /* Current sidebar entry: a raised pill on the sidebar tint. */
+  .nav-active {
+    @apply bg-surface ring-1 ring-line;
+    box-shadow: var(--shadow-card);
+  }
+  /* Small tinted square holding an icon (stat cards, list rows). */
+  .icon-tile {
+    @apply flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted ring-1 ring-line ring-inset;
   }
 }
 

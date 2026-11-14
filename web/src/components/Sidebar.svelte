@@ -19,10 +19,6 @@
 
   type Item = { label: string; href: string; icon: any; pro?: boolean };
 
-  // The API does not limit servers or users by license tier (the free tier's
-  // max_servers is informational), so the badge must not imply a block.
-  const PRO_NOT_ENFORCED =
-    'Listed in the Pro plan. Not restricted on this panel: every license tier can use it.';
   type Group = { title: string; items: Item[] };
 
   const groups = $derived.by((): Group[] => {
@@ -43,7 +39,7 @@
       {
         title: 'Infrastructure',
         items: [
-          { label: 'Servers', href: '/servers', icon: Server, pro: true },
+          { label: 'Servers', href: '/servers', icon: Server },
           { label: 'Stack', href: '/stack', icon: Layers },
           // Server-level tools: their API routes are admin-only, so other
           // roles would only get pages that cannot load.
@@ -82,7 +78,7 @@
       },
     ];
     const admin: Item[] = [];
-    if (can('user.manage')) admin.push({ label: 'Users', href: '/users', icon: Users, pro: true });
+    if (can('user.manage')) admin.push({ label: 'Users', href: '/users', icon: Users });
     if (can('audit.view')) admin.push({ label: 'Audit', href: '/audit', icon: ClipboardCheck });
     if (can('plan.manage')) admin.push({ label: 'Plans', href: '/admin/plans', icon: DollarSign });
     if (can('order.manage')) admin.push({ label: 'Orders', href: '/admin/orders', icon: ShoppingCart });
@@ -166,12 +162,12 @@
 </script>
 
 {#snippet nav()}
-  <nav class="flex-1 overflow-y-auto px-3 py-2">
+  <nav class="flex-1 overflow-y-auto px-3 pt-1 pb-4">
     {#each groups as grp, i (i)}
       {#if grp.items.length}
-        <div class={i > 0 ? 'mt-5' : ''}>
+        <div class={i > 0 ? 'mt-6' : ''}>
           {#if grp.title}
-            <div class="mb-1.5 px-2.5 text-[11px] font-medium tracking-wide text-subtle uppercase">{grp.title}</div>
+            <div class="mb-1 px-2.5 text-[10.5px] font-semibold tracking-[0.08em] text-subtle/80 uppercase">{grp.title}</div>
           {/if}
           <ul class="space-y-0.5">
             {#each grp.items as item (item.href)}
@@ -181,12 +177,11 @@
                   href={item.href}
                   onclick={onCloseMobile}
                   aria-current={isActive ? 'page' : undefined}
-                  class="group flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] font-medium transition-colors duration-100
-                    {isActive ? 'bg-surface-2 text-fg' : 'text-muted hover:bg-surface-2/60 hover:text-fg'}"
+                  class="group flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors duration-100
+                    {isActive ? 'nav-active font-medium text-fg' : 'font-normal text-muted hover:bg-fg/[0.04] hover:text-fg'}"
                 >
-                  <item.icon size={16} strokeWidth={1.75} class={isActive ? 'text-accent' : 'text-subtle group-hover:text-muted'} />
+                  <item.icon size={16} strokeWidth={isActive ? 2 : 1.75} class={isActive ? 'text-accent' : 'text-subtle group-hover:text-muted'} />
                   <span class="truncate">{item.label}</span>
-                  {#if item.pro}<span class="ml-auto"><ProBadge tier="pro" small title={PRO_NOT_ENFORCED} /></span>{/if}
                 </a>
               </li>
             {/each}
@@ -206,7 +201,7 @@
   </div>
   {@render nav()}
   {#if usageData}
-    <div class="shrink-0 space-y-3 border-t border-line px-5 py-4">
+    <div class="mx-3 mb-3 shrink-0 space-y-3 rounded-xl border border-line bg-surface p-3.5" style="box-shadow: var(--shadow-card)">
       <div>
         <div class="mb-1.5 flex justify-between text-[11px] text-subtle">
           <span>Disk</span><span class="tabular-nums" title={diskTitle}>{diskLabel}</span>
@@ -231,7 +226,7 @@
   <button class="overlay animate-fade-in lg:hidden" aria-label="Close menu" onclick={onCloseMobile}></button>
 {/if}
 <aside
-  class="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-line bg-surface transition-transform duration-200 ease-out lg:hidden
+  class="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-line bg-sidebar transition-transform duration-200 ease-out lg:hidden
     {mobileOpen ? 'translate-x-0' : '-translate-x-full'}"
   aria-hidden={!mobileOpen}
   inert={!mobileOpen}
@@ -240,6 +235,6 @@
 </aside>
 
 <!-- Desktop -->
-<aside class="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-line bg-surface lg:flex">
+<aside class="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-line bg-sidebar lg:flex">
   {@render panel()}
 </aside>
