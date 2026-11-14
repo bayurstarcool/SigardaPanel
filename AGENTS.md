@@ -260,6 +260,7 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `DELETE /api/v1/servers/:id` — Delete server
 - `GET /api/v1/servers/health` — All servers health
 - `GET /api/v1/servers/:id/health` — Server health
+- `GET /api/v1/servers/:id/public-ip` — IPv4 used for site DNS (`?refresh=1`: server.manage)
 - `POST /api/v1/servers/:id/token` — Regenerate agent token
 
 ### Sites (15 endpoints)
@@ -276,6 +277,8 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `POST /api/v1/sites/:id/vhost/validate` — Validate vhost
 - `GET /api/v1/sites/:id/usage` — Disk usage
 - `GET /api/v1/sites/:id/logs` — Tail logs
+- `GET /api/v1/sites/:id/dns` — DNS state (owner's Cloudflare account)
+- `POST /api/v1/sites/:id/dns` — Create/sync/replace `{overwrite, replace_ids}` (owner or super_admin)
 - `POST /api/v1/webhooks/deploy/:site_id` — Git webhook
 - `GET /api/v1/sites/:id/ssh/info` — SSH info
 
