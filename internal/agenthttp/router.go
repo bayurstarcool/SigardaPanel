@@ -783,6 +783,7 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "config gen failed: "+err.Error())
 	}
+	config = nginx.ForHost(config) // no [::] listens on servers without IPv6
 	if security == nil || !security.BasicAuthEnabled {
 		_ = nginx.RemoveHtpasswd(payload.Domain)
 	}
@@ -1904,6 +1905,11 @@ func (r *Router) backupRestoreTask(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"ok": true, "message": "database " + db.Name + " restored", "databases_restored": []string{db.Name}})
 	}
 
+	// The base dir is not created by every install path (backups themselves
+	// live under the site root), so make it here instead of failing.
+	if err := os.MkdirAll(r.backupDir, 0o700); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "create restore temp dir failed: "+err.Error())
+	}
 	tmpDir, err := os.MkdirTemp(r.backupDir, "restore-*")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "create restore temp dir failed: "+err.Error())

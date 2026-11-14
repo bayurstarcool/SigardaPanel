@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sigardapanel/internal/nginx"
 	"strings"
 	"testing"
 
@@ -91,6 +92,7 @@ func failNginxTest(t *testing.T) {
 }
 
 func TestSuspend_WritesPlaceholderReturning503(t *testing.T) {
+	defer nginx.OverrideHostIPv6(true)()
 	f := newSuspendFixture(t)
 	if rec := f.call(t, "suspend"); rec.Code != http.StatusOK {
 		t.Fatalf("suspend: %d %s", rec.Code, rec.Body.String())
@@ -128,6 +130,7 @@ func TestSuspend_WritesPlaceholderReturning503(t *testing.T) {
 }
 
 func TestSuspend_PlaceholderServesHTTPSWithExistingCertificate(t *testing.T) {
+	defer nginx.OverrideHostIPv6(true)()
 	f := newSuspendFixture(t)
 	live := filepath.Join(f.le, "live", suspendDomain)
 	if err := os.MkdirAll(live, 0o755); err != nil {
@@ -263,5 +266,13 @@ func TestSuspend_SiteWithoutVhostStillGetsPlaceholder(t *testing.T) {
 	}
 	if _, err := os.Stat(f.enabled); !os.IsNotExist(err) {
 		t.Fatal("placeholder left behind after resume")
+	}
+}
+
+func TestSuspend_PlaceholderWithoutIPv6(t *testing.T) {
+	defer nginx.OverrideHostIPv6(false)()
+	got := nginx.ForHost(suspendedPlaceholderVhost("a.test", []string{"a.test"}, "/c.pem", "/k.pem", "/x"))
+	if strings.Contains(got, "[::]") || !strings.Contains(got, "listen 80;") || !strings.Contains(got, "listen 443 ssl;") {
+		t.Fatalf("placeholder on a host without IPv6:\n%s", got)
 	}
 }

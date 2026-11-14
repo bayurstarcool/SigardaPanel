@@ -8,19 +8,21 @@ import (
 	"sigardapanel/internal/dbserver"
 )
 
-// BackupDatabaseExists verifies MariaDB schema existence with dedicated
-// backup credentials. Stale panel DB records must not create failing jobs.
+// BackupDatabaseExists verifies MariaDB schema existence with the dedicated
+// backup credential when one is configured, so stale panel DB records do not
+// create failing jobs. Without it (nothing provisions one by default) the
+// database is assumed to exist and the dump job reports a missing one.
 func (s *Store) BackupDatabaseExists(ctx context.Context, database Database) (bool, error) {
 	if !strings.EqualFold(database.Type, "mysql") && !strings.EqualFold(database.Type, "mariadb") {
+		return true, nil
+	}
+	username, encrypted, err := s.DBStore.GetBackupCredentials(ctx)
+	if err != nil {
 		return true, nil
 	}
 	server, err := s.DBStore.GetDefault(ctx)
 	if err != nil {
 		return false, fmt.Errorf("get database server: %w", err)
-	}
-	username, encrypted, err := s.DBStore.GetBackupCredentials(ctx)
-	if err != nil {
-		return false, err
 	}
 	password, err := s.DBStore.DecryptPassword(encrypted)
 	if err != nil {
@@ -35,25 +37,12 @@ func (s *Store) BackupDatabaseExists(ctx context.Context, database Database) (bo
 	return conn.DatabaseAccessible(ctx, database.Name)
 }
 
-// DatabaseBackupCredentials resolves the credential used by backup jobs.
-// MariaDB/MySQL always use the dedicated backup account; PostgreSQL keeps its
-// database-specific account because it is a separate database engine.
+// DatabaseBackupCredentials resolves the credential used by backup jobs: one
+// of the database's own panel-managed accounts (it can read only that
+// database, and it exists on whichever server hosts the site). MariaDB/MySQL
+// databases without a usable account fall back to the dedicated backup
+// account of the panel's default database server, when configured.
 func (s *Store) DatabaseBackupCredentials(ctx context.Context, database Database) (string, string, error) {
-	if strings.EqualFold(database.Type, "mysql") || strings.EqualFold(database.Type, "mariadb") {
-		username, encrypted, err := s.DBStore.GetBackupCredentials(ctx)
-		if err != nil {
-			return "", "", err
-		}
-		password, err := s.DBStore.DecryptPassword(encrypted)
-		if err != nil || password == "" {
-			if err == nil {
-				err = fmt.Errorf("empty dedicated backup password")
-			}
-			return "", "", fmt.Errorf("decrypt dedicated backup credential: %w", err)
-		}
-		return username, password, nil
-	}
-
 	dbUsers, err := s.DBUsers.ListByDatabase(ctx, database.ID)
 	if err != nil {
 		return "", "", fmt.Errorf("list database users: %w", err)
@@ -64,5 +53,14 @@ func (s *Store) DatabaseBackupCredentials(ctx context.Context, database Database
 			return dbUser.Username, password, nil
 		}
 	}
-	return "", "", fmt.Errorf("no decryptable database user password")
+	if strings.EqualFold(database.Type, "mysql") || strings.EqualFold(database.Type, "mariadb") {
+		username, encrypted, err := s.DBStore.GetBackupCredentials(ctx)
+		if err == nil {
+			password, err := s.DBStore.DecryptPassword(encrypted)
+			if err == nil && password != "" {
+				return username, password, nil
+			}
+		}
+	}
+	return "", "", fmt.Errorf("database %s has no account the panel can use for backups; create a database user first", database.Name)
 }

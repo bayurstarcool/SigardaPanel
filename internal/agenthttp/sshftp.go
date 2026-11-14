@@ -189,7 +189,10 @@ func (r *Router) sshCreateTask(c *echo.Context) error {
 		useradd = append(useradd, "-o", "-u", strconv.FormatUint(uint64(uid), 10), "-g", strconv.FormatUint(uint64(gid), 10))
 	}
 	useradd = append(useradd, p.Username)
-	if out, err := r.executor.RunShell(ctx, r.useraddCmd, useradd...); err != nil {
+	siteUserMu.Lock() // /etc/passwd is shared with site owners' accounts
+	out, err := r.executor.RunShell(ctx, r.useraddCmd, useradd...)
+	siteUserMu.Unlock()
+	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]any{"ok": false, "message": "create user failed: " + strings.TrimSpace(out)})
 	}
 	cleanup := func() { r.removeSSHAccount(ctx, p.Username, home) }
@@ -318,7 +321,9 @@ func (r *Router) removeSSHAccount(ctx context.Context, username, home string) er
 	// -f: the account shares the site owner's uid, whose processes (cron,
 	// the app) would otherwise block the removal. Without -r no files are
 	// removed, and no group is (the account has none of its own).
+	siteUserMu.Lock()
 	_, _ = r.executor.RunShell(ctx, "userdel", "-f", username)
+	siteUserMu.Unlock()
 	if left := mountedUnder(home); len(left) > 0 {
 		return fmt.Errorf("still mounted, %s kept: %s", home, strings.Join(left, ", "))
 	}

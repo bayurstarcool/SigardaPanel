@@ -549,9 +549,44 @@ func (h *backupHandler) createWithProvider(c *echo.Context) error {
 	}
 
 	var body struct {
-		StorageProviderID int64 `json:"storage_provider_id"`
+		StorageProviderID int64  `json:"storage_provider_id"`
+		BackupType        string `json:"backup_type"`
 	}
 	c.Bind(&body) // optional, ignore error
+	switch body.BackupType {
+	case "", "files", "both":
+	case "database":
+		return echo.NewHTTPError(http.StatusBadRequest, "database backups use POST /api/v1/sites/:id/backups/database")
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, "backup_type must be 'files' or 'both'")
+	}
+
+	// "both": one archive with the site files and a dump of each of the
+	// site's databases (database_dumps/), restored together.
+	var dbPayloads []map[string]string
+	if body.BackupType == "both" {
+		databases, err := h.store.Databases.ListBySite(c.Request().Context(), siteID)
+		if err != nil {
+			slog.Error("api: request failed", "route", c.Path(), "error", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		var problems []string
+		for _, db := range databases {
+			if exists, err := h.store.BackupDatabaseExists(c.Request().Context(), db); err != nil || !exists {
+				problems = append(problems, db.Name+": database not found on the server")
+				continue
+			}
+			u, pw, err := h.store.DatabaseBackupCredentials(c.Request().Context(), db)
+			if err != nil {
+				problems = append(problems, err.Error())
+				continue
+			}
+			dbPayloads = append(dbPayloads, map[string]string{"name": db.Name, "type": db.Type, "user": u, "password": pw})
+		}
+		if len(problems) > 0 {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "cannot back up the site's databases: "+strings.Join(problems, "; "))
+		}
+	}
 
 	storageType := "local"
 	var provider *store.BackupStorageProvider
@@ -574,9 +609,14 @@ func (h *backupHandler) createWithProvider(c *echo.Context) error {
 		}
 	}
 
+	backupType := "files"
+	if len(dbPayloads) > 0 {
+		backupType = "both"
+	}
 	backup := &store.Backup{
 		SiteID:      siteID,
 		Status:      "pending",
+		BackupType:  backupType,
 		StorageType: storageType,
 	}
 	if err := h.store.Backups.Create(c.Request().Context(), backup); err != nil {
@@ -594,6 +634,10 @@ func (h *backupHandler) createWithProvider(c *echo.Context) error {
 		"root_path": site.RootPath,
 		"storage":   storageType,
 		"failover":  false,
+	}
+	if len(dbPayloads) > 0 {
+		payloadMap["backup_type"] = "both"
+		payloadMap["databases"] = dbPayloads
 	}
 
 	if provider != nil {
@@ -614,6 +658,9 @@ func (h *backupHandler) createWithProvider(c *echo.Context) error {
 		Description: fmt.Sprintf("Backup files for %s", site.Domain),
 		Status:      jobmodel.StatusQueued,
 		Payload:     string(payload),
+	}
+	if backupType == "both" {
+		job.Description = fmt.Sprintf("Backup files and databases for %s", site.Domain)
 	}
 	if err := h.store.Jobs.Create(c.Request().Context(), job); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")

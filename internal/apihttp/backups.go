@@ -856,14 +856,17 @@ func (h *backupHandler) createDatabaseBackup(c *echo.Context) error {
 	// Process each database backup
 	var jobIDs []int64
 	var backupIDs []int64
+	var skipped []string
 	for _, td := range targetDatabases {
 		db := td.DB
 		exists, err := h.store.BackupDatabaseExists(c.Request().Context(), *db)
 		if err != nil || !exists {
+			skipped = append(skipped, db.Name+": database not found on the server")
 			continue
 		}
 		dbUserName, dbPassword, err := h.store.DatabaseBackupCredentials(c.Request().Context(), *db)
 		if err != nil {
+			skipped = append(skipped, db.Name+": "+err.Error())
 			continue
 		}
 
@@ -924,11 +927,19 @@ func (h *backupHandler) createDatabaseBackup(c *echo.Context) error {
 		backupIDs = append(backupIDs, backup.ID)
 	}
 
+	// Nothing queued must not read as "started": say why.
+	if len(jobIDs) == 0 {
+		return echo.NewHTTPError(http.StatusUnprocessableEntity, "no database backup could be started: "+strings.Join(skipped, "; "))
+	}
+
 	h.audit.RecordAction(c.Request().Context(), userID, "database_backup_create", "backup", siteID, nil)
 
-	msg := fmt.Sprintf("Database backup started for %d database(s)", len(targetDatabases))
+	msg := fmt.Sprintf("Database backup started for %d database(s)", len(jobIDs))
 	if len(targetDatabases) == 1 {
 		msg = fmt.Sprintf("Database backup started for %s", targetDatabases[0].DB.Name)
+	}
+	if len(skipped) > 0 {
+		msg += " (skipped " + strings.Join(skipped, "; ") + ")"
 	}
 
 	return c.JSON(http.StatusAccepted, httpjson.Success{
@@ -937,7 +948,8 @@ func (h *backupHandler) createDatabaseBackup(c *echo.Context) error {
 			"job_ids":    jobIDs,
 			"status":     "pending",
 			"message":    msg,
-			"count":      len(targetDatabases),
+			"count":      len(jobIDs),
+			"skipped":    skipped,
 		},
 		RequestID: rid,
 	})

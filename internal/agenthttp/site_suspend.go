@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sigardapanel/internal/nginx"
 	"strings"
 
 	"github.com/labstack/echo/v5"
@@ -162,7 +163,7 @@ func (r *Router) toggleSite(c *echo.Context, suspend bool) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, "suspend: "+err.Error())
 		}
 		placeholderTouched = true
-		if err := os.WriteFile(enabledVhost, []byte(suspendedPlaceholderVhost(payload.Domain, names, cert, key, disabledVhost)), 0o644); err != nil {
+		if err := os.WriteFile(enabledVhost, []byte(nginx.ForHost(suspendedPlaceholderVhost(payload.Domain, names, cert, key, disabledVhost))), 0o644); err != nil {
 			rollback()
 			return echo.NewHTTPError(http.StatusInternalServerError, "suspend: write placeholder vhost: "+err.Error())
 		}

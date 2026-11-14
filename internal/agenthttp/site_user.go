@@ -12,11 +12,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/siteinput"
 )
+
+// siteUserMu serializes looking up and creating site owners' accounts.
+var siteUserMu sync.Mutex
 
 // minSiteUserUID is the lowest UID treated as a regular (login) account.
 // Site files are never handed to system accounts.
@@ -38,6 +42,12 @@ func (r *Router) ensureSiteUser(ctx context.Context, name string) (*siteOwner, e
 	if err := siteinput.SystemUser(name); err != nil {
 		return nil, fmt.Errorf("invalid system_user %q", name)
 	}
+	// The worker runs several site.create jobs at once. Without this lock,
+	// jobs for the same new user each saw it missing and each ran useradd;
+	// their /etc/passwd writes overwrote one another, leaving the home and
+	// some site roots owned by uids that no longer exist.
+	siteUserMu.Lock()
+	defer siteUserMu.Unlock()
 	u, err := user.Lookup(name)
 	if err != nil {
 		var unknown user.UnknownUserError
