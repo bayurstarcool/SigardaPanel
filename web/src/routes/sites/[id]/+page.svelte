@@ -29,6 +29,7 @@
   import AppTab from '$components/sites/AppTab.svelte';
   import BackupTab from '$components/sites/BackupTab.svelte';
   import SslTab from '$components/sites/SslTab.svelte';
+  import ProvisioningSteps from '$components/sites/ProvisioningSteps.svelte';
   import DatabaseTab from '$components/sites/DatabaseTab.svelte';
   import SettingsTab from '$components/sites/SettingsTab.svelte';
 
@@ -375,6 +376,10 @@
     {/if}
 
     <!-- Quick stats -->
+    {#key site.id}
+      <ProvisioningSteps {site} {dns} onsite={(fresh) => { site = fresh; }} />
+    {/key}
+
     <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
       <StatCard label="SSL" value={site.ssl_status || 'none'} icon={ShieldCheck} tone={hasSSL ? 'success' : ''} />
       <StatCard label="Runtime" value={site.runtime} icon={Zap} tone="accent" />

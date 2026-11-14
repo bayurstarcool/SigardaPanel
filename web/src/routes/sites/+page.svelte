@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { fmtDate } from '$lib/format';
   import { auth, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
@@ -220,14 +221,13 @@
       const created = await apiFetch(auth.token, 'POST', 'sites', { ...form, cloudflare_provision: cfEnabled, cloudflare_overwrite: cfEnabled && cfOverwrite });
       showCreate = false;
       cfOverwrite = false;
-      // Cloudflare DNS outcome: never silent (it used to be dropped here).
-      const dns = created?.cloudflare_dns;
-      if (dns) {
-        if (['created', 'replaced', 'exists', 'managed', 'updated'].includes(dns.status)) toasts.success(`DNS: ${dns.message}`);
-        else if (dns.status === 'conflict') {
-          const list = (dns.existing || []).map((r: any) => `${r.type} → ${r.content}`).join(', ');
-          toasts.warning(`DNS not changed: ${dns.name} already has ${list}. Open the site's DNS card to replace it.`);
-        } else toasts.warning(`DNS: ${dns.message}`);
+      // The site page shows every provisioning step (server setup, DNS, SSL)
+      // as it happens.
+      const newId = created?.site?.id;
+      if (newId) {
+        toasts.success(`${created.site.domain} is being set up`);
+        goto(`/sites/${newId}`);
+        return;
       }
       form = { server_id: 0, name: '', domain: '', runtime: 'static', php_version: '8.3', root_path: '', proxy_pass_url: '', docker_image: '', docker_language: '', docker_name: '', docker_ports: '', docker_env: '', docker_volume: '', docker_restart: 'unless-stopped' };
       selectedPreset = '';
