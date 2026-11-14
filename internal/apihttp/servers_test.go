@@ -133,7 +133,7 @@ func TestServerList_WithServers(t *testing.T) {
 
 func TestServerCreate_Success(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	body := map[string]string{
 		"name":       "prod-01",
@@ -161,7 +161,7 @@ func TestServerCreate_Success(t *testing.T) {
 
 func TestServerCreate_TokenOnlyInCreate(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	body := map[string]string{
 		"name":     "token-test",
@@ -197,7 +197,7 @@ func TestServerCreate_TokenOnlyInCreate(t *testing.T) {
 
 func TestServerCreate_InvalidName(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	body := map[string]string{
 		"name":     "prod@01!",
@@ -211,7 +211,7 @@ func TestServerCreate_InvalidName(t *testing.T) {
 
 func TestServerCreate_InvalidHostname(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	body := map[string]string{
 		"name":     "prod-01",
@@ -225,7 +225,7 @@ func TestServerCreate_InvalidHostname(t *testing.T) {
 
 func TestServerCreate_InvalidIP(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	body := map[string]string{
 		"name":       "prod-01",
@@ -320,7 +320,7 @@ func TestServerGet_InvalidID(t *testing.T) {
 
 func TestServerDelete_Success(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	server := &store.Server{
 		Name:       "delete-test",
@@ -350,7 +350,7 @@ func TestServerDelete_Success(t *testing.T) {
 
 func TestServerDelete_NotFound(t *testing.T) {
 	e, s, ctx := newTestApp(t)
-	token := newAdminToken(t, s, ctx)
+	token := newSuperAdminToken(t, s, ctx)
 
 	rec := doRequest(t, e, "DELETE", "/api/v1/servers/99999", nil, token)
 	if rec.Code != http.StatusNotFound {
