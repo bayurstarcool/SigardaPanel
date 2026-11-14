@@ -33,8 +33,8 @@ func TestCreateSite_RejectsRootEscalationInputs(t *testing.T) {
 			b["runtime"] = "docker"
 			b["docker_image"] = "nginx"
 			b["docker_volume"] = "/:/host"
-		}, http.StatusBadRequest},
-		"docker option-like image": {func(b map[string]any) { b["runtime"] = "docker"; b["docker_image"] = "--privileged" }, http.StatusBadRequest},
+		}, http.StatusForbidden}, // docker sites are super_admin only
+		"docker option-like image": {func(b map[string]any) { b["runtime"] = "docker"; b["docker_image"] = "--privileged" }, http.StatusForbidden},
 		"bad php version":          {func(b map[string]any) { b["runtime"] = "php"; b["php_version"] = "8.3;x" }, http.StatusBadRequest},
 	}
 	for name, tc := range cases {

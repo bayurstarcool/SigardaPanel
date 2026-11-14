@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,5 +93,41 @@ func TestPatchOwnPasswordRefused(t *testing.T) {
 	root, rootTok := f.user("root", auth.RoleSuperAdmin)
 	if rec := f.do("PATCH", "/api/v1/users/"+strconv.FormatInt(root.ID, 10), map[string]any{"password": "New-pass-12345"}, rootTok); rec.Code != http.StatusBadRequest {
 		t.Fatalf("own password via PATCH = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Admin-created usernames become Linux accounts: they must be valid, not
+// reserved, and not already a site's system user or an SSH/SFTP account.
+func TestCreateUserRefusesTakenOrUnsafeNames(t *testing.T) {
+	f := newAuthzFixture(t)
+	owner, _ := f.user("owner", auth.RoleUser)
+	_, rootTok := f.user("root", auth.RoleSuperAdmin)
+	st := f.site(owner, "shop", "php")
+	f.s.DB().ExecContext(f.ctx, `UPDATE sites SET system_user = 'owner' WHERE id = ?`, st.ID)
+	f.s.DB().ExecContext(f.ctx, `INSERT INTO site_ssh_ftp (site_id, username, home_dir) VALUES (?, 'ownerftp', '/home/ownerftp')`, st.ID)
+	for name, want := range map[string]int{
+		"ownerftp": http.StatusConflict, "postgres": http.StatusBadRequest, "Bad Name": http.StatusBadRequest,
+		"ubuntu": http.StatusBadRequest, "fresh": http.StatusCreated,
+	} {
+		rec := f.do("POST", "/api/v1/users", map[string]any{"username": name, "email": strings.ReplaceAll(name, " ", "") + "@example.test", "password": "Temp-pass-12345", "role": "user"}, rootTok)
+		if rec.Code != want {
+			t.Errorf("username %q = %d want %d (%s)", name, rec.Code, want, rec.Body.String())
+		}
+	}
+}
+
+// A TOTP code is single-use whatever whitespace surrounds it.
+func TestTOTPReplayIgnoresWhitespace(t *testing.T) {
+	var u usedTOTP
+	if !u.markUsed(1, "123456") {
+		t.Fatal("first use refused")
+	}
+	for _, c := range []string{" 123456", "123456\t", "\n123456 "} {
+		if u.markUsed(1, c) {
+			t.Fatalf("replay %q accepted", c)
+		}
+	}
+	if u.markUsed(2, "12345a") || u.markUsed(2, "1234567") {
+		t.Fatal("non 6-digit code accepted")
 	}
 }

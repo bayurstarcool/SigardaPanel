@@ -445,6 +445,13 @@ do_install() {
   runuser -u sigardapanel -- sqlite3 "${DATA_DIR}/sigardapanel.db" \
     "UPDATE users SET role='super_admin' WHERE username='${ADMIN_USER}' AND NOT EXISTS (SELECT 1 FROM users WHERE role='super_admin');" \
     || die "Could not grant super_admin to ${ADMIN_USER}"
+  # The super admin's Linux account may be a sudo-capable cloud default
+  # ("admin" on Debian images): the agent refuses privileged accounts as site
+  # owners unless the operator lists them here.
+  if ! grep -qxF "$ADMIN_USER" "$CONF_DIR/trusted-site-users" 2>/dev/null; then
+    printf '%s\n' "$ADMIN_USER" >> "$CONF_DIR/trusted-site-users"
+  fi
+  chown root:root "$CONF_DIR/trusted-site-users"; chmod 644 "$CONF_DIR/trusted-site-users"
   # The API refuses everything but the password change while
   # password_changed_at is NULL. Set it explicitly either way so the result
   # does not depend on what this release's "init" defaults to.

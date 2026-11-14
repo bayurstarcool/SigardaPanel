@@ -133,6 +133,12 @@ type usedTOTP struct {
 }
 
 func (u *usedTOTP) markUsed(userID int64, code string) bool {
+	// The validator trims whitespace, so " 123456" is the same code: key on
+	// the trimmed form, and only a 6-digit code is ever accepted.
+	code = strings.TrimSpace(code)
+	if len(code) != 6 || strings.Trim(code, "0123456789") != "" {
+		return false
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	now := time.Now()

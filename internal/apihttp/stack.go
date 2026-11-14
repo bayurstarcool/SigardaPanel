@@ -60,8 +60,11 @@ func (h *stackHandler) tenantContainerNames(c *echo.Context) (allowed map[string
 	if sess == nil {
 		return map[string]bool{}, true
 	}
+	// Only super_admin sees every container: an admin is a tenant too, and
+	// unfiltered it could stop other tenants' site containers or read their
+	// logs (secrets often end up there).
 	user, _ := h.store.Users.GetByID(ctx, sess.UserID)
-	if user != nil && auth.HasRole(user.Role, auth.RoleAdmin) {
+	if user != nil && user.Role == auth.RoleSuperAdmin {
 		return nil, false
 	}
 	allowed = map[string]bool{}

@@ -1204,6 +1204,30 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 	})
 }
 
+// runAsSiteUser runs name in dir as uid:gid. The agent is root and site
+// accounts are UID >= 1000, so it drops privileges; only when uid already is
+// the agent's own (tests) it runs directly.
+func (r *Router) runAsSiteUser(ctx context.Context, uid, gid uint32, dir, name string, args ...string) (string, error) {
+	if int(uid) == os.Geteuid() && uid != 0 || (uid == 0 && deployAsSelf) {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return string(out), fmt.Errorf("%s failed: %w", name, err)
+		}
+		return string(out), nil
+	}
+	return r.executor.RunAsUser(ctx, uid, gid, dir, name, args...)
+}
+
+// deployAsSelf lets tests (running as root) deploy as themselves; it is never
+// set outside tests, and RunAsUser refuses uid 0 otherwise.
+var deployAsSelf = false
+
+// deployUserIDs resolves the account deploys run as (tests substitute it).
+var deployUserIDs = siteUserIDs
+
 func (r *Router) siteDeployTask(c *echo.Context) error {
 	ctx := c.Request().Context()
 	var payload struct {
@@ -1233,60 +1257,87 @@ func (r *Router) siteDeployTask(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid root_path")
 	}
 
-	exists, _ := r.executor.Stat(ctx, payload.RootPath)
+	// Every git step runs as the site user inside a pinned directory: the
+	// site user owns ~/htdocs, so a path-based root rename/checkout/chown
+	// could be redirected by a symlink swapped in mid-deploy (into
+	// /etc/cron.d, or onto another tenant's site).
+	siteUID, siteGID, haveSiteUser := deployUserIDs(payload.SystemUser)
+	if !haveSiteUser {
+		return echo.NewHTTPError(http.StatusUnprocessableEntity, "deploy needs the site's system user (a regular login account)")
+	}
+	asUser := func(dir string, args ...string) (string, error) {
+		return r.runAsSiteUser(ctx, siteUID, siteGID, dir, "git", args...)
+	}
+	rootPin, err := sitefs.PinDir(payload.RootPath)
+	exists := err == nil
+	if err != nil && sitefs.StatusOf(err) != http.StatusNotFound {
+		return echo.NewHTTPError(sitefs.StatusOf(err), err.Error())
+	}
+	if exists {
+		defer rootPin.Close()
+		if st, ok := rootPin.Info.Sys().(*syscall.Stat_t); !ok || st.Uid != siteUID {
+			return echo.NewHTTPError(http.StatusConflict, "the site root is not owned by the site user")
+		}
+	}
 	isGitRepo := false
 	if exists {
-		gitDir := filepath.Join(payload.RootPath, ".git")
-		isGitRepo, _ = r.executor.Stat(ctx, gitDir)
+		if fi, err := os.Lstat(filepath.Join(rootPin.Path, ".git")); err == nil && fi.IsDir() {
+			isGitRepo = true
+		}
 	}
-	siteUID, siteGID, haveSiteUser := siteUserIDs(payload.SystemUser)
-	if !exists || !isGitRepo {
-		// Cloning never executes repository code, so root may do it; ownership is
-		// handed to the site user right after so every later git/npm/pip step
-		// runs unprivileged.
-		cloneArgs := []string{"clone"}
+	if !exists {
+		// Clone into the (pinned) parent, as the site user.
+		parent, base, err := sitefs.PinParent(payload.RootPath)
+		if err != nil {
+			return echo.NewHTTPError(sitefs.StatusOf(err), err.Error())
+		}
+		defer parent.Close()
+		if st, ok := parent.Info.Sys().(*syscall.Stat_t); !ok || st.Uid != siteUID {
+			return echo.NewHTTPError(http.StatusConflict, "the site's parent directory is not owned by the site user")
+		}
+		args := []string{"clone"}
 		if payload.Branch != "" {
-			cloneArgs = append(cloneArgs, "-b", payload.Branch)
+			args = append(args, "-b", payload.Branch)
 		}
-		if !exists {
-			cloneArgs = append(cloneArgs, "--", payload.Repo, payload.RootPath)
-			if output, err := r.executor.RunShell(ctx, "git", cloneArgs...); err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
-			}
-		} else {
-			// The root exists but is not a repository (site.create writes
-			// starter files): "git clone" refuses a non-empty directory, so
-			// clone the history next to it and check it out in place.
-			tmp, err := os.MkdirTemp(filepath.Dir(payload.RootPath), ".sigarda-clone-")
-			if err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "prepare clone failed: "+err.Error())
-			}
-			defer os.RemoveAll(tmp)
-			cloneArgs = append(cloneArgs, "--no-checkout", "--", payload.Repo, tmp)
-			if output, err := r.executor.RunShell(ctx, "git", cloneArgs...); err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
-			}
-			if err := os.Rename(filepath.Join(tmp, ".git"), filepath.Join(payload.RootPath, ".git")); err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "install repository failed: "+err.Error())
-			}
-			if output, err := r.executor.RunShell(ctx, "git", "-C", payload.RootPath, "checkout", "-f", "HEAD", "--", "."); err != nil {
-				_ = os.RemoveAll(filepath.Join(payload.RootPath, ".git"))
-				return echo.NewHTTPError(http.StatusInternalServerError, "git checkout failed: "+strings.TrimSpace(output))
-			}
+		args = append(args, "--", payload.Repo, base)
+		if output, err := asUser(parent.Path, args...); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
 		}
-		if haveSiteUser {
-			if out, err := r.executor.RunShell(ctx, "chown", "-R", fmt.Sprintf("%d:%d", siteUID, siteGID), payload.RootPath); err != nil {
-				slog.Warn("agent: deploy chown failed", "error", err, "output", strings.TrimSpace(out))
-			}
+		if rootPin, err = sitefs.PinDir(payload.RootPath); err != nil {
+			return echo.NewHTTPError(sitefs.StatusOf(err), err.Error())
+		}
+		defer rootPin.Close()
+	} else if !isGitRepo {
+		// The root exists but is not a repository (site.create writes
+		// starter files): "git clone" refuses a non-empty directory, so
+		// clone the history next to the files and check it out in place.
+		const tmp = ".sigarda-clone"
+		_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "rm", "-rf", "--", tmp)
+		args := []string{"clone", "--no-checkout"}
+		if payload.Branch != "" {
+			args = append(args, "-b", payload.Branch)
+		}
+		args = append(args, "--", payload.Repo, tmp)
+		if output, err := asUser(rootPin.Path, args...); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "git clone failed: "+strings.TrimSpace(output))
+		}
+		out, err := r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "mv", "-T", "--", tmp+"/.git", ".git")
+		_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "rm", "-rf", "--", tmp)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "install repository failed: "+strings.TrimSpace(out))
+		}
+		if output, err := asUser(rootPin.Path, "checkout", "-f", "HEAD", "--", "."); err != nil {
+			_, _ = r.runAsSiteUser(ctx, siteUID, siteGID, rootPin.Path, "rm", "-rf", "--", ".git")
+			return echo.NewHTTPError(http.StatusInternalServerError, "git checkout failed: "+strings.TrimSpace(output))
 		}
 	} else {
-		output, err := r.runGit(ctx, payload.RootPath, "pull", "origin", payload.Branch)
+		output, err := asUser(rootPin.Path, "pull", "origin", payload.Branch)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "git pull failed: "+strings.TrimSpace(output))
 		}
 	}
 
-	commitOut, _ := r.runGit(ctx, payload.RootPath, "rev-parse", "HEAD")
+	commitOut, _ := asUser(rootPin.Path, "rev-parse", "HEAD")
 	commit := strings.TrimSpace(commitOut)
 
 	// ─── Step 2: Install dependencies based on runtime ───

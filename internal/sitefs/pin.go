@@ -97,19 +97,72 @@ func PinDir(path string) (*PinnedDir, error) {
 		f.Close()
 		return nil, err
 	}
-	// The walk above accepted only trusted links, so Stat reaches what the
-	// path names now; it must be the directory that was opened.
-	now, err := os.Stat(clean)
-	if err != nil || !os.SameFile(opened, now) {
+	// Separate lookups (open, walk, stat) can each see a different tree
+	// while the site user swaps a component between a symlink and nothing.
+	// The kernel's path of the opened directory is authoritative: it must be
+	// exactly where the path leads through trusted links only.
+	fdPath := fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), f.Fd())
+	real, err := os.Readlink(fdPath)
+	if err != nil {
+		f.Close()
+		return nil, fail(http.StatusInternalServerError, "cannot verify the site root (is /proc mounted?)")
+	}
+	want, err := trustedRealPath(clean, 0)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if real != want {
 		f.Close()
 		return nil, fail(http.StatusBadRequest, "site root changed while it was opened")
 	}
-	p := &PinnedDir{f: f, Path: clean, Info: opened}
-	fdPath := fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), f.Fd())
-	if fi, err := os.Stat(fdPath); err == nil && os.SameFile(fi, opened) {
-		p.Path = fdPath
-	}
+	p := &PinnedDir{f: f, Path: fdPath, Info: opened}
 	return p, nil
+}
+
+// trustedRealPath is where path leads when only trusted links (root-owned,
+// in a root-owned directory: system layouts such as /home -> /var/home) are
+// followed. A user-planted link is refused; a missing component ends the
+// walk and the rest of the path is taken as written (it cannot match an
+// opened directory that lives elsewhere).
+func trustedRealPath(path string, depth int) (string, error) {
+	if depth > 8 {
+		return "", fail(http.StatusBadRequest, "too many levels of symbolic links in the site root")
+	}
+	parts := strings.Split(strings.TrimPrefix(filepath.Clean(path), "/"), "/")
+	cur := "/"
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		next := filepath.Join(cur, part)
+		fi, err := os.Lstat(next)
+		if errors.Is(err, fs.ErrNotExist) {
+			return filepath.Join(append([]string{cur}, parts[i:]...)...), nil
+		}
+		if err != nil {
+			return "", fail(http.StatusBadRequest, "site root is not accessible")
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			cur = next
+			continue
+		}
+		pfi, err := os.Stat(cur)
+		if !rootOwned(fi) || err != nil || !rootOwned(pfi) || (pfi.Mode().Perm()&0o002 != 0 && pfi.Mode()&os.ModeSticky == 0) {
+			return "", fail(http.StatusBadRequest, "site root path contains a symbolic link ("+next+")")
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return "", fail(http.StatusBadRequest, "site root is not accessible")
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(cur, target)
+		}
+		if cur, err = trustedRealPath(target, depth+1); err != nil {
+			return "", err
+		}
+	}
+	return cur, nil
 }
 
 // PinParent pins the parent directory of path and returns it with the base

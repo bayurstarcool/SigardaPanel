@@ -12,6 +12,7 @@ import (
 	"sigardapanel/internal/audit"
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/siteinput"
 	"sigardapanel/internal/store"
 )
 
@@ -98,6 +99,24 @@ func (h *userHandler) create(c *echo.Context) error {
 	}
 	if body.Email == "" || !emailRegex.MatchString(body.Email) {
 		return echo.NewHTTPError(http.StatusBadRequest, "valid email required")
+	}
+	// The username becomes the user's Linux account on every server their
+	// sites land on: it must be a valid, non-reserved account name that no
+	// site or SSH/SFTP account already uses (taking such a name would hand
+	// over that account's files and shell).
+	if err := siteinput.SystemUser(body.Username); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, _ or - (starting with a letter) and not a system account name")
+	}
+	{
+		var n int
+		if err := h.store.DB().QueryRowContext(c.Request().Context(),
+			`SELECT (SELECT COUNT(*) FROM sites WHERE system_user = ?) + (SELECT COUNT(*) FROM site_ssh_ftp WHERE username = ?)`,
+			body.Username, body.Username).Scan(&n); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		if n > 0 {
+			return echo.NewHTTPError(http.StatusConflict, "this name is already used by a site or an SSH/SFTP account")
+		}
 	}
 	if body.Role == "" {
 		body.Role = "user"

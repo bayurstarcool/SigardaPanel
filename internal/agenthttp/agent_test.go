@@ -102,6 +102,7 @@ func TestSiteDeleteTask_Success(t *testing.T) {
 }
 
 func TestSiteDeployTask_Success(t *testing.T) {
+	defer useCurrentDeployUser()()
 	repoDir := setupGitRepo(t)
 	rootDir := t.TempDir()
 	e := NewRouterWithOptions(RouterOptions{AllowStubSSL: true})

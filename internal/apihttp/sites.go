@@ -287,6 +287,12 @@ func (h *siteHandler) create(c *echo.Context) error {
 		body.ConfFile = "" // informational field, only admins may set it
 	}
 	if body.Runtime == "docker" {
+		// A container runs as root with the site root (and volumes) mounted:
+		// it can leave setuid-root files there or mount the host through a
+		// symlink. Docker sites are therefore a super_admin feature.
+		if requester == nil || requester.Role != auth.RoleSuperAdmin {
+			return echo.NewHTTPError(http.StatusForbidden, "docker sites can only be created by a super admin")
+		}
 		if err := siteinput.DockerOptions(body.DockerImage, body.DockerName, body.DockerPorts, body.DockerEnv,
 			body.DockerVolume, body.DockerRestart, body.DockerLanguage, body.RootPath); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())

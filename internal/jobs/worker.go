@@ -311,7 +311,9 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 		// A database that could not be created must not stay recorded: its
 		// name may belong to someone else on the server (grants, backups and
 		// delete would then act on that database).
-		if job.Type == jobmodel.TypeDatabaseCreate {
+		// Only a definite "not created" (the name exists on the server or is
+		// reserved) drops it; after a timeout the database may exist.
+		if job.Type == jobmodel.TypeDatabaseCreate && databaseCreateRefused(execErr, result) {
 			var p struct {
 				DatabaseID int64 `json:"database_id"`
 			}
@@ -767,4 +769,18 @@ func (w *Worker) siteCreatePayload(ctx context.Context, site *store.Site, raw st
 		return raw, nil
 	}
 	return string(b), nil
+}
+
+// databaseCreateRefused reports the agent's definite refusals of a
+// database.create: the name already exists on the server, or is reserved.
+func databaseCreateRefused(execErr error, result *agentclient.TaskResult) bool {
+	var b strings.Builder
+	if execErr != nil {
+		b.WriteString(execErr.Error())
+	}
+	if result != nil {
+		b.WriteString(" " + result.Error + " " + result.Output)
+	}
+	msg := strings.ToLower(b.String())
+	return strings.Contains(msg, "already exists on the server") || strings.Contains(msg, "reserved database name")
 }

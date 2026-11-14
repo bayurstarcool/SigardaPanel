@@ -295,6 +295,7 @@ func TestNginxReloadTask_BestEffort(t *testing.T) {
 }
 
 func TestSiteDeployTask_Real(t *testing.T) {
+	defer useCurrentDeployUser()()
 	repoDir := setupGitRepo(t)
 	rootDir := t.TempDir()
 	deployDir := filepath.Join(rootDir, "deploy")
@@ -387,6 +388,7 @@ func containsAt(s, substr string) bool {
 }
 
 func TestSiteDeployTask_Pull(t *testing.T) {
+	defer useCurrentDeployUser()()
 	repoDir := setupGitRepo(t)
 	deployDir := t.TempDir()
 

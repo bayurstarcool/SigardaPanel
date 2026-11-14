@@ -8,6 +8,7 @@ import (
 )
 
 func TestSiteDeployIntoExistingNonGitRoot(t *testing.T) {
+	defer useCurrentDeployUser()()
 	repoDir := setupGitRepo(t)
 	_ = exec.Command("git", "-C", repoDir, "commit", "--amend", "-m", "init", "--no-gpg-sign").Run()
 	branch := "master"

@@ -80,6 +80,15 @@ func (r *Router) ensureSiteUser(ctx context.Context, name string) (*siteOwner, e
 		}
 	}
 	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err == nil && uid >= minSiteUserUID && uid != 65534 {
+		// An existing account is adopted only when it is an ordinary
+		// account: never one with sudo/docker/... or an SFTP jail account
+		// (taking such a name would hand its owner's files, or root, to the
+		// tenant whose panel username matches it).
+		if perr := accountPrivilegedOrJail(u); perr != nil {
+			return nil, fmt.Errorf("refusing to use the existing Linux account %s as site owner: %v (choose another panel username, or, if this account is meant to own sites, add it to %s on this server)", name, perr, trustedSiteUsersFile)
+		}
+	}
 	if err != nil || uid < minSiteUserUID || uid == 65534 {
 		slog.Warn("agent: system_user is a system account; site files keep their owner", "user", name, "uid", u.Uid)
 		return nil, nil

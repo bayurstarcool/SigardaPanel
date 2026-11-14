@@ -357,8 +357,16 @@ func FilterPHPIni(s string) (string, []string) {
 	return strings.Join(kept, `\n `), rejected
 }
 
-// panelPorts are the panel's own services on a host (API, agent, web).
-var panelPorts = map[string]bool{"7700": true, "7710": true, "7720": true}
+
+// loopbackServicePorts are local services a tenant's proxy must never reach:
+// the panel (API, agent, web) and data stores that listen on loopback.
+var loopbackServicePorts = map[int]bool{
+	7700: true, 7710: true, 7720: true, // panel API, root agent, web
+	22: true, 25: true, 53: true, 111: true, 2049: true,
+	3306: true, 33060: true, 5432: true, 6379: true, 11211: true, 27017: true,
+	9200: true, 9300: true, 5672: true, 15672: true, 2375: true, 2376: true,
+	8443: true, 10250: true, 6082: true, // varnish admin
+}
 
 // ProxyPassTarget checks where a proxy site would send requests (its host,
 // resolved when it is a name). Link-local (cloud metadata at 169.254.169.254),
@@ -371,7 +379,25 @@ func ProxyPassTarget(ctx context.Context, raw string, allowInternal bool) error 
 		return fmt.Errorf("invalid proxy_pass_url")
 	}
 	host := u.Hostname()
-	port := u.Port()
+	// nginx reads the port as a number ("07700" is 7700): compare numbers.
+	port := 80
+	if u.Scheme == "https" {
+		port = 443
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("invalid proxy_pass_url port")
+		}
+		port = n
+	}
+	// A tenant's target must be a literal IP: a name is resolved again by
+	// nginx on every reload, so it could later point at metadata or private
+	// addresses (DNS rebinding) after this check passed.
+	isLocalhost := strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost")
+	if !allowInternal && net.ParseIP(host) == nil && !isLocalhost {
+		return fmt.Errorf("proxy_pass_url must use an IP address (ask an administrator to proxy to a host name)")
+	}
 	var ips []net.IP
 	if ip := net.ParseIP(host); ip != nil {
 		ips = []net.IP{ip}
@@ -397,8 +423,8 @@ func ProxyPassTarget(ctx context.Context, raw string, allowInternal bool) error 
 		if allowInternal {
 			continue
 		}
-		if ip.IsLoopback() && panelPorts[port] {
-			return fmt.Errorf("proxy_pass_url may not point to the panel's own services")
+		if ip.IsLoopback() && loopbackServicePorts[port] {
+			return fmt.Errorf("proxy_pass_url may not point to the panel or local database/system services")
 		}
 		if ip.IsPrivate() {
 			return fmt.Errorf("proxy_pass_url may not point to a private network address (ask an administrator)")
