@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -29,7 +29,7 @@
   let blockIP = $state('');
   let filter = $state<'all' | 'ALLOW' | 'DENY'>('all');
   let query = $state('');
-  const canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  const canManage = $derived(hasPermission('server.firewall'));
 
   // Confirm dialog state shared by delete / reset / disable.
   let confirmOpen = $state(false);

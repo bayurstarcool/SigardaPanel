@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import CreateServerModal from '$components/CreateServerModal.svelte';
   import { Plus } from 'lucide-svelte';
 
   let { oncreated, size = 'sm' }: { oncreated?: () => void; size?: 'sm' | 'md' } = $props();
 
   let showModal = $state(false);
-  let canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  let canManage = $derived(hasPermission('server.manage'));
 </script>
 
 {#if canManage}

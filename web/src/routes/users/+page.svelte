@@ -1,7 +1,7 @@
 <script lang="ts">
   import LoadError from '$components/LoadError.svelte';
   import { fmtDate } from '$lib/format';
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
@@ -136,7 +136,7 @@
   }
 
 
-  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
+  const isAdmin = $derived(hasPermission('user.manage'));
 </script>
 
 <DashboardLayout active="Users">

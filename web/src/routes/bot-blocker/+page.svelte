@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -15,7 +15,7 @@
   let loading = $state(true);
   let loadError = $state('');
   let busy = $state('');
-  const canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  const canManage = $derived(hasPermission('server.firewall'));
 
   let blockedAgents = $state<string[]>([]);
   let blockedIPs = $state<string[]>([]);

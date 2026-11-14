@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fmtDate } from '$lib/format';
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -76,7 +76,7 @@
   }
 
   onMount(() => {
-    if (!hasRole(auth.user?.role, 'super_admin')) return;
+    if (!hasPermission('plan.manage')) return;
     loadPlans();
   });
 
@@ -166,7 +166,7 @@
 </script>
 
 <DashboardLayout active="Plans">
-  {#if !hasRole(auth.user?.role, 'super_admin')}
+  {#if !hasPermission('plan.manage')}
     <div class="card">
       <EmptyState icon={ShieldOff as any} title="Access denied" description="Only super admins can manage plans." />
     </div>

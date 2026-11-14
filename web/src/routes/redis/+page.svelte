@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -23,7 +23,7 @@
   let flushing = $state(false);
   let confirmOpen = $state(false);
   let confirmKind = $state<'all' | 'db0'>('db0');
-  const canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  const canManage = $derived(hasPermission('server.services'));
 
   onMount(async () => {
     if (!auth.user) { window.location.href = '/login'; return; }

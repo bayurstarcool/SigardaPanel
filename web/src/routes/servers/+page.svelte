@@ -1,6 +1,6 @@
 <script lang="ts">
   import LoadError from '$components/LoadError.svelte';
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtDate } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -16,7 +16,7 @@
   let loading = $state(true);
   let editServer = $state<any>(null);
   let editOpen = $state(false);
-  let canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  let canManage = $derived(hasPermission('server.manage'));
 
   let loadError = $state('');
 

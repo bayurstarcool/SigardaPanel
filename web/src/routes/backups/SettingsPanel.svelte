@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtRelative } from '$lib/format';
   import { toasts } from '$lib/toast.svelte';
@@ -8,7 +8,7 @@
   import ProviderModal from './ProviderModal.svelte';
   import ConfigModal from './ConfigModal.svelte';
   import { Cloud, Plus, Pencil, Trash2, Play, Clock, CalendarClock } from 'lucide-svelte';
-  const isSuper = $derived(hasRole(auth.user?.role, 'super_admin'));
+  const isSuper = $derived(hasPermission('backup.provider.manage'));
 
   let {
     providers,
@@ -137,7 +137,7 @@
   </section>
 
   <!-- Backup configs act on every site: super_admin only (the API enforces it). -->
-  {#if hasRole(auth.user?.role, 'super_admin')}
+  {#if hasPermission('backup.provider.manage')}
   <section class="card">
     <div class="card-header">
       <h2 class="card-title">Backup configs</h2>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtBytesFull } from '$lib/format';
   import { onMount } from 'svelte';
@@ -26,8 +26,7 @@
   type Group = { title: string; items: Item[] };
 
   const groups = $derived.by((): Group[] => {
-    const isAdmin = hasRole(auth.user?.role, 'admin');
-    const isSuper = hasRole(auth.user?.role, 'super_admin');
+    const can = (p: string) => hasPermission(p);
     const g: Group[] = [
       { title: '', items: [{ label: 'Overview', href: '/dashboard', icon: LayoutDashboard }] },
       {
@@ -48,15 +47,15 @@
           { label: 'Stack', href: '/stack', icon: Layers },
           // Server-level tools: their API routes are admin-only, so other
           // roles would only get pages that cannot load.
-          ...(isAdmin
+          ...(can('docker.manage') ? [{ label: 'Docker', href: '/docker', icon: Box }] : []),
+          ...(can('server.services')
             ? [
-                { label: 'Docker', href: '/docker', icon: Box },
                 { label: 'PM2', href: '/pm2', icon: Cpu },
                 { label: 'Redis', href: '/redis', icon: Zap },
                 { label: 'Email', href: '/email', icon: Mail },
-                { label: 'Terminal', href: '/terminal', icon: SquareTerminal },
               ]
             : []),
+          ...(can('server.terminal') ? [{ label: 'Terminal', href: '/terminal', icon: SquareTerminal }] : []),
           { label: 'Monitoring', href: '/monitoring', icon: BarChart3 },
           { label: 'System', href: '/system', icon: HardDrive },
         ],
@@ -64,7 +63,7 @@
       {
         title: 'Security',
         items: [
-          ...(isAdmin
+          ...(can('server.firewall')
             ? [
                 { label: 'Firewall', href: '/firewall', icon: Shield },
                 { label: 'Fail2ban', href: '/fail2ban', icon: ShieldBan },
@@ -82,17 +81,12 @@
         ],
       },
     ];
-    if (isAdmin) {
-      const admin: Item[] = [
-        { label: 'Users', href: '/users', icon: Users, pro: true },
-        { label: 'Audit', href: '/audit', icon: ClipboardCheck },
-      ];
-      if (isSuper) {
-        admin.push({ label: 'Plans', href: '/admin/plans', icon: DollarSign });
-        admin.push({ label: 'Orders', href: '/admin/orders', icon: ShoppingCart });
-      }
-      g.push({ title: 'Admin', items: admin });
-    }
+    const admin: Item[] = [];
+    if (can('user.manage')) admin.push({ label: 'Users', href: '/users', icon: Users, pro: true });
+    if (can('audit.view')) admin.push({ label: 'Audit', href: '/audit', icon: ClipboardCheck });
+    if (can('plan.manage')) admin.push({ label: 'Plans', href: '/admin/plans', icon: DollarSign });
+    if (can('order.manage')) admin.push({ label: 'Orders', href: '/admin/orders', icon: ShoppingCart });
+    if (admin.length) g.push({ title: 'Admin', items: admin });
     g.push({ title: '', items: [{ label: 'Docs', href: '/docs', icon: BookOpen }] });
     return g;
   });

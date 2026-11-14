@@ -2,7 +2,7 @@
   import LoadError from '$components/LoadError.svelte';
   import { fmtDate } from '$lib/format';
   import { page } from '$app/stores';
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
@@ -267,7 +267,7 @@
       {/if}
     {/snippet}
     {#snippet actions()}
-      {#if user && hasRole(auth.user?.role, 'admin') && auth.user?.id !== userId}
+      {#if user && hasPermission('user.impersonate') && auth.user?.id !== userId}
         <button onclick={() => (showImpersonateDialog = true)} class="btn btn-secondary btn-sm">
           <LogIn size={14} /> Impersonate
         </button>

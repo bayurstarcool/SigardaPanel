@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtDateTime } from '$lib/format';
   import Modal from '$components/Modal.svelte';
@@ -40,7 +40,7 @@
   let createdServer = $state<any>(null);
   let panelVersion = $state('');
 
-  let canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  let canManage = $derived(hasPermission('server.manage'));
   let copied = $state('');
 
   $effect(() => {

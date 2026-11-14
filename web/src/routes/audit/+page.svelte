@@ -1,6 +1,6 @@
 <script lang="ts">
   import LoadError from '$components/LoadError.svelte';
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtRelative, fmtDateTime } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -59,7 +59,7 @@
   let userFilter = $state('');
   let expanded = $state<number | null>(null);
 
-  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
+  const isAdmin = $derived(hasPermission('audit.view'));
   const userNames = $derived(new Map<number, string>(users.map((u) => [u.id, u.username || u.email])));
 
   onMount(() => {

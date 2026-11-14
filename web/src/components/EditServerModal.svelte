@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth } from '$lib/auth.svelte';
+  import { auth, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import Modal from '$components/Modal.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
@@ -60,7 +60,7 @@
     }
   });
 
-  let canManage = $derived(hasRole(auth.user?.role, 'admin'));
+  let canManage = $derived(hasPermission('server.manage'));
 
   async function save() {
     saving = true;

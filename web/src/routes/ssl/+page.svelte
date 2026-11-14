@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
@@ -142,7 +142,7 @@
       <button onclick={loadData} class="btn btn-secondary btn-sm" disabled={loading}>
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
-      {#if hasRole(auth.user?.role, 'super_admin')}
+      {#if hasPermission('ssl.renew_all')}
         <button onclick={renewAll} class="btn btn-secondary btn-sm" disabled={renewingAll || counts.expiring_soon + counts.expired === 0}>
           <RefreshCw size={14} class={renewingAll ? 'animate-spin' : ''} /> Renew expiring
         </button>

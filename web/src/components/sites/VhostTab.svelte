@@ -7,7 +7,7 @@
   let { siteId, site, onTriggerDeploy }: { siteId: number; site: any; onTriggerDeploy?: () => void } = $props();
   // Raw vhost edits are root on the server: the API allows admins only.
   // Raw nginx text can read files and reach the agent: super_admin only.
-  const canEditVhost = $derived(auth.user?.permissions ? hasPermission('site.vhost.raw') : hasRole(auth.user?.role, 'super_admin'));
+  const canEditVhost = $derived(hasPermission('site.vhost.raw'));
 
   // CodeMirror is heavy; fetch it only when this tab renders.
   const editorModule = import('$components/CodeEditor.svelte');

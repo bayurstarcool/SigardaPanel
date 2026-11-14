@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, hasRole } from '$lib/auth.svelte';
+  import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { fmtRelative, fmtBytesFull, expiryTone } from '$lib/format';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -33,7 +33,7 @@
   let refreshing = $state(false);
   let refreshedAt = $state<Date | null>(null);
 
-  const isAdmin = $derived(hasRole(auth.user?.role, 'admin'));
+  const isAdmin = $derived(hasPermission('server.firewall'));
 
   function percent(used: number, total: number): number {
     if (!total || total <= 0) return 0;
@@ -134,7 +134,7 @@
   // Server-level shortcuts (Docker, Firewall, Redis, root Terminal) are
   // admin-only in the API; other roles get site-level ones.
   const quickActions = $derived(
-    hasRole(auth.user?.role, 'admin')
+    hasPermission('server.manage')
       ? [
           { label: 'New site', href: '/sites', icon: Globe },
           { label: 'Docker', href: '/docker', icon: Box },
