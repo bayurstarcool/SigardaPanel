@@ -151,3 +151,38 @@ func TestRawVhostAndLicenseNeedSuperAdmin(t *testing.T) {
 		}
 	}
 }
+
+// A site root never lands in another Linux account's home, a whole home or
+// htdocs, or another site's tree on the same server, super_admin included.
+func TestSiteRootOwnershipAndOverlap(t *testing.T) {
+	f := newAuthzFixture(t)
+	_, rootTok := f.user("boss", auth.RoleSuperAdmin)
+	create := func(domain, rootPath string) int {
+		body := map[string]any{"server_id": f.serverID, "name": "s", "domain": domain, "runtime": "static", "root_path": rootPath}
+		return f.do("POST", "/api/v1/sites", body, rootTok).Code
+	}
+	if c := create("first.test", "/home/boss/htdocs/first.test"); c != http.StatusCreated && c != http.StatusAccepted {
+		t.Fatalf("first site = %d", c)
+	}
+	for _, tc := range []struct {
+		domain, root string
+		want         int
+	}{
+		{"budi.test", "/home/budi/htdocs/budi.test", http.StatusBadRequest},          // another account's home
+		{"home.test", "/home/boss", http.StatusBadRequest},                           // the whole home
+		{"all.test", "/home/boss/htdocs", http.StatusBadRequest},                     // all of htdocs
+		{"same.test", "/home/boss/htdocs/first.test", http.StatusConflict},           // same root
+		{"inner.test", "/home/boss/htdocs/first.test/sub", http.StatusConflict},      // inside another site
+		{"trail.test", "/home/boss/htdocs/first.test/", http.StatusConflict},         // same with a trailing slash
+		{"outer.test", "/home/boss/apps", http.StatusCreated},                        // unrelated tree
+		{"wrap.test", "/home/boss/apps/../htdocs/first.test", http.StatusBadRequest}, // ".." is refused outright
+	} {
+		got := create(tc.domain, tc.root)
+		if tc.want == http.StatusCreated && (got == http.StatusCreated || got == http.StatusAccepted) {
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s at %s = %d, want %d", tc.domain, tc.root, got, tc.want)
+		}
+	}
+}

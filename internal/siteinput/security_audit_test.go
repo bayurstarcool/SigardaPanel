@@ -55,3 +55,33 @@ func TestReservedServiceAccounts(t *testing.T) {
 		t.Fatal("alice refused")
 	}
 }
+
+func TestRootPathForOwner(t *testing.T) {
+	ok := []string{"/home/admin/htdocs/shop.test", "/home/admin/apps/api", "/var/www/shop"}
+	for _, p := range ok {
+		if err := RootPathForOwner(p, "admin"); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	bad := []string{"/home/budi/htdocs/shop.test", "/home/admin", "/home/admin/", "/home/admin/htdocs", "/home/admin/.ssh/x", "/home/budi"}
+	for _, p := range bad {
+		if RootPathForOwner(p, "admin") == nil {
+			t.Errorf("%s accepted", p)
+		}
+	}
+}
+
+func TestRootPathsOverlap(t *testing.T) {
+	cases := map[[2]string]bool{
+		{"/home/a/htdocs/x", "/home/a/htdocs/x"}:     true,
+		{"/home/a/htdocs/x", "/home/a/htdocs/x/sub"}: true,
+		{"/home/a/htdocs/x/", "/home/a/htdocs/x"}:    true,
+		{"/home/a/htdocs/x", "/home/a/htdocs/xy"}:    false,
+		{"/home/a/htdocs/x", "/home/b/htdocs/x"}:     false,
+	}
+	for c, want := range cases {
+		if got := RootPathsOverlap(c[0], c[1]); got != want {
+			t.Errorf("%v = %v, want %v", c, got, want)
+		}
+	}
+}

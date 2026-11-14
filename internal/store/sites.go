@@ -9,6 +9,7 @@ import (
 
 	"sigardapanel/internal/auth"
 	"sigardapanel/internal/jobmodel"
+	"sigardapanel/internal/siteinput"
 )
 
 // Site represents a website / application deployed on a server.
@@ -64,6 +65,9 @@ type SiteRepository interface {
 	Create(ctx context.Context, s *Site) error
 	GetByID(ctx context.Context, id int64) (*Site, error)
 	GetByDomain(ctx context.Context, domain string) (*Site, error)
+	// SiteRootConflict returns the domain of another site on the server whose
+	// root overlaps root (same, parent or child directory), "" when none.
+	SiteRootConflict(ctx context.Context, serverID int64, root string, excludeID int64) (string, error)
 	List(ctx context.Context, filter SiteListFilter) ([]Site, error)
 	Update(ctx context.Context, s *Site) error
 	UpdateStatus(ctx context.Context, id int64, status string) error
@@ -712,4 +716,25 @@ func scanSite(row *sql.Row) (*Site, error) {
 		return nil, fmt.Errorf("scan site: %w", err)
 	}
 	return &site, nil
+}
+
+// SiteRootConflict returns the domain of another site on serverID whose root
+// is the same directory as root or contains it or lies inside it ("" when
+// none). excludeID skips the site being changed.
+func (s *SQLiteSiteStore) SiteRootConflict(ctx context.Context, serverID int64, root string, excludeID int64) (string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT domain, root_path FROM sites WHERE server_id = ? AND id != ? AND root_path != ''`, serverID, excludeID)
+	if err != nil {
+		return "", fmt.Errorf("list site roots: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var domain, other string
+		if err := rows.Scan(&domain, &other); err != nil {
+			return "", err
+		}
+		if siteinput.RootPathsOverlap(root, other) {
+			return domain, nil
+		}
+	}
+	return "", rows.Err()
 }

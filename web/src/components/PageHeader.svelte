@@ -19,7 +19,7 @@
   } = $props();
 </script>
 
-<div class="mb-6">
+<div class="mb-7">
   {#if back}
     <a href={back} class="mb-3 inline-flex items-center gap-1 text-[13px] text-subtle transition-colors hover:text-fg">
       <ChevronLeft size={14} /> {backLabel}
@@ -28,11 +28,11 @@
   <div class="flex flex-wrap items-start justify-between gap-4">
     <div class="min-w-0">
       <div class="flex flex-wrap items-center gap-2.5">
-        <h1 class="truncate text-xl font-semibold tracking-tight text-fg sm:text-2xl">{title}</h1>
+        <h1 class="truncate text-[22px] font-semibold tracking-[-0.022em] text-fg sm:text-[26px]">{title}</h1>
         {#if meta}{@render meta()}{/if}
       </div>
       {#if description}
-        <p class="mt-1 text-sm text-muted">{description}</p>
+        <p class="mt-1.5 text-[13.5px] text-muted">{description}</p>
       {/if}
     </div>
     {#if actions}

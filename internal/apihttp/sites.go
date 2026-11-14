@@ -341,6 +341,20 @@ func (h *siteHandler) create(c *echo.Context) error {
 		}
 	}
 
+	// The root belongs to the site's own Linux account and to this site only:
+	// never another account's home, a whole home or htdocs, and never the
+	// same tree as another site on the server (deleting one would delete the
+	// other's files). This holds for super_admin too.
+	if err := siteinput.RootPathForOwner(body.RootPath, body.SystemUser); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if other, err := h.store.Sites.SiteRootConflict(c.Request().Context(), body.ServerID, body.RootPath, 0); err != nil {
+		slog.Error("api: request failed", "route", c.Path(), "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	} else if other != "" {
+		return echo.NewHTTPError(http.StatusConflict, "root_path overlaps the root of "+other+" on this server; choose another directory")
+	}
+
 	// Validate domain not duplicate
 	existing, err := h.store.Sites.GetByDomain(c.Request().Context(), body.Domain)
 	if err != nil {
@@ -1073,6 +1087,11 @@ func (h *siteHandler) transfer(c *echo.Context) error {
 	// root path and system user change only when that succeeded, then the
 	// vhost is regenerated for the new path.
 	newRoot := store.TransferRoot(target.Username, site.Domain)
+	if other, err := h.store.Sites.SiteRootConflict(c.Request().Context(), site.ServerID, newRoot, site.ID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	} else if other != "" {
+		return echo.NewHTTPError(http.StatusConflict, "the new owner's directory for this site overlaps the root of "+other)
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"site_id": site.ID, "domain": site.Domain, "old_root": site.RootPath, "new_root": newRoot,
 		"system_user": target.Username, "new_owner_id": target.ID,

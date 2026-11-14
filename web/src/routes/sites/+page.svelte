@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fmtDate } from '$lib/format';
-  import { auth } from '$lib/auth.svelte';
+  import { auth, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
@@ -18,6 +18,11 @@
   let loadError = $state('');
   let showCreate = $state(false);
   let form = $state({ server_id: 0, name: '', domain: '', runtime: 'static', php_version: '8.3', root_path: '', proxy_pass_url: '', docker_image: '', docker_language: '', docker_name: '', docker_ports: '', docker_env: '', docker_volume: '', docker_restart: 'unless-stopped' });
+  // The API fills an empty root with /home/<owner>/htdocs/<domain>: show
+  // that exact path instead of a generic example.
+  const ownerName = $derived(auth.user?.username || 'user');
+  const defaultRoot = $derived(`/home/${ownerName}/htdocs/${form.domain.trim().toLowerCase() || 'your-domain.com'}`);
+  const canAnyRoot = $derived(hasPermission('site.any_root'));
   let phpVersions = ['8.5', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4'];
 
   // Docker language presets
@@ -295,8 +300,15 @@
             </div>
           {/if}
           <div>
-            <label for="site-root" class="label">Root path</label>
-            <input id="site-root" bind:value={form.root_path} class="input font-mono text-[13px]" placeholder="/home/user/htdocs/example.com (auto if empty)" />
+            <label for="site-root" class="label">Root path <span class="font-normal text-subtle">(optional)</span></label>
+            <input id="site-root" bind:value={form.root_path} class="input font-mono text-[13px]" placeholder={defaultRoot} autocomplete="off" spellcheck="false" />
+            <p class="hint">
+              {#if form.root_path.trim()}
+                Custom location{#if !canAnyRoot}; it must stay inside <span class="font-mono">/home/{ownerName}/</span>{/if}.
+              {:else}
+                Leave empty to use <span class="font-mono text-muted">{#each defaultRoot.split('/').slice(1) as part, i (i)}/{part}<wbr />{/each}</span>
+              {/if}
+            </p>
           </div>
           <div class="flex items-end">
             <label class="flex h-9 cursor-pointer items-center gap-2 text-sm text-muted">
