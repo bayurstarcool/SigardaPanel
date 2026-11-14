@@ -6,7 +6,8 @@
 
   let { siteId, site, onTriggerDeploy }: { siteId: number; site: any; onTriggerDeploy?: () => void } = $props();
   // Raw vhost edits are root on the server: the API allows admins only.
-  const canEditVhost = $derived(hasRole(auth.user?.role, 'admin'));
+  // Raw nginx text can read files and reach the agent: super_admin only.
+  const canEditVhost = $derived(hasRole(auth.user?.role, 'super_admin'));
 
   // CodeMirror is heavy; fetch it only when this tab renders.
   const editorModule = import('$components/CodeEditor.svelte');
@@ -146,7 +147,7 @@
           {#if vhostDirty}<span class="flex items-center gap-1 text-warning"><span class="dot"></span>modified</span>{/if}
         </div>
         {#if !canEditVhost}
-          <span class="text-xs text-subtle">Read-only: editing the raw vhost needs an administrator.</span>
+          <span class="text-xs text-subtle">Read-only: editing the raw vhost needs a super admin. Use the Security, PHP and SSL tabs for site settings.</span>
         {:else}
         <div class="flex shrink-0 items-center gap-2">
           <button onclick={validateVhost} disabled={vhostValidating} class="btn btn-secondary btn-sm">
