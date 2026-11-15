@@ -535,7 +535,7 @@ web UI or direct API calls (see [API.md](API.md)):
 - **File manager, vhost editor, PHP config, cron, SSH/FTP accounts, IP restrictions,
   Varnish, app runtime (start/stop/limits)** — interactive editing; awkward and risky as
   one-shot commands.
-- **Cloudflare DNS/zones, license, plans and orders, member area** — business/UI
+- **Cloudflare DNS/zones, license, member area** — business/UI
   features, not operator tasks on a server.
 - **Backup providers, backup configs/schedules, bulk backups, retention settings** —
   multi-field configuration best done in the UI; `backup create --provider` covers

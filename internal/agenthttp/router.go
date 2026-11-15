@@ -26,6 +26,7 @@ import (
 	"sigardapanel/internal/nginx"
 	"sigardapanel/internal/sitefs"
 	"sigardapanel/internal/siteinput"
+	"sigardapanel/internal/sitepage"
 	"sigardapanel/internal/store"
 )
 
@@ -655,9 +656,9 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 			_ = sitefs.WriteNewFile(rootPin.Path, fname, []byte(content), 0644)
 		}
 	} else {
-		// static/proxy: write placeholder index.html
-		indexHTML := "<h1>" + payload.Domain + "</h1><p>Site created via SigardaPanel</p>"
-		_ = sitefs.WriteNewFile(rootPin.Path, "index.html", []byte(indexHTML), 0644)
+		// static, php, proxy, docker: the default page (index.php, when
+		// uploaded, takes over: nginx tries it first).
+		_ = sitefs.WriteNewFile(rootPin.Path, "index.html", []byte(sitepage.HTML(payload.Domain, payload.Runtime)), 0644)
 	}
 
 	// ─── Docker runtime: pull image + create container ───
@@ -1100,16 +1101,7 @@ fn main() {
 		}
 	default: // static
 		return map[string]string{
-			"index.html": fmt.Sprintf(`<!DOCTYPE html>
-<html>
-<head><title>%s</title></head>
-<body>
-  <h1>%s</h1>
-  <p>Hello from Docker 🐳</p>
-  <p>Runtime: Static</p>
-</body>
-</html>
-`, domain, domain),
+			"index.html": sitepage.HTML(domain, "docker"),
 		}
 	}
 }

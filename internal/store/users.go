@@ -20,7 +20,6 @@ type User struct {
 	CreatedAt         time.Time
 	DiskLimit         sql.NullInt64 // NULL = unlimited, value = max GB
 	MaxSites          sql.NullInt64 // NULL = unlimited, value = max sites
-	PlanID            sql.NullInt64 // NULL = no plan assigned
 	TOTPSecret        string        // TOTP secret for 2FA
 	TOTPEnabled       bool          // Whether 2FA is enabled
 	PasswordChangedAt sql.NullTime  // NULL = never changed (force change)
@@ -55,7 +54,6 @@ type UserRepository interface {
 	NullifyCreatedBy(ctx context.Context, userID int64) error
 	UpdateDiskLimit(ctx context.Context, userID int64, diskLimit sql.NullInt64) error
 	UpdateMaxSites(ctx context.Context, userID int64, maxSites sql.NullInt64) error
-	UpdatePlan(ctx context.Context, userID int64, planID sql.NullInt64) error
 }
 
 // UserListFilter controls which users are returned by List.
@@ -88,9 +86,9 @@ func (s *SQLiteUserStore) Create(ctx context.Context, user *User) error {
 	// password_changed_at NULL = must change; set = the user's own password.
 	changedAt := sql.NullTime{Time: time.Now().UTC(), Valid: !user.MustChangePassword}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (username, email, password_hash, role, created_by, disk_limit, max_sites, plan_id, password_changed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END)`,
-		user.Username, user.Email, user.PasswordHash, user.Role, user.CreatedBy, user.DiskLimit, user.MaxSites, user.PlanID, changedAt.Valid,
+		`INSERT INTO users (username, email, password_hash, role, created_by, disk_limit, max_sites, password_changed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END)`,
+		user.Username, user.Email, user.PasswordHash, user.Role, user.CreatedBy, user.DiskLimit, user.MaxSites, changedAt.Valid,
 	)
 	if err != nil {
 		return fmt.Errorf("insert user: %w", err)
@@ -107,21 +105,21 @@ func (s *SQLiteUserStore) Create(ctx context.Context, user *User) error {
 // GetByID retrieves a user by ID.
 func (s *SQLiteUserStore) GetByID(ctx context.Context, id int64) (*User, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, username, email, password_hash, role, created_by, created_at, disk_limit, max_sites, plan_id, COALESCE(totp_secret, ''), COALESCE(totp_enabled, 0), password_changed_at FROM users WHERE id = ?`, id)
+		`SELECT id, username, email, password_hash, role, created_by, created_at, disk_limit, max_sites, COALESCE(totp_secret, ''), COALESCE(totp_enabled, 0), password_changed_at FROM users WHERE id = ?`, id)
 	return scanUser(row)
 }
 
 // GetByEmail retrieves a user by email.
 func (s *SQLiteUserStore) GetByEmail(ctx context.Context, email string) (*User, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, username, email, password_hash, role, created_by, created_at, disk_limit, max_sites, plan_id, COALESCE(totp_secret, ''), COALESCE(totp_enabled, 0), password_changed_at FROM users WHERE email = ?`, email)
+		`SELECT id, username, email, password_hash, role, created_by, created_at, disk_limit, max_sites, COALESCE(totp_secret, ''), COALESCE(totp_enabled, 0), password_changed_at FROM users WHERE email = ?`, email)
 	return scanUser(row)
 }
 
 // GetByUsername retrieves a user by username.
 func (s *SQLiteUserStore) GetByUsername(ctx context.Context, username string) (*User, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, username, email, password_hash, role, created_by, created_at, disk_limit, max_sites, plan_id, COALESCE(totp_secret, ''), COALESCE(totp_enabled, 0), password_changed_at FROM users WHERE username = ?`, username)
+		`SELECT id, username, email, password_hash, role, created_by, created_at, disk_limit, max_sites, COALESCE(totp_secret, ''), COALESCE(totp_enabled, 0), password_changed_at FROM users WHERE username = ?`, username)
 	return scanUser(row)
 }
 
@@ -199,7 +197,7 @@ func scanUser(row *sql.Row) (*User, error) {
 	var u User
 	var totpSecret sql.NullString
 	var totpEnabled sql.NullInt64
-	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedBy, &u.CreatedAt, &u.DiskLimit, &u.MaxSites, &u.PlanID, &totpSecret, &totpEnabled, &u.PasswordChangedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedBy, &u.CreatedAt, &u.DiskLimit, &u.MaxSites, &totpSecret, &totpEnabled, &u.PasswordChangedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -213,7 +211,7 @@ func scanUser(row *sql.Row) (*User, error) {
 
 // List retrieves users, optionally filtered by creator.
 func (s *SQLiteUserStore) List(ctx context.Context, filter UserListFilter) ([]User, error) {
-	query := `SELECT id, username, email, password_hash, role, created_by, created_at, disk_limit, max_sites, plan_id, COALESCE(totp_secret, ''), COALESCE(totp_enabled, 0), password_changed_at FROM users`
+	query := `SELECT id, username, email, password_hash, role, created_by, created_at, disk_limit, max_sites, COALESCE(totp_secret, ''), COALESCE(totp_enabled, 0), password_changed_at FROM users`
 	var args []any
 
 	if filter.CreatedBy > 0 {
@@ -233,7 +231,7 @@ func (s *SQLiteUserStore) List(ctx context.Context, filter UserListFilter) ([]Us
 		var u User
 		var totpSecret sql.NullString
 		var totpEnabled sql.NullInt64
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedBy, &u.CreatedAt, &u.DiskLimit, &u.MaxSites, &u.PlanID, &totpSecret, &totpEnabled, &u.PasswordChangedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedBy, &u.CreatedAt, &u.DiskLimit, &u.MaxSites, &totpSecret, &totpEnabled, &u.PasswordChangedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		u.TOTPSecret = totpSecretForUser(u.ID, totpSecret.String)
@@ -272,12 +270,3 @@ func (s *SQLiteUserStore) UpdateRole(ctx context.Context, userID int64, role str
 	return nil
 }
 
-// UpdatePlan assigns or removes a plan for a user.
-func (s *SQLiteUserStore) UpdatePlan(ctx context.Context, userID int64, planID sql.NullInt64) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE users SET plan_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, planID, userID)
-	if err != nil {
-		return fmt.Errorf("update plan: %w", err)
-	}
-	return nil
-}

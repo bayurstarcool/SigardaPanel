@@ -14,9 +14,6 @@ type UserSite struct {
 	CreatedAt  string `json:"created_at"`
 	Username   string `json:"username,omitempty"`
 	Domain     string `json:"domain,omitempty"`
-	// PlanID/PlanName: the user's plan (site user listings show it).
-	PlanID   *int64  `json:"plan_id,omitempty"`
-	PlanName *string `json:"plan_name,omitempty"`
 }
 
 // UserSiteRepository defines operations for user-site access mappings.
@@ -114,11 +111,10 @@ func (s *SQLiteUserSiteStore) ListByUser(ctx context.Context, userID int64) ([]U
 // ListBySite returns all users who have access to a given site.
 func (s *SQLiteUserSiteStore) ListBySite(ctx context.Context, siteID int64) ([]UserSite, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT us.id, us.user_id, us.site_id, us.permission, us.created_at, u.username, si.domain, u.plan_id, p.name
+		`SELECT us.id, us.user_id, us.site_id, us.permission, us.created_at, u.username, si.domain
 		 FROM user_sites us
 		 JOIN users u ON u.id = us.user_id
 		 JOIN sites si ON si.id = us.site_id
-		 LEFT JOIN plans p ON p.id = u.plan_id
 		 WHERE us.site_id = ?
 		 ORDER BY u.username`, siteID,
 	)
@@ -130,16 +126,8 @@ func (s *SQLiteUserSiteStore) ListBySite(ctx context.Context, siteID int64) ([]U
 	var out []UserSite
 	for rows.Next() {
 		var us UserSite
-		var planID sql.NullInt64
-		var planName sql.NullString
-		if err := rows.Scan(&us.ID, &us.UserID, &us.SiteID, &us.Permission, &us.CreatedAt, &us.Username, &us.Domain, &planID, &planName); err != nil {
+		if err := rows.Scan(&us.ID, &us.UserID, &us.SiteID, &us.Permission, &us.CreatedAt, &us.Username, &us.Domain); err != nil {
 			return nil, err
-		}
-		if planID.Valid {
-			us.PlanID = &planID.Int64
-		}
-		if planName.Valid {
-			us.PlanName = &planName.String
 		}
 		out = append(out, us)
 	}

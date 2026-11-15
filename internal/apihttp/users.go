@@ -49,7 +49,6 @@ func (h *userHandler) list(c *echo.Context) error {
 		CreatedAt string `json:"created_at"`
 		DiskLimit *int64 `json:"disk_limit"` // nil = unlimited
 		MaxSites  *int64 `json:"max_sites"`  // nil = unlimited
-		PlanID    *int64 `json:"plan_id"`    // nil = no plan
 	}
 	var out []userResp
 	for _, u := range users {
@@ -61,14 +60,10 @@ func (h *userHandler) list(c *echo.Context) error {
 		if u.MaxSites.Valid {
 			ms = &u.MaxSites.Int64
 		}
-		var pid *int64
-		if u.PlanID.Valid {
-			pid = &u.PlanID.Int64
-		}
 		out = append(out, userResp{
 			ID: u.ID, Username: u.Username, Email: u.Email,
 			Role: u.Role, CreatedAt: u.CreatedAt.Format(time.RFC3339),
-			DiskLimit: dl, MaxSites: ms, PlanID: pid,
+			DiskLimit: dl, MaxSites: ms,
 		})
 	}
 	return c.JSON(http.StatusOK, httpjson.Success{
@@ -162,15 +157,11 @@ func (h *userHandler) create(c *echo.Context) error {
 	if user.MaxSites.Valid {
 		ms = &user.MaxSites.Int64
 	}
-	var pid *int64
-	if user.PlanID.Valid {
-		pid = &user.PlanID.Int64
-	}
 	return c.JSON(http.StatusCreated, httpjson.Success{
 		Data: map[string]any{
 			"id": user.ID, "username": user.Username,
 			"email": user.Email, "role": user.Role,
-			"disk_limit": dl, "max_sites": ms, "plan_id": pid,
+			"disk_limit": dl, "max_sites": ms,
 		},
 		RequestID: rid,
 	})
@@ -471,4 +462,17 @@ func (h *userHandler) usage(c *echo.Context) error {
 		},
 		RequestID: rid,
 	})
+}
+
+// callerManagesUser: the super admin manages every user; anyone else only
+// the users (role user) they created.
+func callerManagesUser(c *echo.Context, s *store.Store, u *store.User) bool {
+	sess := sessionFromEcho(c)
+	if sess == nil {
+		return false
+	}
+	if isSessionSuperAdmin(c.Request().Context(), s, sess) {
+		return true
+	}
+	return u.Role == auth.RoleUser && u.CreatedBy.Valid && u.CreatedBy.Int64 == sess.UserID && sess.UserID != 0
 }

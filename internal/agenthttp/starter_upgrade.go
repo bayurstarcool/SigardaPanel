@@ -101,6 +101,11 @@ func (r *Router) upgradeOldStarter(ctx context.Context, systemUser, rootPath, do
 		slog.Warn("agent: upgrade starter", "site", domain, "file", file, "error", err)
 		return
 	}
+	// The new starters serve index.html (the default page).
+	if _, err := root.Lstat("index.html"); err != nil {
+		page := nginx.TemplateForRuntime(runtime, domain, int(port))["index.html"]
+		_ = r.writeAsSiteUser(ctx, uid, gid, filepath.Join(pin.Real, "index.html"), page)
+	}
 	if runtime == "go" { // rebuild ./app from the new main.go
 		_, _ = r.runAsSiteUser(ctx, uid, gid, pin.Real, "rm", "-f", "--", "app")
 	}

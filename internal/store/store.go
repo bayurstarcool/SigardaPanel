@@ -47,8 +47,6 @@ type Store struct {
 	RegistrationTokens RegistrationTokenRepository
 	Licenses           LicenseRepository
 	FeatureFlags       FeatureFlagRepository
-	Plans              PlansRepository
-	Orders             OrdersRepository
 	TwoFactor          *SQLiteTwoFactorStore
 	IPRestrictions     *SQLiteIPRestrictionStore
 	APIKeys            *SQLiteUserAPIKeyStore
@@ -90,8 +88,6 @@ func New(db *sql.DB) *Store {
 		RegistrationTokens: NewRegistrationTokenStore(db),
 		Licenses:           NewLicenseStore(db),
 		FeatureFlags:       NewFeatureFlagStore(db),
-		Plans:              NewPlanStore(db),
-		Orders:             NewOrderStore(db),
 		TwoFactor:          NewSQLiteTwoFactorStore(db),
 		IPRestrictions:     NewSQLiteIPRestrictionStore(db),
 		APIKeys:            NewUserAPIKeyStore(db),

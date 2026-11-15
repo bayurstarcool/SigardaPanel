@@ -3,7 +3,7 @@
   import Logo from '$components/Logo.svelte';
   import {
     Server, Globe, Database, HardDrive, Shield, Activity, Box, ShieldCheck, Zap, GitBranch, Search, Bell,
-    ArrowRight, Sun, Moon, Check, Monitor, Cpu, LifeBuoy,
+    ArrowRight, Sun, Moon, Monitor, Cpu, LifeBuoy,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
@@ -50,24 +50,6 @@
   ];
   const archLinks = ['HTTPS / Token', 'Local Execute'];
 
-  const plans = [
-    {
-      name: 'Community', price: 'Free', period: '', blurb: 'Self-hosted, open source',
-      cta: 'Get Started', href: '/login', featured: false,
-      items: ['Single server management', 'Unlimited sites', 'Docker, Firewall, Redis', 'SSL auto-renewal', 'Git deploy & rollback', 'Database management', 'Automated backups', 'CLI + Web dashboard', 'Community support'],
-    },
-    {
-      name: 'Premium', price: '$29', period: '/month', blurb: 'Managed panel with priority support',
-      cta: 'Contact Sales', href: 'mailto:wahyu@sigarda.com?subject=Premium%20Plan', featured: true,
-      items: ['Everything in Community', 'Multi-server management', 'Managed updates & patches', 'Priority support (< 24h)', 'Custom branding (white-label)', 'Advanced monitoring', 'API rate limit increase', 'Email & chat support', 'Monthly health reports', 'Staging environment'],
-    },
-    {
-      name: 'Enterprise', price: '$99', period: '/month', blurb: 'For business and critical production',
-      cta: 'Contact Sales', href: 'mailto:wahyu@sigarda.com?subject=Enterprise%20Plan', featured: false,
-      items: ['Everything in Premium', 'Multi-server management', 'SLA uptime guarantee (99.99%)', 'Priority support (< 4h)', 'Dedicated account manager', 'Custom integrations', 'On-premise deployment', 'Security audit & compliance', 'Multi-team workspaces', 'Phone & video support'],
-    },
-  ];
-
   const GITHUB = 'https://github.com/bayurstarcool/SigardaPanel';
 </script>
 
@@ -88,7 +70,6 @@
       <div class="flex items-center gap-0.5">
         <a href="#features" class="btn btn-ghost btn-sm max-sm:hidden">Features</a>
         <a href="#architecture" class="btn btn-ghost btn-sm max-md:hidden">Architecture</a>
-        <a href="#pricing" class="btn btn-ghost btn-sm">Pricing</a>
         <a href="/docs" class="btn btn-ghost btn-sm max-sm:hidden">Docs</a>
         <a href={GITHUB} target="_blank" rel="noopener" class="btn btn-ghost btn-sm btn-icon max-md:hidden" aria-label="GitHub">
           {@render githubIcon('size-4')}
@@ -177,39 +158,6 @@
           <div class="rounded-xl border border-line bg-bg p-5">
             <div class="stat-label">{s.label}</div>
             <div class="stat-value text-3xl">{s.value}</div>
-          </div>
-        {/each}
-      </div>
-    </div>
-  </section>
-
-  <!-- Pricing -->
-  <section id="pricing" class="scroll-mt-16 border-t border-line">
-    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6">
-      <div class="mb-10 max-w-xl">
-        <h2 class="text-2xl font-semibold tracking-tight text-fg sm:text-3xl">Simple pricing</h2>
-        <p class="mt-2 text-muted">Start free, upgrade when you need enterprise features.</p>
-      </div>
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {#each plans as p (p.name)}
-          <div class="card flex flex-col p-6 {p.featured ? 'border-accent ring-3 ring-accent/20' : ''}">
-            <div class="flex items-center justify-between">
-              <div class="text-sm font-semibold {p.featured ? 'text-accent' : 'text-fg'}">{p.name}</div>
-              {#if p.featured}<span class="badge badge-accent">Popular</span>{/if}
-            </div>
-            <div class="mt-4 flex items-baseline gap-1">
-              <span class="text-4xl font-semibold tracking-tight text-fg tabular-nums">{p.price}</span>
-              {#if p.period}<span class="text-sm text-subtle">{p.period}</span>{/if}
-            </div>
-            <p class="mt-1 text-[13px] text-muted">{p.blurb}</p>
-            <a href={p.href} class="btn mt-6 w-full {p.featured ? 'btn-primary' : 'btn-secondary'}">{p.cta}</a>
-            <ul class="mt-6 space-y-2.5 border-t border-line pt-6">
-              {#each p.items as it (it)}
-                <li class="flex items-start gap-2 text-[13px] text-muted">
-                  <Check size={14} class="mt-0.5 shrink-0 text-accent" />{it}
-                </li>
-              {/each}
-            </ul>
           </div>
         {/each}
       </div>

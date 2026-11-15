@@ -24,7 +24,6 @@ func RegisterRoutes(e *echo.Echo, db *sql.DB) {
 	authGroup := member.Group("")
 	authGroup.Use(requireMemberAuth(db))
 	authGroup.GET("/me", h.Me)
-	authGroup.PUT("/plan", h.UpdatePlan)
 }
 
 // requireMemberAuth is middleware that validates member session tokens.

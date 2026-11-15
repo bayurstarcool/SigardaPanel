@@ -10,6 +10,7 @@
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import PanelUpdateCard from '$components/PanelUpdateCard.svelte';
   import AgentUpdatesCard from '$components/AgentUpdatesCard.svelte';
+  import LicenseCard from '$components/LicenseCard.svelte';
 
   let version = $state('—');
   let serverInfo = $state<any>(null);
@@ -72,6 +73,7 @@
     {#if isSuperAdmin}
       <PanelUpdateCard />
       <AgentUpdatesCard />
+      <LicenseCard />
     {/if}
 
     <!-- Shortcuts -->

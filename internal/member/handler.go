@@ -197,32 +197,3 @@ func (h *Handler) Me(c *echo.Context) error {
 		RequestID: rid,
 	})
 }
-
-// UpdatePlan updates the member's plan.
-func (h *Handler) UpdatePlan(c *echo.Context) error {
-	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-	memberID := c.Get("member_id").(int64)
-
-	var body struct {
-		Plan string `json:"plan"`
-	}
-	if err := c.Bind(&body); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
-	}
-
-	if !validPlans[body.Plan] {
-		return echo.NewHTTPError(http.StatusBadRequest, "unknown plan")
-	}
-
-	if err := h.store.UpdatePlan(memberID, body.Plan); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update plan")
-	}
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]any{
-			"plan":    body.Plan,
-			"message": "plan updated",
-		},
-		RequestID: rid,
-	})
-}

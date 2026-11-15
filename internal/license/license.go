@@ -1,106 +1,155 @@
+// Package license verifies SigardaPanel license keys offline.
+//
+// A key is issued (signed) by the master panel with its ed25519 private key
+// and verified here with the matching public key built into the panel, so
+// no license server is contacted and a key cannot be made up or edited:
+//
+//	SPL1.<base64url(JSON claims)>.<base64url(ed25519 signature)>
+//
+// The signature covers "SPL1." followed by the encoded claims. See
+// docs/LICENSING.md for issuing keys.
 package license
 
 import (
-	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log/slog"
-	"net/http"
-	"os"
-	"sync"
+	"strings"
 	"time"
 )
 
-// httpClient bounds calls to the member portal; a hung portal must not hang
-// the request that triggered validation.
-var httpClient = &http.Client{Timeout: 15 * time.Second}
+const prefix = "SPL1."
 
-// Info holds license information.
-type Info struct {
-	Valid    bool     `json:"valid"`
-	Plan     string   `json:"plan"`
-	Name     string   `json:"name"`
-	Email    string   `json:"email"`
-	Company  string   `json:"company"`
-	Features []string `json:"features"`
+// Claims is what a license grants.
+type Claims struct {
+	ID         string    `json:"id"`       // license id (from the master)
+	Licensee   string    `json:"licensee"` // customer name
+	Email      string    `json:"email,omitempty"`
+	Tier       string    `json:"tier"`        // free, basic, pro, enterprise, max
+	MaxServers int       `json:"max_servers"` // 0 = tier default
+	IssuedAt   time.Time `json:"issued_at"`
+	ExpiresAt  time.Time `json:"expires_at,omitempty"` // zero = never
+	// InstallID binds the key to one panel installation (its install id):
+	// another panel refuses it. Keys the master delivers through check-in
+	// (free and upgraded licenses) are bound; keys issued by hand may not be.
+	InstallID string `json:"install_id,omitempty"`
 }
 
-// Validator handles license validation with the member portal.
-type Validator struct {
-	memberPortalURL string
-	cache           *Info
-	cacheExpiry     time.Time
-	mu              sync.RWMutex
-}
+var (
+	ErrFormat       = errors.New("not a SigardaPanel license key")
+	ErrSignature    = errors.New("license key signature is not valid (not issued by SigardaPanel, or altered)")
+	ErrExpired      = errors.New("license has expired")
+	ErrNoKeys       = errors.New("this build has no license public key, so it cannot verify licenses")
+	ErrBadClaims    = errors.New("license key has missing or invalid fields")
+	ErrOtherInstall = errors.New("license key was issued for another installation of SigardaPanel")
+	validTiers      = map[string]bool{"free": true, "basic": true, "pro": true, "enterprise": true, "max": true}
+	base64Encoder   = base64.RawURLEncoding
+)
 
-// NewValidator creates a new license validator.
-func NewValidator() *Validator {
-	url := os.Getenv("MEMBER_PORTAL_URL")
-	if url == "" {
-		url = "http://localhost:7800"
+// PublicKeys are the trusted ed25519 public keys (base64, comma separated).
+// Set at build time by the release (-ldflags "-X
+// sigardapanel/internal/license.PublicKeys=..."); several allow a key
+// rotation without invalidating issued licenses.
+var PublicKeys = defaultPublicKeys
+
+func trusted() ([]ed25519.PublicKey, error) {
+	var out []ed25519.PublicKey
+	for _, k := range strings.Split(PublicKeys, ",") {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(k)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("invalid license public key in this build")
+		}
+		out = append(out, ed25519.PublicKey(raw))
 	}
-	return &Validator{memberPortalURL: url}
+	if len(out) == 0 {
+		return nil, ErrNoKeys
+	}
+	return out, nil
 }
 
-// Validate validates a license key with the member portal.
-func (v *Validator) Validate(licenseKey string) (*Info, error) {
-	v.mu.RLock()
-	if v.cache != nil && time.Now().Before(v.cacheExpiry) && v.cache.Valid {
-		cached := v.cache
-		v.mu.RUnlock()
-		if cached.Plan != "" {
-			return cached, nil
+// Parse checks the key's format and signature and returns its claims,
+// without looking at the expiry (Verify does both).
+func Parse(key string) (*Claims, error) {
+	key = strings.Join(strings.Fields(key), "") // pasted keys may wrap
+	if !strings.HasPrefix(key, prefix) || len(key) > 4096 {
+		return nil, ErrFormat
+	}
+	parts := strings.Split(strings.TrimPrefix(key, prefix), ".")
+	if len(parts) != 2 {
+		return nil, ErrFormat
+	}
+	payload, err1 := base64Encoder.DecodeString(parts[0])
+	sig, err2 := base64Encoder.DecodeString(parts[1])
+	if err1 != nil || err2 != nil || len(sig) != ed25519.SignatureSize {
+		return nil, ErrFormat
+	}
+	keys, err := trusted()
+	if err != nil {
+		return nil, err
+	}
+	signed := []byte(prefix + parts[0])
+	ok := false
+	for _, pk := range keys {
+		if ed25519.Verify(pk, signed, sig) {
+			ok = true
+			break
 		}
 	}
-	v.mu.RUnlock()
+	if !ok {
+		return nil, ErrSignature
+	}
+	var c Claims
+	dec := json.NewDecoder(strings.NewReader(string(payload)))
+	if err := dec.Decode(&c); err != nil {
+		return nil, ErrBadClaims
+	}
+	if c.ID == "" || !validTiers[c.Tier] || c.MaxServers < 0 || c.IssuedAt.IsZero() {
+		return nil, ErrBadClaims
+	}
+	return &c, nil
+}
 
-	url := fmt.Sprintf("%s/api/license/validate", v.memberPortalURL)
-	// json.Marshal (not Sprintf) so a key containing quotes cannot break or
-	// inject into the request document.
-	body, err := json.Marshal(map[string]string{"license_key": licenseKey})
+// Verify parses key and checks that it has not expired at now.
+func Verify(key string, now time.Time) (*Claims, error) {
+	c, err := Parse(key)
 	if err != nil {
-		return &Info{Valid: false}, nil
+		return nil, err
 	}
+	if !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt) {
+		return c, ErrExpired
+	}
+	return c, nil
+}
 
-	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
+// VerifyFor is Verify plus the installation check: a key bound to an
+// install id is valid only on that installation.
+func VerifyFor(key, installID string, now time.Time) (*Claims, error) {
+	c, err := Verify(key, now)
 	if err != nil {
-		slog.Warn("license validation failed", "error", err)
-		return &Info{Valid: false}, nil
+		return c, err
 	}
-	defer resp.Body.Close()
-
-	var result Info
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return &Info{Valid: false}, nil
+	if c.InstallID != "" && c.InstallID != installID {
+		return c, ErrOtherInstall
 	}
-
-	v.mu.Lock()
-	v.cache = &result
-	v.cacheExpiry = time.Now().Add(1 * time.Hour)
-	v.mu.Unlock()
-
-	return &result, nil
+	return c, nil
 }
 
-// HasFeature checks if the license has a specific feature.
-func (v *Validator) HasFeature(info *Info, feature string) bool {
-	if info == nil || !info.Valid {
-		return false
+// Sign issues a key for c with priv (the master panel's private key).
+func Sign(priv ed25519.PrivateKey, c Claims) (string, error) {
+	if c.ID == "" || !validTiers[c.Tier] || c.IssuedAt.IsZero() {
+		return "", ErrBadClaims
 	}
-	for _, f := range info.Features {
-		if f == feature {
-			return true
-		}
+	payload, err := json.Marshal(c)
+	if err != nil {
+		return "", err
 	}
-	return false
-}
-
-// IsPremium checks if the license is premium or higher.
-func (v *Validator) IsPremium(info *Info) bool {
-	return info != nil && info.Valid && (info.Plan == "premium" || info.Plan == "enterprise")
-}
-
-// IsEnterprise checks if the license is enterprise.
-func (v *Validator) IsEnterprise(info *Info) bool {
-	return info != nil && info.Valid && info.Plan == "enterprise"
+	body := prefix + base64Encoder.EncodeToString(payload)
+	sig := ed25519.Sign(priv, []byte(body))
+	return body + "." + base64Encoder.EncodeToString(sig), nil
 }

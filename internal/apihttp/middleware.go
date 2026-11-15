@@ -269,11 +269,7 @@ func RequireFeature(s *store.Store, feature string) echo.MiddlewareFunc {
 		return func(c *echo.Context) error {
 			rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
-			license, err := s.Licenses.GetActive(c.Request().Context())
-			currentTier := "free"
-			if err == nil && license != nil {
-				currentTier = license.Tier
-			}
+			currentTier := currentLicense(c.Request().Context(), s).Tier
 
 			// Import features package at the handler level to avoid circular deps
 			// Uses the same logic as features.HasFeature
@@ -283,7 +279,7 @@ func RequireFeature(s *store.Store, feature string) echo.MiddlewareFunc {
 					"feature":       feature,
 					"required_tier": featureMinTier(feature),
 					"current_tier":  currentTier,
-					"upgrade_url":   "/settings/billing",
+					"upgrade_url":   "/settings",
 					"request_id":    rid,
 				})
 			}
@@ -298,18 +294,14 @@ func RequireTier(s *store.Store, minTier string) echo.MiddlewareFunc {
 		return func(c *echo.Context) error {
 			rid := c.Response().Header().Get(echo.HeaderXRequestID)
 
-			license, err := s.Licenses.GetActive(c.Request().Context())
-			currentTier := "free"
-			if err == nil && license != nil {
-				currentTier = license.Tier
-			}
+			currentTier := currentLicense(c.Request().Context(), s).Tier
 
 			if tierLevelNum(currentTier) < tierLevelNum(minTier) {
 				return c.JSON(http.StatusForbidden, map[string]interface{}{
 					"error":         "tier_not_sufficient",
 					"required_tier": minTier,
 					"current_tier":  currentTier,
-					"upgrade_url":   "/settings/billing",
+					"upgrade_url":   "/settings",
 					"request_id":    rid,
 				})
 			}

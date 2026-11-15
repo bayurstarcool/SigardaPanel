@@ -7,9 +7,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// validPlans are the plan names a member may choose.
-var validPlans = map[string]bool{"community": true, "pro": true, "enterprise": true}
-
 // dummyHash keeps a login for an unknown email as slow as a real one.
 var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("sigardapanel-member-dummy"), bcrypt.DefaultCost)
 

@@ -3,7 +3,7 @@ import { API_URL } from "$lib/server/upstream";
 
 /** Deployment switches from GET /api/v1/public/config (no auth). */
 export interface PublicConfig {
-  /** / and /pricing show the SaaS landing (SIGARDAPANEL_LANDING_PAGE). */
+  /** / shows the SaaS landing (SIGARDAPANEL_LANDING_PAGE). */
   landing_page: boolean;
   /** /register can create member accounts (SIGARDAPANEL_ALLOW_MEMBER_SIGNUP). */
   member_signup: boolean;
@@ -43,7 +43,7 @@ export async function getPublicConfig(): Promise<PublicConfig> {
 }
 
 /** Marketing pages that only exist on the SaaS (landing) deployment. */
-export const MARKETING_PATHS = new Set(["/", "/pricing"]);
+export const MARKETING_PATHS = new Set(["/"]);
 
 /**
  * Where a visitor of a marketing page goes when the landing is off: the
