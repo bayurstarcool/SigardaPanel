@@ -37,7 +37,7 @@ type Permission struct {
 // Permission names.
 const (
 	// Users
-	UserManage         = "user.manage"     // users the caller created: list, create, edit, delete, assign sites/plans
+	UserManage         = "user.manage"     // users the caller created: list, create, edit, delete, assign sites
 	UserManageAll      = "user.manage_all" // every user, any role
 	UserImpersonate    = "user.impersonate"
 	UserImpersonateAny = "user.impersonate_any" // any user whose permissions are a subset of the caller's // sign in as a user the caller manages
@@ -89,13 +89,11 @@ const (
 	SettingsView   = "settings.view"   // read global settings (retention)
 	AlertManage    = "alert.manage"    // alert channels and alerts
 	LicenseManage  = "license.manage"
-	PlanManage     = "plan.manage"
-	OrderManage    = "order.manage"
 	RoleManage     = "role.manage" // create/change/delete custom roles
 )
 
 var registry = []Permission{
-	{UserManage, "users", "Manage the users you created (list, create, edit, delete, assign sites and plans)", false, RoleAdmin},
+	{UserManage, "users", "Manage the users you created (list, create, edit, delete, assign sites)", false, RoleAdmin},
 	{UserManageAll, "users", "Manage every user, any role", true, RoleSuperAdmin},
 	{UserImpersonate, "users", "Sign in as a user you manage", false, RoleAdmin},
 	{UserImpersonateAny, "users", "Sign in as any user whose permissions you hold (support), not only users you created", true, RoleSuperAdmin},
@@ -147,8 +145,6 @@ var registry = []Permission{
 	{SettingsGlobal, "panel", "Change global settings", true, RoleSuperAdmin},
 	{AlertManage, "panel", "Alert channels and alerts", true, RoleSuperAdmin},
 	{LicenseManage, "panel", "Activate and remove the license", true, RoleSuperAdmin},
-	{PlanManage, "panel", "Manage plans", false, RoleSuperAdmin},
-	{OrderManage, "panel", "Manage orders", false, RoleSuperAdmin},
 	{RoleManage, "panel", "Create, change and delete custom roles", true, RoleSuperAdmin},
 }
 

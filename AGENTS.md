@@ -521,22 +521,14 @@ shows would take other packages with it.
   - Sticky keyboard shortcuts (Ctrl+C/Z/D/L/U, Tab, Esc, arrows)
   - Mobile-optimized (no resize interference during typing)
 
-### License & Plans (9 endpoints)
-- `GET /api/v1/license` — Get license
-- `POST /api/v1/license/activate` — Activate license
-- `DELETE /api/v1/license` — Deactivate license
+### License (4 endpoints)
+- `GET /api/v1/license` — Get license (tier from a verified signed key)
+- `POST /api/v1/license/activate` — Activate a signed license key (super_admin)
+- `DELETE /api/v1/license` — Deactivate license (super_admin)
 - `GET /api/v1/license/features` — Get features
-- `GET /api/v1/plans` — List plans
-- `POST /api/v1/plans` — Create plan
-- `GET /api/v1/plans/:id` — Plan detail
-- `PATCH /api/v1/plans/:id` — Update plan
-- `DELETE /api/v1/plans/:id` — Delete plan
 
-### Orders (4 endpoints)
-- `GET /api/v1/orders` — List orders
-- `POST /api/v1/orders` — Create order
-- `GET /api/v1/orders/:id` — Order detail
-- `PATCH /api/v1/orders/:id` — Update order
+Selling licenses (plans, orders, billing, pricing) is the master panel's job
+and is not part of this repository.
 
 ### Misc (5 endpoints)
 - `GET /health` — Health check

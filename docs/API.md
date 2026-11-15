@@ -235,7 +235,6 @@ certbot cannot be removed, and `uninstall`/`stop` need super_admin (403). Every 
 | GET | `/jobs/:id/logs` | user | Job logs |
 | GET | `/license` | user | License info |
 | GET | `/license/features` | user | Feature flags |
-| GET | `/plans` | user | List plans |
 | GET | `/alerts` | user | List alerts |
 | GET | `/metrics/server` | user | Server metrics |
 | GET | `/settings/retention` | user | Backup retention settings |

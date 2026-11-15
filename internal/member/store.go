@@ -139,12 +139,6 @@ func (s *Store) Create(m *Member) error {
 	return err
 }
 
-// UpdatePlan updates a member's plan.
-func (s *Store) UpdatePlan(id int64, plan string) error {
-	_, err := s.db.Exec("UPDATE members SET plan = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", plan, id)
-	return err
-}
-
 // CreateSession creates a new session.
 func (s *Store) CreateSession(sess *Session) error {
 	err := s.db.QueryRow(

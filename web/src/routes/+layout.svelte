@@ -29,7 +29,7 @@
   // Reactive guard: redirect ke /login kalau session expired di tengah jalan
   // Ini penting — api.ts clearSession() via handler, bukan redirect langsung
   $effect(() => {
-    if (ready && !auth.user && window.location.pathname !== '/login' && window.location.pathname !== '/register' && window.location.pathname !== '/pricing' && !window.location.pathname.startsWith('/member') && !window.location.pathname.startsWith('/docs') && window.location.pathname !== '/') {
+    if (ready && !auth.user && window.location.pathname !== '/login' && window.location.pathname !== '/register' && !window.location.pathname.startsWith('/member') && !window.location.pathname.startsWith('/docs') && window.location.pathname !== '/') {
       window.location.href = '/login';
     }
   });

@@ -3,18 +3,11 @@
   import Logo from '$components/Logo.svelte';
   import { onMount } from 'svelte';
 
-  const plans = [
-    { id: 'community', label: 'Community', price: 'Free' },
-    { id: 'premium', label: 'Premium', price: '$29/mo' },
-    { id: 'enterprise', label: 'Enterprise', price: '$99/mo' },
-  ];
-
   let name = $state('');
   let email = $state('');
   let password = $state('');
   let confirmPassword = $state('');
   let company = $state('');
-  let plan = $state('community');
   let err = $state('');
   let busy = $state(false);
   let showPass = $state(false);
@@ -58,7 +51,7 @@
       const res = await fetch('/api/member/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, company, plan })
+        body: JSON.stringify({ name, email, password, company })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || 'Registration failed');
@@ -165,24 +158,6 @@
               <div>
                 <label for="reg-company" class="label">Company <span class="text-subtle">(optional)</span></label>
                 <input id="reg-company" bind:value={company} class="input" placeholder="Your company name" autocomplete="organization" />
-              </div>
-              <div>
-                <span class="label">Plan</span>
-                <div class="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Plan">
-                  {#each plans as p (p.id)}
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={plan === p.id}
-                      onclick={() => (plan = p.id)}
-                      class="rounded-lg border p-3 text-center transition-colors duration-150
-                        {plan === p.id ? 'border-accent bg-accent/10' : 'border-line hover:border-line-strong hover:bg-surface-2'}"
-                    >
-                      <div class="text-xs font-semibold {plan === p.id ? 'text-accent' : 'text-fg'}">{p.label}</div>
-                      <div class="mt-0.5 text-[11px] text-subtle">{p.price}</div>
-                    </button>
-                  {/each}
-                </div>
               </div>
             </div>
           {/if}

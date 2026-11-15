@@ -530,25 +530,6 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/servers/:id/specs", stackH.serverSpecs, RequireAuth(s))
 	e.GET("/api/v1/servers/:id/benchmark", stackH.serverBenchmark, RequireAuth(s), RequirePermission(s, "server.manage"))
 
-	// ─── Plans ─────────────────────────────────────────────────
-	planH := newPlanHandler(s)
-	e.GET("/api/v1/plans", planH.listPlans, RequireAuth(s))
-	e.POST("/api/v1/plans", planH.createPlan, RequireAuth(s), RequirePermission(s, "plan.manage"))
-	e.GET("/api/v1/plans/:id", planH.getPlan, RequireAuth(s))
-	e.PATCH("/api/v1/plans/:id", planH.updatePlan, RequireAuth(s), RequirePermission(s, "plan.manage"))
-	e.DELETE("/api/v1/plans/:id", planH.deletePlan, RequireAuth(s), RequirePermission(s, "plan.manage"))
-
-	// ─── License Orders ────────────────────────────────────────
-	orderH := newOrderHandler(s)
-	e.GET("/api/v1/orders", orderH.listOrders, RequireAuth(s))
-	e.POST("/api/v1/orders", orderH.createOrder, RequireAuth(s))
-	e.GET("/api/v1/orders/:id", orderH.getOrder, RequireAuth(s))
-	// Approving or rejecting orders (plans are global): super_admin only.
-	e.PATCH("/api/v1/orders/:id", orderH.updateOrderStatus, RequireAuth(s), RequireUserSession, RequirePermission(s, "order.manage"))
-
-	// ─── Assign Plan to User ──────────────────────────────────
-	e.POST("/api/v1/users/:id/assign-plan", uh.assignPlan, RequireAuth(s), RequireUserSession, RequirePermission(s, "user.manage"))
-
 	// Example: feature-gated route (uncomment when ready to gate specific endpoints)
 	// e.GET("/api/v1/servers", sh.list, RequireAuth(s), RequireFeature(s, "multi_server"))
 

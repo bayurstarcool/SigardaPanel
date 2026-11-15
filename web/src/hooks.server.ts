@@ -25,7 +25,7 @@ function withSecurityHeaders(response: Response): Response {
 // redirect) are never overridden.
 //
 // Self-hosted panels (SIGARDAPANEL_LANDING_PAGE not true) have no marketing
-// site: a full page load of / or /pricing is answered with a plain 302 before
+// site: a full page load of / is answered with a plain 302 before
 // any HTML is sent, so the SaaS landing never flashes. Client-side navigations
 // (data requests) are redirected by the pages' +page.server.ts load instead.
 export const handle: Handle = async ({ event, resolve }) => {

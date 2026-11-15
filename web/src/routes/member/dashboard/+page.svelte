@@ -1,6 +1,6 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
-  import { Shield, ArrowRight, Server, Globe, Activity, Key, CreditCard, LayoutDashboard } from 'lucide-svelte';
+  import { Server, Globe, Activity, Key, LayoutDashboard } from 'lucide-svelte';
   import StatCard from '$components/StatCard.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import { onMount } from 'svelte';
@@ -26,7 +26,6 @@
 
   const links = [
     { href: '/member/api-keys', title: 'API Keys', desc: 'Manage your API tokens and access.', icon: Key },
-    { href: '/member/billing', title: 'Billing', desc: 'View plans and manage subscription.', icon: CreditCard },
     { href: '/dashboard', title: 'Panel Dashboard', desc: 'Go to VPS management panel.', icon: LayoutDashboard },
   ];
 </script>
@@ -38,21 +37,9 @@
 <PageHeader title="Welcome back, {auth.user?.username ?? ''}" description="Manage your account and API access." />
 
 <div class="space-y-6">
-  <!-- Plan -->
-  <section class="card card-body">
-    <div class="flex flex-wrap items-center gap-2">
-      <Shield size={16} class="text-accent" />
-      <span class="text-sm font-semibold text-fg">Community Plan</span>
-      <span class="badge badge-success"><span class="dot"></span>Active</span>
-    </div>
-    <p class="mt-2 text-[13px] text-muted">You're using the free Community plan. Upgrade for multi-server management and priority support.</p>
-    <a href="/pricing" class="btn btn-secondary btn-sm mt-4">View plans <ArrowRight size={14} /></a>
-  </section>
-
-  <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+  <div class="grid grid-cols-2 gap-3 lg:grid-cols-3">
     <StatCard label="Servers" value={servers} icon={Server as any} />
     <StatCard label="Sites" value={sites} icon={Globe as any} />
-    <StatCard label="Plan" value="Free" icon={Shield as any} tone="accent" />
     <StatCard label="Status" value="Active" icon={Activity as any} tone="success" />
   </div>
 

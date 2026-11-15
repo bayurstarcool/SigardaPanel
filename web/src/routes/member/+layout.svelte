@@ -1,14 +1,13 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { auth } from '$lib/auth.svelte';
-  import { LayoutDashboard, CreditCard, Key } from 'lucide-svelte';
+  import { LayoutDashboard, Key } from 'lucide-svelte';
   import Logo from '$components/Logo.svelte';
 
   let { children } = $props();
 
   const navItems = [
     { label: 'Dashboard', href: '/member/dashboard', icon: LayoutDashboard },
-    { label: 'Billing', href: '/member/billing', icon: CreditCard },
     { label: 'API Keys', href: '/member/api-keys', icon: Key },
   ];
 

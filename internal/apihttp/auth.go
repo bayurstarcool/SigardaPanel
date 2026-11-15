@@ -387,7 +387,6 @@ func (ah *authHandler) register(c *echo.Context) error {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 		Company  string `json:"company"`
-		Plan     string `json:"plan"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -432,7 +431,7 @@ func (ah *authHandler) register(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create user")
 	}
 
-	slog.Info("user registered", "user_id", user.ID, "email", body.Email, "plan", body.Plan)
+	slog.Info("user registered", "user_id", user.ID, "email", body.Email)
 
 	return c.JSON(http.StatusCreated, httpjson.Success{
 		Data: map[string]any{

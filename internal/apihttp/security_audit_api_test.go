@@ -164,14 +164,14 @@ func TestAgentRegistrationGuards(t *testing.T) {
 	}
 }
 
-// Global alert channels and plans are not tenant admins' to change.
-func TestGlobalAlertsAndPlansSuperAdminOnly(t *testing.T) {
+// Global alert channels are not tenant admins' to change.
+func TestGlobalAlertsSuperAdminOnly(t *testing.T) {
 	f := newAuthzFixture(t)
 	_, adminTok := f.user("tadmin", auth.RoleAdmin)
 	_, rootTok := f.user("root", auth.RoleSuperAdmin)
 	for _, r := range []struct{ m, p string }{
 		{"GET", "/api/v1/alert-channels"}, {"POST", "/api/v1/alert-channels"}, {"DELETE", "/api/v1/alert-channels/1"},
-		{"GET", "/api/v1/alerts"}, {"POST", "/api/v1/plans"}, {"PATCH", "/api/v1/plans/1"}, {"DELETE", "/api/v1/plans/1"},
+		{"GET", "/api/v1/alerts"},
 	} {
 		if rec := f.do(r.m, r.p, map[string]any{}, adminTok); rec.Code != http.StatusForbidden {
 			t.Errorf("admin %s %s = %d", r.m, r.p, rec.Code)

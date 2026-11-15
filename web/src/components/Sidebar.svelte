@@ -9,7 +9,7 @@
   import { licenseStore } from '$lib/license';
   import {
     LayoutDashboard, Server, Globe, ShieldCheck, Database, Package, Zap,
-    Folder, BarChart3, Users, ClipboardCheck, Cloud, Bell, DollarSign, ShoppingCart,
+    Folder, BarChart3, Users, ClipboardCheck, Cloud, Bell,
     Layers, Box, Shield, HardDrive, Mail, Cpu, Bug, ShieldAlert, BookOpen, Activity, SquareTerminal, ShieldBan,
   } from 'lucide-svelte';
 
@@ -80,8 +80,6 @@
     const admin: Item[] = [];
     if (can('user.manage')) admin.push({ label: 'Users', href: '/users', icon: Users });
     if (can('audit.view')) admin.push({ label: 'Audit', href: '/audit', icon: ClipboardCheck });
-    if (can('plan.manage')) admin.push({ label: 'Plans', href: '/admin/plans', icon: DollarSign });
-    if (can('order.manage')) admin.push({ label: 'Orders', href: '/admin/orders', icon: ShoppingCart });
     if (admin.length) g.push({ title: 'Admin', items: admin });
     g.push({ title: '', items: [{ label: 'Docs', href: '/docs', icon: BookOpen }] });
     return g;

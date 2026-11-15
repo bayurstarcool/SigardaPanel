@@ -493,51 +493,6 @@ func TestDatabasesAndLogs_SitePermissionModel(t *testing.T) {
 
 // ─── Bug 7: admin role resolved from the session user on RequireAuth routes ──
 
-func TestPlansAndOrders_AdminRoleFromSession(t *testing.T) {
-	f := newAuthzFixture(t)
-	adm, admTok := f.user("adm", auth.RoleAdmin)
-	other, otherTok := f.user("adm2", auth.RoleAdmin)
-	u1, u1Tok := f.user("u1", auth.RoleUser)
-	u2, _ := f.user("u2", auth.RoleUser)
-	// adm created both users: their orders are adm's to see, not adm2's.
-	f.s.DB().Exec(`UPDATE users SET created_by = ? WHERE id IN (?, ?)`, adm.ID, u1.ID, u2.ID)
-	_ = other
-
-	inactive := &store.Plan{Name: "Hidden", Slug: "hidden", BillingCycle: "monthly", Features: "{}", IsActive: false}
-	if err := f.s.Plans.Create(f.ctx, inactive); err != nil {
-		t.Fatal(err)
-	}
-	for _, u := range []*store.User{u1, u2} {
-		if err := f.s.Orders.Create(f.ctx, &store.LicenseOrder{UserID: u.ID, PlanID: inactive.ID, Status: "pending"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !strings.Contains(f.do("GET", "/api/v1/plans", nil, admTok).Body.String(), "hidden") {
-		t.Error("admin should see inactive plans")
-	}
-	if strings.Contains(f.do("GET", "/api/v1/plans", nil, u1Tok).Body.String(), "hidden") {
-		t.Error("user should not see inactive plans")
-	}
-	orderCount := func(token string) int {
-		var resp struct {
-			Data struct {
-				Count int `json:"count"`
-			} `json:"data"`
-		}
-		json.Unmarshal(f.do("GET", "/api/v1/orders", nil, token).Body.Bytes(), &resp)
-		return resp.Data.Count
-	}
-	if n := orderCount(admTok); n != 2 {
-		t.Errorf("admin sees %d orders, want 2", n)
-	}
-	if n := orderCount(u1Tok); n != 1 {
-		t.Errorf("user sees %d orders, want 1", n)
-	}
-	if n := orderCount(otherTok); n != 0 {
-		t.Errorf("another admin sees %d orders of users it did not create", n)
-	}
-}
-
 // ─── Bug 8: metrics ingest restricted; range covers the whole window ──
 
 func TestMetrics_IngestRestrictedAndRangeSpread(t *testing.T) {

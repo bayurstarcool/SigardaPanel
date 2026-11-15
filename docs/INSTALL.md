@@ -250,7 +250,7 @@ certificate) or **Full**; "Flexible" causes a redirect loop.
 | `SIGARDAPANEL_AGENT_TOKEN` | random 64 hex | Shared secret with the local agent (same value in `agent.env`) |
 | `SIGARDAPANEL_ENCRYPTION_KEY` | random 64 hex | AES-256 key for secrets stored in the database (database passwords, job credentials, 2FA secrets) |
 | `SIGARDAPANEL_ALLOW_REGISTRATION` | `false` | Public sign-up on `/register` |
-| `SIGARDAPANEL_LANDING_PAGE` | not set (`false`) | `true`: `/` and `/pricing` show the Sigarda SaaS landing page. Otherwise they redirect to the login (self-hosted). |
+| `SIGARDAPANEL_LANDING_PAGE` | not set (`false`) | `true`: `/` shows the Sigarda SaaS landing page. Otherwise they redirect to the login (self-hosted). |
 | `SIGARDAPANEL_ALLOW_MEMBER_SIGNUP` | not set (`false`) | `true`: member (SaaS customer) sign-up on `/register` (also needs the member database, `MEMBER_DB_*`). |
 | `SIGARDAPANEL_ALLOW_PRIVATE_AGENTS` | not set (`false`) | `true`: servers added with the [install command](#option-a-install-command) may register a private (RFC 1918 / ULA) address. See [Private networks](#private-networks). |
 | `MEMBER_DB_*` | commented out | Optional member area (PostgreSQL) |

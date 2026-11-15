@@ -2,8 +2,7 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import { toasts } from '$lib/toast.svelte';
-  import { Users, LoaderCircle, Check, CreditCard } from 'lucide-svelte';
-  import Modal from '$components/Modal.svelte';
+  import { Users } from 'lucide-svelte';
   import EmptyState from '$components/EmptyState.svelte';
 
   let { siteId }: { siteId: number } = $props();
@@ -12,16 +11,7 @@
   let usersLoading = $state(false);
   let usersLoaded = $state(false);
 
-  // Plan assignment state
-  let plans = $state<any[]>([]);
-  let assignTarget = $state<any>(null);
-  let assignPlanId = $state<number | null>(null);
-  let assignBusy = $state(false);
-
   $effect(() => { if (!usersLoading && siteUsers.length === 0 && usersLoaded === false) { usersLoaded = true; loadUsers(); } });
-
-  const formatIDR = (v: number) =>
-    new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(v);
 
   async function loadUsers() {
     usersLoading = true;
@@ -29,43 +19,10 @@
     catch (e: any) { if (e?.message !== 'session expired') toasts.error(e?.message || 'Failed to load'); } finally { usersLoading = false; }
   }
 
-  async function loadPlans() {
-    try {
-      const d = await apiFetch(auth.token, 'GET', 'plans');
-      plans = d?.plans || d || [];
-    } catch {}
-  }
-
   async function unassignUser(userId: number) {
     if (!confirm('Revoke this user access?')) return;
     try { await apiFetch(auth.token, 'DELETE', `users/${userId}/sites/${siteId}`); await loadUsers(); }
     catch (e: any) { toasts.error(e.message); }
-  }
-
-  function openAssign(u: any) {
-    assignTarget = u;
-    assignPlanId = u.plan_id || null;
-    if (plans.length === 0) loadPlans();
-  }
-
-  async function savePlan() {
-    if (!assignTarget) return;
-    assignBusy = true;
-    try {
-      // PATCH users/:id ignores plan_id; plans have their own endpoint.
-      await apiFetch(auth.token, 'POST', `users/${assignTarget.user_id}/assign-plan`, {
-        plan_id: assignPlanId || 0,
-      });
-      assignTarget.plan_id = assignPlanId;
-      const plan = plans.find(p => p.id === assignPlanId);
-      assignTarget.plan_name = plan?.name || (assignPlanId ? `Plan #${assignPlanId}` : null);
-      toasts.success(`Plan updated for ${assignTarget.username}`);
-      assignTarget = null;
-    } catch (e: any) {
-      toasts.error(e.message);
-    } finally {
-      assignBusy = false;
-    }
   }
 
   const permBadge: Record<string, string> = { admin: 'badge-warning', write: 'badge-info' };
@@ -95,9 +52,6 @@
             </div>
           </div>
           <div class="flex items-center gap-2">
-            <button onclick={() => openAssign(u)} class="badge cursor-pointer transition-colors hover:ring-line-strong {u.plan_id ? 'badge-accent' : ''}" title="Change plan">
-              <CreditCard size={11} /> {u.plan_name || 'Free'}
-            </button>
             <span class="badge {permBadge[u.permission] ?? ''}">{u.permission}</span>
             <button onclick={() => unassignUser(u.user_id)} class="btn btn-danger-ghost btn-xs">Revoke</button>
           </div>
@@ -106,37 +60,3 @@
     </ul>
   {/if}
 </div>
-
-<!-- Assign plan modal -->
-{#if assignTarget}
-  <Modal open={true} title="Assign plan — {assignTarget.username}" onclose={() => (assignTarget = null)} maxWidth="md">
-    <p class="mb-4 text-[13px] text-muted">Select a plan for <strong class="font-medium text-fg">{assignTarget.username}</strong>.</p>
-    {#if plans.length === 0}
-      <p class="py-4 text-center text-[13px] text-subtle">No plans available. Create plans in Admin → Plans.</p>
-    {:else}
-      <div class="max-h-60 space-y-1.5 overflow-y-auto">
-        <button onclick={() => (assignPlanId = null)}
-          class="flex w-full cursor-pointer items-center justify-between rounded-lg border p-3 text-left transition-colors {assignPlanId === null ? 'border-accent bg-accent/10' : 'border-line hover:border-line-strong hover:bg-surface-2'}">
-          <span class="text-sm font-medium {assignPlanId === null ? 'text-accent' : 'text-fg'}">Free (no plan)</span>
-          {#if assignPlanId === null}<Check size={14} class="text-accent" />{/if}
-        </button>
-        {#each plans as plan (plan.id)}
-          <button onclick={() => (assignPlanId = plan.id)}
-            class="flex w-full cursor-pointer items-center justify-between rounded-lg border p-3 text-left transition-colors {assignPlanId === plan.id ? 'border-accent bg-accent/10' : 'border-line hover:border-line-strong hover:bg-surface-2'}">
-            <div>
-              <div class="text-sm font-medium {assignPlanId === plan.id ? 'text-accent' : 'text-fg'}">{plan.name}</div>
-              <div class="text-xs text-subtle tabular-nums">{formatIDR(plan.price_idr)} · {plan.billing_cycle}</div>
-            </div>
-            {#if assignPlanId === plan.id}<Check size={14} class="shrink-0 text-accent" />{/if}
-          </button>
-        {/each}
-      </div>
-    {/if}
-    {#snippet footer()}
-      <button onclick={() => (assignTarget = null)} class="btn btn-secondary btn-sm">Cancel</button>
-      <button onclick={savePlan} disabled={assignBusy} class="btn btn-primary btn-sm">
-        {#if assignBusy}<LoaderCircle size={14} class="animate-spin" /> Saving…{:else}<Check size={14} /> Assign plan{/if}
-      </button>
-    {/snippet}
-  </Modal>
-{/if}

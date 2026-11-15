@@ -283,7 +283,7 @@ func RequireFeature(s *store.Store, feature string) echo.MiddlewareFunc {
 					"feature":       feature,
 					"required_tier": featureMinTier(feature),
 					"current_tier":  currentTier,
-					"upgrade_url":   "/settings/billing",
+					"upgrade_url":   "/settings",
 					"request_id":    rid,
 				})
 			}
@@ -309,7 +309,7 @@ func RequireTier(s *store.Store, minTier string) echo.MiddlewareFunc {
 					"error":         "tier_not_sufficient",
 					"required_tier": minTier,
 					"current_tier":  currentTier,
-					"upgrade_url":   "/settings/billing",
+					"upgrade_url":   "/settings",
 					"request_id":    rid,
 				})
 			}
