@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"sigardapanel/internal/nginx"
+	"sigardapanel/internal/sitefs"
 )
 
 // Starters written by panels before v1.12.3 listened on every interface
@@ -58,12 +59,21 @@ func (r *Router) upgradeOldStarter(ctx context.Context, systemUser, rootPath, do
 	default:
 		return
 	}
-	path := filepath.Join(rootPath, file)
-	fi, err := os.Lstat(path)
+	pin, err := sitefs.PinDir(rootPath)
+	if err != nil {
+		return
+	}
+	defer pin.Close()
+	root, err := os.OpenRoot(pin.Path)
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	fi, err := root.Lstat(file)
 	if err != nil || !fi.Mode().IsRegular() || fi.Size() > 4096 {
 		return
 	}
-	cur, err := os.ReadFile(path)
+	cur, err := root.ReadFile(file)
 	if err != nil {
 		return
 	}
@@ -87,12 +97,12 @@ func (r *Router) upgradeOldStarter(ctx context.Context, systemUser, rootPath, do
 		return
 	}
 	content := nginx.TemplateForRuntime(runtime, domain, int(port))[file]
-	if err := r.writeAsSiteUser(ctx, uid, gid, path, content); err != nil {
-		slog.Warn("agent: upgrade starter", "path", path, "error", err)
+	if err := r.writeAsSiteUser(ctx, uid, gid, filepath.Join(pin.Real, file), content); err != nil {
+		slog.Warn("agent: upgrade starter", "site", domain, "file", file, "error", err)
 		return
 	}
 	if runtime == "go" { // rebuild ./app from the new main.go
-		_, _ = r.runAsSiteUser(ctx, uid, gid, rootPath, "rm", "-f", "--", "app")
+		_, _ = r.runAsSiteUser(ctx, uid, gid, pin.Real, "rm", "-f", "--", "app")
 	}
-	slog.Info("agent: replaced the old starter (listened on all interfaces)", "path", path)
+	slog.Info("agent: replaced the old starter (listened on all interfaces)", "site", domain, "file", file)
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"sigardapanel/internal/sitefs"
 	"sigardapanel/internal/siteinput"
 )
 
@@ -220,10 +221,22 @@ func (r *Router) prepareGoApp(ctx context.Context, systemUser, rootPath, command
 	if len(bin) == 0 || bin[0] != "./app" {
 		return "", nil
 	}
-	if fi, err := os.Lstat(filepath.Join(rootPath, "app")); err == nil && fi.Mode().IsRegular() {
+	// Checked inside the pinned root: the site user owns the tree, so a
+	// path-based root lookup could be redirected by a swapped symlink.
+	pin, err := sitefs.PinDir(rootPath)
+	if err != nil {
+		return "", err
+	}
+	defer pin.Close()
+	root, err := os.OpenRoot(pin.Path)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	if fi, err := root.Lstat("app"); err == nil && fi.Mode().IsRegular() {
 		return "", nil
 	}
-	if _, err := os.Lstat(filepath.Join(rootPath, "go.mod")); err != nil {
+	if _, err := root.Lstat("go.mod"); err != nil {
 		return "", nil
 	}
 	gobin := goBinary()
@@ -234,7 +247,7 @@ func (r *Router) prepareGoApp(ctx context.Context, systemUser, rootPath, command
 	if !ok {
 		return "", fmt.Errorf("the site has no usable Linux user to build the Go app as")
 	}
-	out, err := r.runAsSiteUser(ctx, uid, gid, rootPath, gobin, "build", "-o", "app", ".")
+	out, err := r.runAsSiteUser(ctx, uid, gid, pin.Real, gobin, "build", "-o", "app", ".")
 	if err != nil {
 		return strings.TrimSpace(out), fmt.Errorf("go build failed: %s", strings.TrimSpace(out))
 	}
