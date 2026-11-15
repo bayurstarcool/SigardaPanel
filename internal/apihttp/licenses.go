@@ -41,7 +41,8 @@ func currentLicense(ctx context.Context, s *store.Store) effectiveLicense {
 		return out
 	}
 	out.Stored = lic
-	c, err := license.Verify(lic.Key, time.Now())
+	id, _ := installID(ctx, s.DB())
+	c, err := license.VerifyFor(lic.Key, id, time.Now())
 	out.Claims = c
 	switch {
 	case err == nil:
@@ -94,6 +95,23 @@ func (h *licenseHandler) getLicense(c *echo.Context) error {
 		servers = []store.Server{}
 	}
 	limits := features.TierLimits[eff.Tier]
+	db := h.store.DB()
+	id, _ := installID(ctx, db)
+	setting := func(k string) string { v, _ := store.GetSetting(ctx, db, k); return v }
+	master, masterErr := masterURL()
+	upgrade := setting(settingCheckinUpgradeURL)
+	if upgrade == "" && masterErr == nil {
+		upgrade = master + "/member/billing?install=" + id
+	}
+	preview, _ := buildCheckin(ctx, h.store)
+	checkin := map[string]any{
+		"enabled":        checkinEnabled(),
+		"master_url":     master,
+		"last_at":        setting(settingCheckinAt),
+		"last_error":     setting(settingCheckinError),
+		"latest_version": setting(settingCheckinLatest),
+		"data":           preview,
+	}
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{
@@ -105,6 +123,9 @@ func (h *licenseHandler) getLicense(c *echo.Context) error {
 			"licensee":     licensee,
 			"license_id":   licenseID,
 			"activated_at": activatedAt,
+			"install_id":   id,
+			"upgrade_url":  upgrade,
+			"checkin":      checkin,
 			"expires_at":   expiresAt,
 			"features":     features.TierFeatures(eff.Tier),
 			"limits": map[string]any{
@@ -132,7 +153,11 @@ func (h *licenseHandler) activateLicense(c *echo.Context) error {
 	if key == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "license key is required")
 	}
-	claims, err := license.Verify(key, time.Now())
+	id, err := installID(ctx, h.store.DB())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read the install id")
+	}
+	claims, err := license.VerifyFor(key, id, time.Now())
 	if err != nil {
 		if errors.Is(err, license.ErrNoKeys) {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
@@ -199,5 +224,22 @@ func (h *licenseHandler) getFeatures(c *echo.Context) error {
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data:      map[string]any{"current_tier": tier, "features": all},
 		RequestID: rid,
+	})
+}
+
+// checkinNow checks in with the master right away (e.g. after an upgrade
+// was bought) and returns the resulting license.
+func (h *licenseHandler) checkinNow(c *echo.Context) error {
+	if !checkinEnabled() {
+		return echo.NewHTTPError(http.StatusConflict, "check-in is turned off on this panel (SIGARDAPANEL_CHECKIN=off)")
+	}
+	ans, err := runCheckin(c.Request().Context(), h.store)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, err.Error())
+	}
+	eff := currentLicense(c.Request().Context(), h.store)
+	return c.JSON(http.StatusOK, httpjson.Success{
+		Data:      map[string]any{"tier": eff.Tier, "status": eff.Status, "message": ans.Message, "latest_version": ans.LatestVersion},
+		RequestID: c.Response().Header().Get(echo.HeaderXRequestID),
 	})
 }

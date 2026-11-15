@@ -95,6 +95,9 @@ func Run(ctx context.Context) error {
 	// when auto-update is enabled under Settings).
 	apihttp.StartPanelUpdateChecker(ctx, s, database)
 
+	// Check in with the master panel about daily (license, version).
+	apihttp.StartCheckin(ctx, s)
+
 	// Check users' disk usage against their limits (notifies at 80% / 100%).
 	apihttp.StartDiskQuotaChecker(ctx, s)
 

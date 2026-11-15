@@ -7,7 +7,8 @@
   import { fmtDateTime } from '$lib/format';
   import { licenseStore } from '$lib/license';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
-  import { BadgeCheck, LoaderCircle, KeyRound, AlertTriangle } from 'lucide-svelte';
+  import { BadgeCheck, LoaderCircle, KeyRound, AlertTriangle, ArrowUpRight, RefreshCw, ChevronDown } from 'lucide-svelte';
+  import { fmtRelative } from '$lib/format';
   import { onMount } from 'svelte';
 
   let lic = $state<any>(null);
@@ -15,6 +16,19 @@
   let key = $state('');
   let busy = $state(false);
   let confirmRemove = $state(false);
+  let checking = $state(false);
+  let showData = $state(false);
+
+  async function checkinNow() {
+    checking = true;
+    try {
+      const d = await apiFetch(auth.token, 'POST', 'license/checkin');
+      toasts.success(`Checked in: ${d?.tier ?? 'free'} license${d?.message ? ' · ' + d.message : ''}`);
+      await load();
+      licenseStore.fetch();
+    } catch (e: any) { toasts.error(e.message); await load(); }
+    finally { checking = false; }
+  }
 
   async function load() {
     try { lic = await apiFetch(auth.token, 'GET', 'license'); }
@@ -68,6 +82,42 @@
         {#if lic.status !== 'none'}<div><dt class="text-subtle">Expires</dt><dd class="text-fg">{lic.expires_at ? fmtDateTime(lic.expires_at) : 'Never'}</dd></div>{/if}
         {#if lic.key}<div><dt class="text-subtle">Key</dt><dd class="truncate font-mono text-xs text-muted">{lic.key}</dd></div>{/if}
       </dl>
+      <div class="space-y-2 rounded-lg border border-line px-3 py-2.5 text-[13px]">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="min-w-0">
+            <div class="text-subtle">Installation ID</div>
+            <div class="truncate font-mono text-xs text-fg">{lic.install_id}</div>
+          </div>
+          <div class="flex gap-2">
+            {#if lic.checkin?.enabled}
+              <button type="button" onclick={checkinNow} disabled={checking} class="btn btn-secondary btn-sm">
+                {#if checking}<LoaderCircle size={14} class="animate-spin" />{:else}<RefreshCw size={14} />{/if} Check now
+              </button>
+            {/if}
+            {#if lic.upgrade_url}
+              <a href={lic.upgrade_url} target="_blank" rel="noopener" class="btn btn-primary btn-sm"><ArrowUpRight size={14} /> {lic.tier === 'free' ? 'Upgrade plan' : 'Manage plan'}</a>
+            {/if}
+          </div>
+        </div>
+        {#if !lic.checkin?.enabled}
+          <p class="text-xs text-subtle">Check-in is off (SIGARDAPANEL_CHECKIN=off): licenses are not delivered automatically; activate keys by hand.</p>
+        {:else if lic.checkin?.last_error}
+          <p class="text-xs text-warning">Last check-in {lic.checkin.last_at ? fmtRelative(lic.checkin.last_at) : ''} failed: {lic.checkin.last_error}. The panel keeps working and retries.</p>
+        {:else if lic.checkin?.last_at}
+          <p class="text-xs text-subtle">Last check-in with {lic.checkin.master_url} {fmtRelative(lic.checkin.last_at)}.{#if lic.checkin.latest_version} Latest version: {lic.checkin.latest_version}.{/if}</p>
+        {:else}
+          <p class="text-xs text-subtle">The panel checks in with {lic.checkin?.master_url} once a day; the first check-in brings its free license.</p>
+        {/if}
+        {#if lic.checkin?.data}
+          <button type="button" onclick={() => (showData = !showData)} class="flex cursor-pointer items-center gap-1 text-xs text-subtle hover:text-fg">
+            <ChevronDown size={12} class={showData ? 'rotate-180' : ''} /> What is sent
+          </button>
+          {#if showData}
+            <pre class="overflow-x-auto rounded bg-surface-2 p-2 font-mono text-[11px] text-muted">{JSON.stringify(lic.checkin.data, null, 2)}</pre>
+            <p class="text-xs text-subtle">No names, domains, emails or IP addresses of your sites. Turn off with SIGARDAPANEL_CHECKIN=off.</p>
+          {/if}
+        {/if}
+      </div>
       {#if lic.message}
         <p class="flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 text-[13px] text-warning"><AlertTriangle size={14} class="mt-0.5 shrink-0" />{lic.message}</p>
       {/if}

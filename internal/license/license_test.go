@@ -107,8 +107,30 @@ func TestRotation(t *testing.T) {
 func TestSignRejectsBadClaims(t *testing.T) {
 	priv := newKey(t)
 	c := claims()
-	c.Tier = "free"
+	c.Tier = "unlimited"
 	if _, err := Sign(priv, c); !errors.Is(err, ErrBadClaims) {
-		t.Fatal("free tier signed")
+		t.Fatal("unknown tier signed")
+	}
+	c.Tier = "free"
+	if _, err := Sign(priv, c); err != nil {
+		t.Fatalf("free tier: %v", err)
+	}
+}
+
+func TestBoundToInstall(t *testing.T) {
+	priv := newKey(t)
+	c := claims()
+	c.Tier, c.ExpiresAt, c.InstallID = "free", time.Time{}, "inst-a"
+	key, _ := Sign(priv, c)
+	if _, err := VerifyFor(key, "inst-a", time.Now()); err != nil {
+		t.Fatalf("own install: %v", err)
+	}
+	if _, err := VerifyFor(key, "inst-b", time.Now()); !errors.Is(err, ErrOtherInstall) {
+		t.Fatalf("other install: %v", err)
+	}
+	c.InstallID = "" // unbound keys work anywhere
+	key, _ = Sign(priv, c)
+	if _, err := VerifyFor(key, "inst-b", time.Now()); err != nil {
+		t.Fatalf("unbound: %v", err)
 	}
 }

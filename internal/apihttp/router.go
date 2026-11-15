@@ -445,6 +445,7 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// The license applies to the whole panel: super_admin only.
 	e.POST("/api/v1/license/activate", licH.activateLicense, RequireAuth(s), RequirePermission(s, "license.manage"))
 	e.DELETE("/api/v1/license", licH.deactivateLicense, RequireAuth(s), RequirePermission(s, "license.manage"))
+	e.POST("/api/v1/license/checkin", licH.checkinNow, RequireAuth(s), RequireUserSession, RequirePermission(s, "license.manage"))
 	e.GET("/api/v1/license/features", licH.getFeatures, RequireAuth(s))
 
 	// ─── Stack Management (install/manage software on servers) ──

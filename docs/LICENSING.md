@@ -18,10 +18,11 @@ The signature covers `SPL1.` followed by the encoded claims. Claims:
 |---|---|
 | `id` | License id (unique, e.g. the order number). Required. |
 | `licensee`, `email` | Customer. |
-| `tier` | `basic`, `pro`, `enterprise` or `max`. Required. |
+| `tier` | `free`, `basic`, `pro`, `enterprise` or `max`. Required. |
 | `max_servers` | Server limit; `0` = the tier's default. |
 | `issued_at` | RFC 3339 time. Required. |
 | `expires_at` | RFC 3339 time; omitted or zero = never expires. |
+| `install_id` | Binds the key to one installation; another panel refuses it. Keys delivered by check-in are bound. |
 
 Unknown fields are ignored, so new claims can be added without breaking older
 panels. Implemented in `internal/license` (Go: `license.Sign`,
@@ -65,3 +66,30 @@ Settings → License (super admin): paste the key and activate. The panel
 stores it and verifies it (signature and expiry) every time the license is
 read, so an expired key returns the panel to the free tier on its own. Keys
 activated before v1.13 (plain hex, not signed) are reported as not valid.
+
+## Check-in: every installation has a license
+
+Once a day (first a few minutes after start) the panel checks in with the
+master panel (`SIGARDAPANEL_MASTER_URL`, default `https://panel.sigarda.com`):
+
+- The first check-in brings a **free license** bound to the installation;
+  nothing to do for the admin.
+- **Upgrading:** Settings → License → *Upgrade plan* opens the master's
+  billing page for this installation. Once the order is approved, the paid
+  license arrives with the next check-in (or *Check now*).
+- Renewals arrive the same way; a license revoked on the master is dropped.
+- The answer also carries the latest version.
+
+What is sent (Settings → License → *What is sent* shows the exact data):
+
+| Field | Example |
+|---|---|
+| `install_id` | random UUID made at install (no name, domain or email) |
+| `version`, `tier`, `license_id` | `1.13.0`, `free`, `SPL-…` |
+| `os`, `arch` | `linux`, `amd64` |
+| `servers`, `sites` | ranges: `1`, `2-5`, `6-20`, `21-100`, `100+` |
+
+Check-in never blocks the panel: without the master (offline servers,
+outages) it keeps running on its current license and retries hourly. Turn
+it off with `SIGARDAPANEL_CHECKIN=off` in `/etc/sigardapanel/panel.env`;
+licenses are then activated by hand.

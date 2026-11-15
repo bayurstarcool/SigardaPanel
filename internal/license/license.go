@@ -27,20 +27,25 @@ type Claims struct {
 	ID         string    `json:"id"`       // license id (from the master)
 	Licensee   string    `json:"licensee"` // customer name
 	Email      string    `json:"email,omitempty"`
-	Tier       string    `json:"tier"`        // basic, pro, enterprise, max
+	Tier       string    `json:"tier"`        // free, basic, pro, enterprise, max
 	MaxServers int       `json:"max_servers"` // 0 = tier default
 	IssuedAt   time.Time `json:"issued_at"`
 	ExpiresAt  time.Time `json:"expires_at,omitempty"` // zero = never
+	// InstallID binds the key to one panel installation (its install id):
+	// another panel refuses it. Keys the master delivers through check-in
+	// (free and upgraded licenses) are bound; keys issued by hand may not be.
+	InstallID string `json:"install_id,omitempty"`
 }
 
 var (
-	ErrFormat     = errors.New("not a SigardaPanel license key")
-	ErrSignature  = errors.New("license key signature is not valid (not issued by SigardaPanel, or altered)")
-	ErrExpired    = errors.New("license has expired")
-	ErrNoKeys     = errors.New("this build has no license public key, so it cannot verify licenses")
-	ErrBadClaims  = errors.New("license key has missing or invalid fields")
-	validTiers    = map[string]bool{"basic": true, "pro": true, "enterprise": true, "max": true}
-	base64Encoder = base64.RawURLEncoding
+	ErrFormat       = errors.New("not a SigardaPanel license key")
+	ErrSignature    = errors.New("license key signature is not valid (not issued by SigardaPanel, or altered)")
+	ErrExpired      = errors.New("license has expired")
+	ErrNoKeys       = errors.New("this build has no license public key, so it cannot verify licenses")
+	ErrBadClaims    = errors.New("license key has missing or invalid fields")
+	ErrOtherInstall = errors.New("license key was issued for another installation of SigardaPanel")
+	validTiers      = map[string]bool{"free": true, "basic": true, "pro": true, "enterprise": true, "max": true}
+	base64Encoder   = base64.RawURLEncoding
 )
 
 // PublicKeys are the trusted ed25519 public keys (base64, comma separated).
@@ -118,6 +123,19 @@ func Verify(key string, now time.Time) (*Claims, error) {
 	}
 	if !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt) {
 		return c, ErrExpired
+	}
+	return c, nil
+}
+
+// VerifyFor is Verify plus the installation check: a key bound to an
+// install id is valid only on that installation.
+func VerifyFor(key, installID string, now time.Time) (*Claims, error) {
+	c, err := Verify(key, now)
+	if err != nil {
+		return c, err
+	}
+	if c.InstallID != "" && c.InstallID != installID {
+		return c, ErrOtherInstall
 	}
 	return c, nil
 }
