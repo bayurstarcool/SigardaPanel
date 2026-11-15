@@ -416,6 +416,15 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `DELETE /api/v1/notifications/:id` — Delete notification
 - `DELETE /api/v1/notifications/read` — Delete all read
 
+### Git integration (GitHub, GitLab, Gitea)
+- `GET/POST /api/v1/git/connections`, `DELETE /api/v1/git/connections/:id` — the caller's accounts (token encrypted, verified on save; `allow_private` super_admin only; delete refused while sites use it)
+- `GET /api/v1/git/connections/:id/repos?q=`, `GET /api/v1/git/connections/:id/branches?repo=` — own connections only
+- `GET /api/v1/sites/:id/git` — repo, settings, permissions, last 30 deployments (site read)
+- `POST /api/v1/sites/:id/git/connect` `{connection_id, repo, branch, auto_deploy, build_enabled, deploy_script, deploy_now}` — owner or super_admin, own connection, repo admin/maintainer access
+- `PATCH /api/v1/sites/:id/git` `{branch, auto_deploy, build_enabled, deploy_script, repo_url}` — site admin; `repo_url` only without a connection
+- `DELETE /api/v1/sites/:id/git` — owner or super_admin: removes provider key + hook and the agent's key file; files stay
+- `GET /api/v1/sites/:id/deployments/:did` (log), `POST …/:did/redeploy`, `POST …/:did/rollback` (site write)
+
 ### Cloudflare (16 endpoints)
 - `GET /api/v1/cloudflare/config` — Get config
 - `PUT /api/v1/cloudflare/config` — Save config
@@ -665,6 +674,21 @@ site's agent (`siteAgentCall` / `fileOp` / `stackAgentRequest`) or queues a job:
   container actions match name, full id or 12-char short id only.
 - **Agent re-registration** from a known agent URL re-binds that server row.
 - **Cloudflare API tokens** are encrypted at rest (`secrets.Encrypt`).
+- **Git deploys** (`internal/gitprovider`, `internal/apihttp/git_integration.go`, agent `deploy.go`):
+  provider calls go through a client that refuses private/loopback addresses unless the
+  connection is `allow_private` (super_admin) and never follows redirects. A connected site
+  gets an ed25519 deploy key made by its Linux user (`~/.ssh/sigardapanel_site_<id>`, agent
+  `POST /tasks/site/deploy-key`); only the public half leaves the server and it is added
+  read-only. Clones use `core.sshCommand` with that key and the provider's host keys
+  (GitHub meta; others accept-new) in `~/.ssh/sigardapanel_known_hosts`. Deploy = fetch +
+  `checkout -f -B <branch> <origin/branch|commit>`, then composer / npm ci+build / pip / go
+  and the deploy script (`bash -e -o pipefail`), all as the site user in the pinned root's
+  verified real path (`PinnedDir.Real`; the `/proc/<pid>/fd` path is for the root process
+  only). Deploy jobs have one attempt; every deploy is a `deployments` row (worker records
+  commit, log, status, sets `sites.git_commit`, reports to the provider: GitHub
+  deployments, GitLab/Gitea commit statuses). Webhooks skip pings, other branches, branch
+  deletions and `auto_deploy=false`; the webhook URL needs an https `SIGARDAPANEL_PUBLIC_URL`
+  (an IP host disables the provider's certificate check; the HMAC still authenticates).
 - **Site DNS** (`internal/apihttp/site_dns.go`, `GET/POST /api/v1/sites/:id/dns`): always the
   site owner's Cloudflare account; changes (POST) owner or super_admin only. Only active zones,
   longest label-boundary match, public IPv4 only. Target IP (`dnsTargetIP`): the server's

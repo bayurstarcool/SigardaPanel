@@ -17,6 +17,7 @@
     CheckCircle2, XCircle, Plus, LoaderCircle,
   } from 'lucide-svelte';
   import { onMount } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
 
   let backups = $state<any[]>([]);
   let providers = $state<any[]>([]);
@@ -163,13 +164,18 @@
     }
   }
 
-  const filtered = $derived(activeTab === 'all' ? backups : backups.filter((b) => b.backup_type === activeTab));
+  // The header's server choice limits the list, the stats and the site picker.
+  const siteServer = $derived(new Map(allSites.map((x: any) => [x.id, x.server_id])));
+  const scoped = $derived(serverCtx.selectedId ? backups.filter((b) => siteServer.get(b.site_id) === serverCtx.selectedId) : backups);
+  const scopedSites = $derived(serverCtx.selectedId ? allSites.filter((x: any) => x.server_id === serverCtx.selectedId) : allSites);
+  const showServer = $derived(!serverCtx.selectedId && serverCtx.servers.length > 1);
+  const filtered = $derived(activeTab === 'all' ? scoped : scoped.filter((b) => b.backup_type === activeTab));
 
   const stats = $derived({
-    total: backups.length,
-    completed: backups.filter((b) => b.status === 'completed').length,
-    failed: backups.filter((b) => b.status === 'failed').length,
-    totalSize: backups.reduce((s, b) => s + (b.size_bytes || 0), 0),
+    total: scoped.length,
+    completed: scoped.filter((b) => b.status === 'completed').length,
+    failed: scoped.filter((b) => b.status === 'failed').length,
+    totalSize: scoped.reduce((s, b) => s + (b.size_bytes || 0), 0),
   });
 
   function fmtBytes(bytes: number): string {
@@ -252,7 +258,7 @@
         </div>
       {:else if loadError}
         <LoadError title="Could not load backups" message={loadError} onretry={load} />
-      {:else if filtered.length === 0 && backups.length > 0}
+      {:else if filtered.length === 0 && scoped.length > 0}
         <EmptyState compact icon={Package as any} title="No {activeTab === 'database' ? 'database' : 'file'} backups" description="Switch the filter to see other backups." />
       {:else if filtered.length === 0}
         <EmptyState compact icon={Package as any} title="No backups yet" description="Create a backup now, or add a schedule under Settings." actionLabel="Create backup" onaction={openManualBackup} />
@@ -275,6 +281,7 @@
                 <tr>
                   <td>
                     <div class="font-medium text-fg">{siteName(b)}</div>
+                    {#if showServer && siteServer.get(b.site_id)}<div class="text-[11.5px] text-subtle">{serverCtx.nameOf(siteServer.get(b.site_id))}</div>{/if}
                     <div class="text-xs text-subtle sm:hidden">{b.backup_type === 'database' ? 'Database' : 'Files'} · {fmtRelative(b.created_at)}</div>
                   </td>
                   <td>
@@ -340,7 +347,7 @@
         <label for="mb-site" class="label">Site</label>
         <select id="mb-site" bind:value={manualSiteId} class="input">
           <option value={0}>Select a site…</option>
-          {#each allSites as s (s.id)}
+          {#each scopedSites as s (s.id)}
             <option value={s.id}>{s.domain || s.name || `Site #${s.id}`}</option>
           {/each}
         </select>

@@ -12,7 +12,8 @@
     Terminal, Archive, Lock, AlertTriangle, CheckCircle2, WifiOff, Activity,
     TriangleAlert, Folder, Bell,
   } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
 
   type MetricState =
     | { state: 'loading' }
@@ -85,10 +86,13 @@
     refreshing = true;
     const errs: string[] = [];
     const fail = (what: string) => (e: any) => { if (!isExpired(e)) errs.push(`${what}: ${e?.message || 'failed'}`); };
+    // The header's server choice scopes everything on the overview.
+    const sid = serverCtx.selectedId;
+    const scope = sid ? `&server_id=${sid}` : '';
     await Promise.allSettled([
       apiFetch(auth.token, 'GET', 'servers')
         .then(async (d) => {
-          servers = d?.servers || [];
+          servers = (d?.servers || []).filter((x: any) => !sid || x.id === sid);
           loadingServers = false;
           const withId = servers.filter((s) => s.id);
           await Promise.allSettled([
@@ -98,11 +102,11 @@
         })
         .catch((e) => { if (!isExpired(e)) servers = []; fail('Servers')(e); })
         .finally(() => (loadingServers = false)),
-      apiFetch(auth.token, 'GET', 'sites?limit=500')
+      apiFetch(auth.token, 'GET', `sites?limit=500${scope}`)
         .then((d) => (sites = d?.sites || []))
         .catch((e) => { if (!isExpired(e)) sites = []; fail('Sites')(e); })
         .finally(() => (loadingSites = false)),
-      apiFetch(auth.token, 'GET', 'jobs?limit=50')
+      apiFetch(auth.token, 'GET', `jobs?limit=50${scope}`)
         .then((d) => (jobs = d?.jobs || []))
         .catch((e) => { if (!isExpired(e)) jobs = []; fail('Jobs')(e); })
         .finally(() => (loadingJobs = false)),
@@ -112,7 +116,11 @@
     refreshing = false;
   }
 
-  onMount(loadDashboard);
+  // Loads on open and again whenever the server choice changes.
+  $effect(() => {
+    serverCtx.selectedId;
+    untrack(() => { metrics = {}; security = null; secState = 'idle'; void loadDashboard(); });
+  });
 
   const onlineServers = $derived(servers.filter((s) => s.status === 'active' || s.status === 'online').length);
   const activeSites = $derived(sites.filter((s) => s.status === 'active').length);
@@ -158,8 +166,8 @@
 
 <DashboardLayout active="Overview">
   <PageHeader
-    title="Overview"
-    description={auth.user ? `Signed in as ${auth.user.username} · ${auth.user.role.replace('_', ' ')}` : ''}
+    title={serverCtx.selected ? `Overview · ${serverCtx.selected.name}` : 'Overview'}
+    description={auth.user ? `Signed in as ${auth.user.username} · ${auth.user.role.replace('_', ' ')}${serverCtx.selected ? ' · showing one server (switch at the top)' : ''}` : ''}
   >
     {#snippet actions()}
       <button onclick={loadDashboard} class="btn btn-secondary btn-sm" disabled={refreshing}>

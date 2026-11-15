@@ -2,7 +2,6 @@ package agenthttp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -29,6 +29,10 @@ type SystemSpec struct {
 	Uptime        string        `json:"uptime"`
 	Hostname      string        `json:"hostname"`
 	KernelVersion string        `json:"kernel_version"`
+	// Virtualization: none (bare metal), kvm, qemu, xen, vmware, microsoft,
+	// lxc, openvz, docker, … (systemd-detect-virt naming); "" when unknown.
+	Virtualization string `json:"virtualization,omitempty"`
+	PublicIP       string `json:"public_ip,omitempty"`
 }
 
 type CloudInfo struct {
@@ -56,6 +60,7 @@ type CPUInfo struct {
 	Architecture string `json:"architecture"`
 	MaxMHz       string `json:"max_mhz,omitempty"`
 	CacheSize    string `json:"cache_size,omitempty"`
+	Hypervisor   string `json:"hypervisor,omitempty"`
 }
 
 // GPUInfo describes detected graphics/compute devices. Usage is populated when
@@ -66,14 +71,20 @@ type GPUInfo struct {
 	Name           string  `json:"name,omitempty"`
 	UsagePercent   float64 `json:"usage_percent,omitempty"`
 	UsageAvailable bool    `json:"usage_available"`
+	// Display is a virtual or BMC display adapter (QXL, Cirrus, ASPEED, …):
+	// listed for completeness, never counted as a GPU.
+	Display string `json:"display,omitempty"`
 }
 
 type MemoryInfo struct {
-	TotalBytes int64 `json:"total_bytes"`
-	FreeBytes  int64 `json:"free_bytes"`
-	UsedBytes  int64 `json:"used_bytes"`
-	SwapTotal  int64 `json:"swap_total"`
-	SwapUsed   int64 `json:"swap_used"`
+	// TotalBytes is what the kernel can use (MemTotal); InstalledBytes the
+	// RAM the machine has (the kernel and firmware reserve the difference).
+	InstalledBytes int64 `json:"installed_bytes,omitempty"`
+	TotalBytes     int64 `json:"total_bytes"`
+	FreeBytes      int64 `json:"free_bytes"`
+	UsedBytes      int64 `json:"used_bytes"`
+	SwapTotal      int64 `json:"swap_total"`
+	SwapUsed       int64 `json:"swap_used"`
 }
 
 type DiskInfo struct {
@@ -91,14 +102,30 @@ type DiskInfo struct {
 	Model              string `json:"model,omitempty"`
 	Mounted            bool   `json:"mounted"`
 	MountPoint         string `json:"mount_point,omitempty"`
-	UsedBytes          int64  `json:"used_bytes,omitempty"`
-	FreeBytes          int64  `json:"free_bytes,omitempty"`
+	// Filesystem usage, summed over the filesystems on this disk (its
+	// partitions, LVM volumes, …); SizeBytes stays the disk's size.
+	FsSizeBytes int64       `json:"fs_size_bytes,omitempty"`
+	UsedBytes   int64       `json:"used_bytes,omitempty"`
+	FreeBytes   int64       `json:"free_bytes,omitempty"`
+	Mounts      []DiskMount `json:"mounts,omitempty"`
+}
+
+// DiskMount is one mounted filesystem on a disk.
+type DiskMount struct {
+	Device     string `json:"device"`
+	MountPoint string `json:"mount_point"`
+	FSType     string `json:"fs_type,omitempty"`
+	SizeBytes  int64  `json:"size_bytes"`
+	UsedBytes  int64  `json:"used_bytes"`
+	FreeBytes  int64  `json:"free_bytes"`
 }
 
 type NetworkInfo struct {
 	Interface string   `json:"interface"`
-	IPAddress string   `json:"ip_address"`
-	IPv6Addrs []string `json:"ipv6_addresses,omitempty"`
+	IPAddress string   `json:"ip_address"` // first IPv4, without prefix
+	IPv4Addrs []string `json:"ipv4_addresses,omitempty"`
+	IPv6Addrs []string `json:"ipv6_addresses,omitempty"` // global addresses only
+	MAC       string   `json:"mac,omitempty"`
 	Status    string   `json:"status"`
 }
 
@@ -145,13 +172,22 @@ func (r *Router) systemSpecTask(c *echo.Context) error {
 		KernelVersion: getKernelVersion(),
 	}
 
+	spec.Virtualization = detectVirtualization()
+	// The slow parts (cloud-init, the public IP lookup) run alongside the rest.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); spec.Cloud = detectCloudProvider(spec.Virtualization) }()
+	go func() { defer wg.Done(); spec.PublicIP = specPublicIP(c.Request().Context()) }()
 	spec.OS = getOSInfo()
 	spec.CPU = getCPUInfo()
 	spec.GPU = getGPUInfo()
-	spec.Memory = getMemoryInfo()
-	spec.Disk = getDiskInfo()
+	spec.Memory = getMemoryInfo(spec.Virtualization)
+	spec.Disk = getDiskInfo(spec.Virtualization)
 	spec.Network = getNetworkInfo()
-	spec.Cloud = detectCloudProvider()
+	wg.Wait()
+	if spec.Cloud != nil && spec.Cloud.PublicIP == "" {
+		spec.Cloud.PublicIP = spec.PublicIP
+	}
 
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data:      spec,
@@ -180,355 +216,6 @@ func (r *Router) systemBenchmarkTask(c *echo.Context) error {
 		Data:      result,
 		RequestID: "",
 	})
-}
-
-// --- Spec helpers ---
-
-func getUptime() string {
-	out, err := exec.Command("uptime", "-p").Output()
-	if err == nil {
-		return strings.TrimSpace(string(out))
-	}
-	out, err = exec.Command("uptime").Output()
-	if err == nil {
-		return strings.TrimSpace(string(out))
-	}
-	return "unknown"
-}
-
-func getHostname() string {
-	out, err := exec.Command("hostname").Output()
-	if err == nil {
-		return strings.TrimSpace(string(out))
-	}
-	return "unknown"
-}
-
-func getKernelVersion() string {
-	out, err := exec.Command("uname", "-r").Output()
-	if err == nil {
-		return strings.TrimSpace(string(out))
-	}
-	return "unknown"
-}
-
-func getOSInfo() OSInfo {
-	info := OSInfo{
-		Arch: runtime.GOARCH,
-	}
-	// Parse /etc/os-release
-	out, err := exec.Command("cat", "/etc/os-release").Output()
-	if err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "PRETTY_NAME=") {
-				info.PrettyName = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
-			} else if strings.HasPrefix(line, "NAME=") {
-				info.Name = strings.Trim(strings.TrimPrefix(line, "NAME="), "\"")
-			} else if strings.HasPrefix(line, "VERSION_ID=") {
-				info.Version = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"")
-			}
-		}
-	}
-	if info.PrettyName == "" {
-		out2, err := exec.Command("uname", "-sr").Output()
-		if err == nil {
-			info.PrettyName = strings.TrimSpace(string(out2))
-		}
-	}
-	return info
-}
-
-func getCPUInfo() CPUInfo {
-	info := CPUInfo{
-		Architecture: runtime.GOARCH,
-	}
-	coresPerSocket := 0
-	out, err := exec.Command("lscpu").Output()
-	if err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "Model name:") {
-				info.ModelName = strings.TrimSpace(strings.TrimPrefix(line, "Model name:"))
-			} else if strings.HasPrefix(line, "Vendor ID:") {
-				info.VendorID = strings.TrimSpace(strings.TrimPrefix(line, "Vendor ID:"))
-			} else if strings.HasPrefix(line, "CPU(s):") {
-				val := strings.TrimSpace(strings.TrimPrefix(line, "CPU(s):"))
-				info.Threads, _ = strconv.Atoi(val)
-			} else if strings.HasPrefix(line, "Core(s) per socket:") {
-				val := strings.TrimSpace(strings.TrimPrefix(line, "Core(s) per socket:"))
-				coresPerSocket, _ = strconv.Atoi(val)
-				info.Cores = coresPerSocket
-			} else if strings.HasPrefix(line, "Socket(s):") {
-				val := strings.TrimSpace(strings.TrimPrefix(line, "Socket(s):"))
-				info.Sockets, _ = strconv.Atoi(val)
-				if coresPerSocket > 0 {
-					info.Cores = coresPerSocket * info.Sockets
-				}
-			} else if strings.HasPrefix(line, "Architecture:") {
-				info.Architecture = strings.TrimSpace(strings.TrimPrefix(line, "Architecture:"))
-			} else if strings.HasPrefix(line, "CPU max MHz:") {
-				info.MaxMHz = strings.TrimSpace(strings.TrimPrefix(line, "CPU max MHz:"))
-			} else if strings.HasPrefix(line, "L2 cache:") || strings.HasPrefix(line, "L3 cache:") {
-				if info.CacheSize == "" {
-					info.CacheSize = strings.TrimSpace(strings.TrimPrefix(line, "L2 cache:"))
-					info.CacheSize = strings.TrimSpace(strings.TrimPrefix(line, "L3 cache:"))
-				}
-			}
-		}
-	}
-	return info
-}
-
-func getGPUInfo() GPUInfo {
-	info := GPUInfo{}
-	// NVIDIA: one CSV row per GPU, with live utilization when driver exposes it.
-	if out, err := exec.Command("nvidia-smi", "--query-gpu=name,utilization.gpu", "--format=csv,noheader,nounits").Output(); err == nil {
-		for _, raw := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			parts := strings.SplitN(raw, ",", 2)
-			if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
-				continue
-			}
-			info.Count++
-			info.Detected = true
-			if info.Name == "" {
-				info.Name = strings.TrimSpace(parts[0])
-			}
-			if len(parts) == 2 {
-				if usage, parseErr := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64); parseErr == nil {
-					info.UsagePercent += usage
-					info.UsageAvailable = true
-				}
-			}
-		}
-		if info.Count > 0 && info.UsageAvailable {
-			info.UsagePercent /= float64(info.Count)
-		}
-		if info.Detected {
-			return info
-		}
-	}
-
-	// Fallback inventory for AMD/Intel/virtual display devices.
-	if out, err := exec.Command("lspci").Output(); err == nil {
-		for _, raw := range strings.Split(string(out), "\n") {
-			line := strings.TrimSpace(raw)
-			lower := strings.ToLower(line)
-			if !strings.Contains(lower, "vga compatible controller") && !strings.Contains(lower, "3d controller") && !strings.Contains(lower, "display controller") {
-				continue
-			}
-			info.Count++
-			info.Detected = true
-			if info.Name == "" {
-				if idx := strings.Index(line, ": "); idx >= 0 {
-					info.Name = strings.TrimSpace(line[idx+2:])
-				} else {
-					info.Name = line
-				}
-			}
-		}
-	}
-	return info
-}
-
-func getMemoryInfo() MemoryInfo {
-	info := MemoryInfo{}
-	out, err := exec.Command("cat", "/proc/meminfo").Output()
-	if err != nil {
-		return info
-	}
-	var memTotal, memAvail, swapTotal, swapFree int64
-	for _, line := range strings.Split(string(out), "\n") {
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		val, _ := strconv.ParseInt(parts[1], 10, 64)
-		val *= 1024 // convert from kB to bytes
-		if strings.HasPrefix(line, "MemTotal:") {
-			memTotal = val
-		} else if strings.HasPrefix(line, "MemAvailable:") {
-			memAvail = val
-		} else if strings.HasPrefix(line, "SwapTotal:") {
-			swapTotal = val
-		} else if strings.HasPrefix(line, "SwapFree:") {
-			swapFree = val
-		}
-	}
-	info.TotalBytes = memTotal
-	info.FreeBytes = memAvail
-	info.UsedBytes = memTotal - memAvail
-	info.SwapTotal = swapTotal
-	info.SwapUsed = swapTotal - swapFree
-	return info
-}
-
-func getDiskInfo() []DiskInfo {
-	var disks []DiskInfo
-
-	// Key/value output preserves MODEL/VENDOR fields containing spaces.
-	out2, err2 := exec.Command("lsblk", "-P", "-b", "-d", "-o", "NAME,SIZE,TYPE,ROTA,TRAN,MODEL,VENDOR,SERIAL,WWN").Output()
-	if err2 == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out2)), "\n") {
-			fields := parseLsblkKV(line)
-			if fields["NAME"] == "" || fields["TYPE"] == "" {
-				continue
-			}
-			rotational, known := parseRotational(fields["ROTA"])
-			classification := classifyDisk(fields["NAME"], fields["TRAN"], fields["MODEL"], fields["VENDOR"], rotational, known)
-			disk := DiskInfo{
-				Name:               "/dev/" + fields["NAME"],
-				Type:               fields["TYPE"],
-				DiskType:           classification.Type,
-				DiskTypeConfidence: classification.Confidence,
-				DetectionReason:    classification.Reason,
-				Transport:          fields["TRAN"],
-				Vendor:             fields["VENDOR"],
-				Serial:             fields["SERIAL"],
-				Virtual:            classification.Virtual,
-				Model:              fields["MODEL"],
-			}
-			if known {
-				disk.Rotational = &rotational
-			}
-			disk.SizeBytes, _ = strconv.ParseInt(fields["SIZE"], 10, 64)
-			disks = append(disks, disk)
-		}
-	}
-
-	// Add filesystem usage without changing device classification.
-	out, err := exec.Command("df", "-B1", "-t", "ext4,xfs,btrfs,ntfs,vfat,fuseblk,overlay,zfs").Output()
-	if err == nil {
-		for i, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if i == 0 {
-				continue
-			}
-			fields := strings.Fields(line)
-			if len(fields) < 6 {
-				continue
-			}
-			used, _ := strconv.ParseInt(fields[2], 10, 64)
-			free, _ := strconv.ParseInt(fields[3], 10, 64)
-			size, _ := strconv.ParseInt(fields[1], 10, 64)
-			found := false
-			for j := range disks {
-				if sameBlockDevice(disks[j].Name, fields[0]) {
-					disks[j].Mounted, disks[j].MountPoint = true, fields[5]
-					disks[j].UsedBytes, disks[j].FreeBytes, disks[j].SizeBytes = used, free, size
-					found = true
-					break
-				}
-			}
-			if !found {
-				disks = append(disks, DiskInfo{Name: fields[0], SizeBytes: size, Mounted: true, MountPoint: fields[5], UsedBytes: used, FreeBytes: free, DiskType: "Unknown", DiskTypeConfidence: "unknown", DetectionReason: "filesystem source not present in lsblk inventory"})
-			}
-		}
-	}
-	return disks
-}
-
-func parseLsblkKV(line string) map[string]string {
-	result := map[string]string{}
-	for len(strings.TrimSpace(line)) > 0 {
-		line = strings.TrimSpace(line)
-		eq := strings.IndexByte(line, '=')
-		if eq <= 0 {
-			break
-		}
-		key := line[:eq]
-		line = line[eq+1:]
-		if strings.HasPrefix(line, `"`) {
-			line = line[1:]
-			end := strings.IndexByte(line, '"')
-			if end < 0 {
-				result[key] = line
-				break
-			}
-			result[key] = line[:end]
-			line = line[end+1:]
-		} else {
-			end := strings.IndexByte(line, ' ')
-			if end < 0 {
-				result[key] = line
-				break
-			}
-			result[key] = line[:end]
-			line = line[end:]
-		}
-	}
-	return result
-}
-
-func parseRotational(value string) (bool, bool) {
-	return value == "1", value == "0" || value == "1"
-}
-
-func sameBlockDevice(inventoryName, filesystemDevice string) bool {
-	if inventoryName == filesystemDevice {
-		return true
-	}
-	return strings.TrimPrefix(inventoryName, "/dev/") == strings.TrimPrefix(filesystemDevice, "/dev/")
-}
-
-func getNetworkInfo() []NetworkInfo {
-	var nets []NetworkInfo
-	out, err := exec.Command("ip", "-br", "addr").Output()
-	if err != nil {
-		return nets
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		iface := fields[0]
-		if iface == "lo" {
-			continue
-		}
-		status := "down"
-		if len(fields) > 1 {
-			status = fields[1]
-		}
-		ip := ""
-		if len(fields) > 2 {
-			ip = fields[2]
-		}
-		var ipv6s []string
-		if len(fields) > 3 {
-			for _, f := range fields[3:] {
-				if strings.Contains(f, ":") && strings.Contains(f, "/") {
-					ipv6s = append(ipv6s, f)
-				}
-			}
-		}
-		nets = append(nets, NetworkInfo{
-			Interface: iface,
-			IPAddress: ip,
-			IPv6Addrs: ipv6s,
-			Status:    status,
-		})
-	}
-	return nets
-}
-
-func parseSize(s string) int64 {
-	s = strings.TrimSpace(s)
-	multiplier := int64(1)
-	if strings.HasSuffix(s, "T") {
-		multiplier = 1024 * 1024 * 1024 * 1024
-		s = strings.TrimSuffix(s, "T")
-	} else if strings.HasSuffix(s, "G") {
-		multiplier = 1024 * 1024 * 1024
-		s = strings.TrimSuffix(s, "G")
-	} else if strings.HasSuffix(s, "M") {
-		multiplier = 1024 * 1024
-		s = strings.TrimSuffix(s, "M")
-	} else if strings.HasSuffix(s, "K") {
-		multiplier = 1024
-		s = strings.TrimSuffix(s, "K")
-	}
-	val, _ := strconv.ParseFloat(s, 64)
-	return int64(val * float64(multiplier))
 }
 
 // --- Benchmark helpers ---
@@ -682,224 +369,4 @@ func runNetworkBenchmark(ctx context.Context) NetworkBenchmark {
 	}
 
 	return bench
-}
-
-// detectCloudProvider identifies the cloud provider and instance details.
-func detectCloudProvider() *CloudInfo {
-	cloud := &CloudInfo{}
-
-	// 1. CheckDMI for cloud-specific SMBIOS/DMI data (works on most clouds)
-	dmiVendor := execDMIBIOSVendor()
-	dmiProductName := execDMIProductName()
-	dmiSystemVendor := execDMISystemVendor()
-
-	// 2. Check cloud-init (available on most clouds)
-	cloudInitData := execCloudInitQuery()
-
-	// 3. Check specific cloud metadata APIs (169.254.169.254)
-	// Most cloud providers use this metadata endpoint
-
-	// === AWS ===
-	if dmiVendor == "Amazon EC2" || strings.Contains(dmiProductName, "amazon") || strings.Contains(strings.ToLower(dmiSystemVendor), "amazon") {
-		cloud.Provider = "AWS"
-		cloud.InstanceID = cloudInitData["instance_id"]
-		cloud.Region = cloudInitData["availability_zone"]
-		cloud.InstanceType = cloudInitData["instance_type"]
-		cloud.Zone = cloudInitData["availability_zone"]
-	} else if dmiVendor == "Google Cloud" || strings.Contains(dmiProductName, "google") || strings.Contains(strings.ToLower(dmiSystemVendor), "google") {
-		cloud.Provider = "GCP"
-		cloud.InstanceID = cloudInitData["instance_id"]
-		cloud.Zone = cloudInitData["availability_zone"]
-		cloud.InstanceType = cloudInitData["instance_type"]
-		cloud.Region = cloudInitData["region"]
-	} else if dmiVendor == "DigitalOcean" || strings.Contains(strings.ToLower(dmiProductName), "digitalocean") {
-		cloud.Provider = "DigitalOcean"
-		cloud.InstanceID = cloudInitData["instance_id"]
-		cloud.Region = cloudInitData["region"]
-		cloud.InstanceType = cloudInitData["instance_type"]
-	} else if dmiVendor == "Linode" || strings.Contains(strings.ToLower(dmiSystemVendor), "linode") || strings.Contains(strings.ToLower(dmiProductName), "linode") {
-		cloud.Provider = "Linode"
-		cloud.InstanceID = cloudInitData["instance_id"]
-		cloud.Region = cloudInitData["region"]
-		cloud.InstanceType = cloudInitData["instance_type"]
-	} else if dmiVendor == "Vultr" || strings.Contains(strings.ToLower(dmiSystemVendor), "vultr") {
-		cloud.Provider = "Vultr"
-		cloud.InstanceID = cloudInitData["instance_id"]
-		cloud.Region = cloudInitData["region"]
-		cloud.InstanceType = cloudInitData["instance_type"]
-	} else if dmiVendor == "Hetzner" || strings.Contains(strings.ToLower(dmiSystemVendor), "hetzner") {
-		cloud.Provider = "Hetzner"
-		cloud.InstanceID = cloudInitData["instance_id"]
-		cloud.InstanceType = cloudInitData["instance_type"]
-	} else if strings.Contains(strings.ToLower(dmiSystemVendor), "oracle") || strings.Contains(strings.ToLower(dmiProductName), "oracle") {
-		cloud.Provider = "Oracle Cloud"
-		cloud.InstanceID = cloudInitData["instance_id"]
-		cloud.Zone = cloudInitData["availability_zone"]
-		cloud.Region = cloudInitData["region"]
-		cloud.InstanceType = cloudInitData["instance_type"]
-	} else if strings.Contains(strings.ToLower(dmiSystemVendor), "microsoft") || strings.Contains(strings.ToLower(dmiProductName), "virtual machine") || strings.Contains(strings.ToLower(dmiProductName), "hyper-v") {
-		cloud.Provider = "Azure"
-		cloud.InstanceID = cloudInitData["instance_id"]
-		cloud.Region = cloudInitData["region"]
-		cloud.InstanceType = cloudInitData["instance_type"]
-	} else if dmiVendor == "Alibaba Cloud" || strings.Contains(strings.ToLower(dmiSystemVendor), "alibaba") {
-		cloud.Provider = "Alibaba Cloud"
-		cloud.InstanceID = cloudInitData["instance_id"]
-		cloud.Region = cloudInitData["region"]
-		cloud.InstanceType = cloudInitData["instance_type"]
-	} else if dmiVendor == "Vultr" || strings.Contains(strings.ToLower(dmiSystemVendor), "vultr") {
-		cloud.Provider = "Vultr"
-		cloud.InstanceID = cloudInitData["instance_id"]
-	} else {
-		// Check if QEMU/KVM (might be a VPS on a smaller provider)
-		if strings.Contains(strings.ToLower(dmiProductName), "qemu") || strings.Contains(strings.ToLower(dmiVendor), "qemu") {
-			// Could be a VPS provider - check /etc/os-release or other hints
-			cloud.Provider = "VPS (KVM/QEMU)"
-		} else {
-			return nil // Not a cloud/VM
-		}
-	}
-
-	// Get public IP
-	publicIP := getPublicIP()
-	if publicIP != "" {
-		cloud.PublicIP = publicIP
-	}
-
-	return cloud
-}
-
-// execDMIBIOSVendor reads the DMI BIOS vendor.
-func execDMIBIOSVendor() string {
-	out, err := exec.Command("cat", "/sys/class/dmi/id/bios_vendor").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// execDMIProductName reads the DMI product name.
-func execDMIProductName() string {
-	out, err := exec.Command("cat", "/sys/class/dmi/id/product_name").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// execDMISystemVendor reads the DMI system vendor.
-func execDMISystemVendor() string {
-	out, err := exec.Command("cat", "/sys/class/dmi/id/sys_vendor").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// execCloudInitQuery queries cloud-init for instance data.
-func execCloudInitQuery() map[string]string {
-	result := make(map[string]string)
-
-	// cloud-init query
-	out, err := exec.Command("cloud-init", "query", "--format", "json").Output()
-	if err == nil {
-		var data map[string]any
-		if jsonErr := json.Unmarshal(out, &data); jsonErr == nil {
-			if ds, ok := data["ds"].(map[string]any); ok {
-				if meta, ok := ds["meta_data"].(map[string]any); ok {
-					if v, ok := meta["instance-id"].(string); ok {
-						result["instance_id"] = v
-					}
-					if v, ok := meta["instance-type"].(string); ok {
-						result["instance_type"] = v
-					}
-					if v, ok := meta["availability-zone"].(string); ok {
-						result["availability_zone"] = v
-					}
-					if v, ok := meta["region"].(string); ok {
-						result["region"] = v
-					}
-				}
-			}
-		}
-	}
-
-	// Fallback: check /var/lib/cloud/data/instance
-	if result["instance_id"] == "" {
-		if out, err := exec.Command("cat", "/var/lib/cloud/data/instance").Output(); err == nil {
-			result["instance_id"] = strings.TrimSpace(string(out))
-		}
-	}
-
-	return result
-}
-
-// getPublicIP gets the public IP address.
-func getPublicIP() string {
-	// Try multiple sources
-	sources := []string{
-		"curl -s --connect-timeout 3 ifconfig.me",
-		"curl -s --connect-timeout 3 icanhazip.com",
-		"curl -s --connect-timeout 3 api.ipify.org",
-	}
-	for _, cmd := range sources {
-		out, err := exec.Command("sh", "-c", cmd).Output()
-		if err == nil {
-			ip := strings.TrimSpace(string(out))
-			if ip != "" && strings.Count(ip, ".") == 3 {
-				return ip
-			}
-		}
-	}
-	return ""
-}
-
-type diskClassification struct {
-	Type       string
-	Confidence string
-	Reason     string
-	Virtual    bool
-}
-
-// classifyDisk refuses to infer physical media behind a virtual block device.
-// Guest ROTA is a hint about the virtual device, not proof of host storage.
-func classifyDisk(device, transport, model, vendor string, rotational, rotationalKnown bool) diskClassification {
-	lower := strings.ToLower(strings.Join([]string{device, transport, model, vendor}, " "))
-	if strings.HasPrefix(strings.ToLower(device), "nvme") || strings.Contains(lower, "nvme") {
-		return diskClassification{"NVMe", "high", "NVMe device/model identified", false}
-	}
-	virtual := transport == "virtio" || strings.Contains(lower, "qemu") || strings.Contains(lower, "virtio") || strings.Contains(lower, "virtual") || strings.Contains(lower, "0x1af4")
-	if virtual {
-		reason := "virtual block device; physical backend type hidden"
-		if rotationalKnown {
-			reason += fmt.Sprintf("; guest rotational=%t", rotational)
-		}
-		return diskClassification{"Virtual", "unknown", reason, true}
-	}
-	if strings.Contains(lower, "solid state") || strings.Contains(lower, "ssd") {
-		return diskClassification{"SSD", "medium", "model identifies solid-state media", false}
-	}
-	if strings.Contains(lower, "hard disk") || strings.Contains(lower, "hdd") {
-		return diskClassification{"HDD", "medium", "model identifies hard-disk media", false}
-	}
-	if rotationalKnown && rotational {
-		return diskClassification{"HDD", "low", "kernel rotational flag=1", false}
-	}
-	if rotationalKnown && !rotational {
-		return diskClassification{"SSD", "low", "kernel non-rotational flag=0", false}
-	}
-	return diskClassification{"Unknown", "unknown", "insufficient device metadata", false}
-}
-
-// detectDiskType retained for compatibility with older tests/callers.
-func detectDiskType(deviceName string, fields []string) string {
-	model := ""
-	if len(fields) > 4 {
-		model = strings.Join(fields[4:], " ")
-	}
-	rotational, known := false, false
-	if len(fields) > 3 {
-		rotational, known = parseRotational(fields[3])
-	}
-	return classifyDisk(deviceName, "", model, "", rotational, known).Type
 }

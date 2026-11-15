@@ -6,7 +6,8 @@
   import PageHeader from '$components/PageHeader.svelte';
   import { toasts } from '$lib/toast.svelte';
   import { Plus, RefreshCw, UserPlus, Copy, X, KeyRound } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
   import DatabasesPanel from './DatabasesPanel.svelte';
   import UsersPanel from './UsersPanel.svelte';
 
@@ -30,8 +31,11 @@
         apiFetch(auth.token, 'GET', 'sites'),
         apiFetch(auth.token, 'GET', 'db-users'),
       ]);
-      dbs = dbData?.databases || [];
-      sites = siteData?.sites || [];
+      // The header's server choice: only that server's sites and databases.
+      const sid = serverCtx.selectedId;
+      sites = (siteData?.sites || []).filter((x: any) => !sid || x.server_id === sid);
+      const onServer = new Set(sites.map((x: any) => x.id));
+      dbs = (dbData?.databases || []).filter((d: any) => !sid || onServer.has(d.site_id));
       allUsers = userData?.users || [];
       loadError = '';
     } catch (e: any) {
@@ -57,7 +61,8 @@
 
   let loadError = $state('');
 
-  onMount(() => { loadDbs(); });
+  onMount(() => { void serverCtx.ensure(); });
+  $effect(() => { serverCtx.selectedId; untrack(loadDbs); });
 </script>
 
 <DashboardLayout active="Databases">

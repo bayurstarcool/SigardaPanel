@@ -99,6 +99,7 @@ var AllMigrations = []Migration{
 	AgentTLSFingerprintSchema,
 	RBACRolesSchema,
 	SiteDNSRecordsSchema,
+	GitIntegrationSchema,
 }
 
 func Down(db *sql.DB) error {

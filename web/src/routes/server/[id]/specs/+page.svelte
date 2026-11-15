@@ -20,9 +20,37 @@
   const memPct = $derived(specs?.memory?.total_bytes ? ((specs.memory.used_bytes || 0) / specs.memory.total_bytes * 100) : 0);
   const swapPct = $derived(specs?.memory?.swap_total ? ((specs.memory.swap_used || 0) / specs.memory.swap_total * 100) : 0);
 
-  function diskPct(d: any): number {
-    return d.size_bytes ? ((d.used_bytes || 0) / d.size_bytes * 100) : 0;
+  // Like df's Use%: used / (used + available); the filesystem's reserved
+  // blocks count as neither.
+  function usePct(used: number, free: number): number {
+    const t = (used || 0) + (free || 0);
+    return t ? ((used || 0) / t) * 100 : 0;
   }
+  function diskPct(d: any): number {
+    return usePct(d.used_bytes, d.free_bytes);
+  }
+  // Transport, vendor, serial; the rotational flag only for physical disks
+  // (a virtual disk's flag says nothing about the storage behind it).
+  function diskDetails(d: any): string {
+    const vendor = (d.vendor || '').trim();
+    const parts = [
+      d.transport ? `Transport: ${d.transport}` : '',
+      vendor ? `Vendor: ${vendor === '0x1af4' ? 'virtio (Red Hat)' : vendor}` : '',
+      d.serial ? `ID: ${d.serial}` : '',
+      !d.virtual && d.rotational !== undefined && d.rotational !== null ? `Rotational: ${d.rotational ? 'yes' : 'no'}` : '',
+    ];
+    return parts.filter(Boolean).join(' · ');
+  }
+  function fmtClock(mhz: string | number): string {
+    const n = Number(mhz);
+    if (!n) return '';
+    return n >= 1000 ? `${(n / 1000).toFixed(2)} GHz` : `${n} MHz`;
+  }
+  const virtLabels: Record<string, string> = {
+    none: 'Bare metal', kvm: 'KVM', qemu: 'QEMU', xen: 'Xen', vmware: 'VMware', microsoft: 'Hyper-V', oracle: 'VirtualBox',
+    amazon: 'AWS Nitro', lxc: 'LXC container', 'lxc-libvirt': 'LXC container', openvz: 'OpenVZ container', docker: 'Docker container',
+    'systemd-nspawn': 'nspawn container', wsl: 'WSL', 'vm-other': 'Virtual machine',
+  };
 
   async function fetchSpecs() {
     if (!auth.user) { window.location.href = '/login'; return; }
@@ -119,6 +147,7 @@
         <div class="card p-4">
           <div class="stat-label flex items-center gap-1.5"><Cloud size={14} /> Cloud provider</div>
           <div class="mt-1.5 text-sm font-semibold text-fg">{specs.cloud.provider}</div>
+          {#if specs.virtualization && specs.virtualization !== 'none'}<div class="mt-1 text-xs text-muted">{virtLabels[specs.virtualization] || specs.virtualization}</div>{/if}
           {#if specs.cloud.instance_type}<div class="mt-1 text-xs text-muted">Type: {specs.cloud.instance_type}</div>{/if}
           {#if specs.cloud.region}<div class="text-xs text-muted">Region: {specs.cloud.region}</div>{/if}
           {#if specs.cloud.instance_id}<div class="mt-1 truncate font-mono text-xs text-subtle">{specs.cloud.instance_id}</div>{/if}
@@ -127,7 +156,7 @@
       <div class="card p-4">
         <div class="stat-label flex items-center gap-1.5"><Server size={14} /> OS</div>
         <div class="mt-1.5 text-sm font-semibold text-fg">{specs.os?.pretty_name || specs.os?.name || 'Unknown'}</div>
-        <div class="mt-1 text-xs text-muted">Arch: {specs.os?.arch || '—'}</div>
+        <div class="mt-1 text-xs text-muted">Arch: {specs.os?.arch || '—'}{#if !specs.cloud && specs.virtualization} · {virtLabels[specs.virtualization] || specs.virtualization}{/if}</div>
       </div>
       <div class="card p-4">
         <div class="stat-label flex items-center gap-1.5"><Clock size={14} /> Uptime</div>
@@ -140,8 +169,8 @@
       </div>
       <div class="card p-4">
         <div class="stat-label flex items-center gap-1.5"><Wifi size={14} /> Network</div>
-        <div class="mt-1.5 text-sm font-semibold text-fg">{specs.network?.length || 0} interface(s)</div>
-        <div class="mt-1 font-mono text-xs text-muted">{specs.network?.[0]?.ip_address || '—'}</div>
+        <div class="mt-1.5 font-mono text-sm font-semibold text-fg">{specs.public_ip || specs.network?.[0]?.ip_address || '—'}</div>
+        <div class="mt-1 text-xs text-muted">{specs.public_ip ? 'Public IP' : 'Private IP'} · {specs.network?.length || 0} interface(s)</div>
       </div>
     </div>
 
@@ -155,7 +184,8 @@
           <div><dt class="stat-label">Architecture</dt><dd class="mt-1 text-sm text-fg">{specs.cpu?.architecture || '—'}</dd></div>
           <div><dt class="stat-label">Cores / threads</dt><dd class="mt-1 text-sm text-fg tabular-nums">{specs.cpu?.cores || 0}C / {specs.cpu?.threads || 0}T</dd></div>
           <div><dt class="stat-label">Sockets</dt><dd class="mt-1 text-sm text-fg tabular-nums">{specs.cpu?.sockets || 0}</dd></div>
-          {#if specs.cpu?.max_mhz}<div><dt class="stat-label">Max MHz</dt><dd class="mt-1 text-sm text-fg tabular-nums">{specs.cpu.max_mhz}</dd></div>{/if}
+          {#if specs.cpu?.max_mhz}<div><dt class="stat-label">Clock</dt><dd class="mt-1 text-sm text-fg tabular-nums">{fmtClock(specs.cpu.max_mhz)}</dd></div>{/if}
+          {#if specs.cpu?.hypervisor}<div><dt class="stat-label">Hypervisor</dt><dd class="mt-1 text-sm text-fg">{specs.cpu.hypervisor}</dd></div>{/if}
           {#if specs.cpu?.cache_size}<div><dt class="stat-label">Cache</dt><dd class="mt-1 text-sm text-fg">{specs.cpu.cache_size}</dd></div>{/if}
         </dl>
       </section>
@@ -178,7 +208,7 @@
               <div class="progress mt-4"><div class="progress-bar" style="width: {Math.min(Number(specs.gpu.usage_percent || 0), 100)}%"></div></div>
             {/if}
           {:else}
-            <p class="text-[13px] text-subtle">No GPU detected</p>
+            <p class="text-[13px] text-subtle">No GPU detected{#if specs.gpu?.display} <span class="text-subtle">· display adapter only: {specs.gpu.display}</span>{/if}</p>
           {/if}
         </div>
       </section>
@@ -188,7 +218,7 @@
         <div class="card-header"><h2 class="card-title flex items-center gap-2"><MemoryStick size={16} class="text-subtle" /> Memory</h2></div>
         <div class="card-body grid gap-6 md:grid-cols-2">
           <div>
-            <div class="mb-2 flex justify-between text-xs"><span class="font-medium text-muted">RAM</span><span class="text-subtle tabular-nums">{fmtBytes(specs.memory?.used_bytes || 0)} / {fmtBytes(specs.memory?.total_bytes || 0)}</span></div>
+            <div class="mb-2 flex justify-between gap-2 text-xs"><span class="font-medium text-muted">RAM{#if specs.memory?.installed_bytes} <span class="font-normal text-subtle">· {fmtBytes(specs.memory.installed_bytes)} installed</span>{/if}</span><span class="text-subtle tabular-nums" title="Used / usable (the kernel and firmware reserve part of the installed memory)">{fmtBytes(specs.memory?.used_bytes || 0)} / {fmtBytes(specs.memory?.total_bytes || 0)} usable</span></div>
             <div class="progress"><div class="progress-bar {pctTone(memPct)}" style="width: {Math.min(memPct, 100)}%"></div></div>
             <div class="mt-1 text-right text-xs text-subtle tabular-nums">{memPct.toFixed(1)}% used</div>
           </div>
@@ -219,19 +249,25 @@
                       {/if}
                     </div>
                     {#if d.detection_reason}<div class="mt-1 truncate text-xs text-subtle" title={d.detection_reason}>{d.detection_reason}</div>{/if}
-                    <div class="mt-0.5 text-xs text-subtle">
-                      {#if d.transport}Transport: {d.transport} · {/if}
-                      {#if d.vendor}Vendor: {d.vendor.trim()} · {/if}
-                      {#if d.serial}ID: {d.serial}{/if}
-                      {#if d.rotational !== undefined} · Rotational: {d.rotational ? 'yes' : 'no'}{/if}
-                    </div>
+                    {#if diskDetails(d)}<div class="mt-0.5 text-xs text-subtle">{diskDetails(d)}</div>{/if}
                   </div>
                   <span class="text-sm text-muted tabular-nums">{fmtBytes(d.size_bytes)}</span>
                 </div>
-                {#if d.mounted}
+                {#if d.mounted && d.mounts?.length}
+                  {#each d.mounts as m (m.mount_point)}
+                    {@const p = usePct(m.used_bytes, m.free_bytes)}
+                    <div class="mt-3 mb-1.5 flex justify-between gap-2 text-xs text-subtle">
+                      <span class="min-w-0 truncate"><span class="font-mono text-muted">{m.mount_point}</span>{#if m.fs_type} · {m.fs_type}{/if}{#if m.device !== d.name} · <span class="font-mono">{m.device}</span>{/if}</span>
+                      <span class="shrink-0 tabular-nums">{fmtBytes(m.used_bytes)} used · {fmtBytes(m.free_bytes)} free · {p.toFixed(1)}%</span>
+                    </div>
+                    <div class="progress"><div class="progress-bar {pctTone(p)}" style="width: {Math.min(p, 100)}%"></div></div>
+                  {/each}
+                {:else if d.mounted}
                   <div class="mt-3 mb-1.5 flex justify-between text-xs text-subtle"><span class="font-mono">{d.mount_point}</span><span class="tabular-nums">{fmtBytes(d.used_bytes || 0)} / {fmtBytes(d.size_bytes)}</span></div>
                   <div class="progress"><div class="progress-bar {pctTone(diskPct(d))}" style="width: {Math.min(diskPct(d), 100)}%"></div></div>
                   <div class="mt-1 text-right text-xs text-subtle tabular-nums">{diskPct(d).toFixed(1)}% used</div>
+                {:else}
+                  <div class="mt-2 text-xs text-subtle">Not mounted</div>
                 {/if}
               </div>
             {/each}
@@ -252,9 +288,9 @@
                 {#each specs.network as net, i (i)}
                   <tr>
                     <td class="font-medium">{net.interface}</td>
-                    <td class="font-mono text-[13px] text-muted">{net.ip_address || '—'}</td>
-                    <td><span class="inline-flex items-center gap-1.5 text-xs {net.status === 'UP' ? 'text-success' : 'text-danger'}"><span class="dot"></span>{net.status}</span></td>
-                    <td class="font-mono text-xs text-subtle max-sm:hidden">{net.ipv6_addresses?.length > 0 ? net.ipv6_addresses[0] : '—'}</td>
+                    <td class="font-mono text-[13px] text-muted">{#if net.ipv4_addresses?.length}{#each net.ipv4_addresses as a (a)}<div>{a}</div>{/each}{:else}{net.ip_address || '—'}{/if}{#if net.mac}<div class="text-[11px] text-subtle">{net.mac}</div>{/if}</td>
+                    <td><span class="inline-flex items-center gap-1.5 text-xs {net.status === 'UP' ? 'text-success' : net.status === 'UNKNOWN' ? 'text-warning' : 'text-danger'}"><span class="dot"></span>{net.status}</span></td>
+                    <td class="font-mono text-xs text-subtle max-sm:hidden">{#if net.ipv6_addresses?.length}{#each net.ipv6_addresses as a (a)}<div>{a}</div>{/each}{:else}—{/if}</td>
                   </tr>
                 {/each}
               </tbody>

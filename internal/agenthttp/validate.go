@@ -21,7 +21,7 @@ var errUnsafePath = errors.New("unsafe path")
 var (
 	domainRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,253}[a-zA-Z0-9])?$`)
 	pathRegex   = regexp.MustCompile(`^/[a-zA-Z0-9_\-\./]+$`)
-	gitURLRegex = regexp.MustCompile(`^(https?://|git@|file://)[a-zA-Z0-9._\-/:]+$`)
+	gitURLRegex = regexp.MustCompile(`^(https?://|ssh://git@|git@|file://)[a-zA-Z0-9._\-/:]+$`)
 	gitRefRegex = regexp.MustCompile(`^[a-zA-Z0-9._/\-]{1,255}$`)
 	dbNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
 	dbHostRegex = regexp.MustCompile(`^[a-zA-Z0-9_.%\-]{1,255}$`)

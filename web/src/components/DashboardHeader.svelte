@@ -3,6 +3,7 @@
   import { apiFetch } from '$lib/api';
   import { theme } from '$lib/theme.svelte';
   import { onMount } from 'svelte';
+  import ServerSwitcher from './ServerSwitcher.svelte';
   import { Bell, Search, Settings, LogOut, ChevronDown, Menu, X, Sun, Moon, User, Undo2, ArrowUpCircle } from 'lucide-svelte';
 
   let { mobileOpen, onToggleMobile, onSearchOpen }: { mobileOpen: boolean; onToggleMobile: () => void; onSearchOpen?: () => void } = $props();
@@ -103,6 +104,7 @@
         <span class="max-sm:hidden">Search…</span>
         <span class="kbd ml-auto max-sm:hidden">⌘K</span>
       </button>
+      <ServerSwitcher />
     </div>
 
     <div class="flex items-center gap-1">

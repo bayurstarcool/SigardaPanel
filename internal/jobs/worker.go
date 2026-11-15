@@ -275,6 +275,9 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 		}
 		dispatchPayload = enriched
 	}
+	if job.Type == jobmodel.TypeSiteDeploy {
+		w.deployStarting(ctx, job)
+	}
 	result, execErr := agent.Execute(ctx, job.Type, dispatchPayload)
 
 	if execErr != nil {
@@ -295,10 +298,16 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			return
 		}
 		resultJSON, _ := json.Marshal(result)
+		if job.Type == jobmodel.TypeSiteDeploy {
+			resultJSON = []byte(deployResultJSON(result))
+		}
 		if err := w.store.Jobs.MarkCompleted(ctx, job.ID, false, string(resultJSON), execErr.Error()); err != nil {
 			slog.Error("worker: mark completed", "id", job.ID, "error", err)
 		}
 		slog.Error("worker: job failed permanently", "id", job.ID, "error", execErr, "attempts", job.Attempts)
+		if job.Type == jobmodel.TypeSiteDeploy {
+			w.deployFinished(ctx, job, result, execErr)
+		}
 
 		// A site whose creation failed must not stay "pending" forever: show
 		// it as failed so the operator sees it and can delete/recreate it.
@@ -372,8 +381,14 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	}
 
 	resultJSON, _ := json.Marshal(result)
+	if job.Type == jobmodel.TypeSiteDeploy {
+		resultJSON = []byte(deployResultJSON(result))
+	}
 	if err := w.store.Jobs.MarkCompleted(ctx, job.ID, true, string(resultJSON), ""); err != nil {
 		slog.Error("worker: mark completed", "id", job.ID, "error", err)
+	}
+	if job.Type == jobmodel.TypeSiteDeploy {
+		w.deployFinished(ctx, job, result, nil)
 	}
 
 	// Post-success: update related resource status
@@ -483,6 +498,9 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			if err := w.store.SiteDNS.MarkUnmanagedBySite(ctx, p.SiteID); err != nil {
 				slog.Warn("worker: release site dns records", "site_id", p.SiteID, "error", err)
 			}
+			// The git connection is the previous owner's; the new owner
+			// connects the site to a repository again.
+			_ = w.store.Git.DeleteSiteGit(ctx, p.SiteID)
 			if site, _ := w.store.Sites.GetByID(ctx, p.SiteID); site != nil {
 				regen, _ := json.Marshal(map[string]any{
 					"site_id": site.ID, "name": site.Name, "domain": site.Domain,

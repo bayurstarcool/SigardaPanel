@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { serverCtx } from '$lib/serverContext.svelte';
   import { fmtDate } from '$lib/format';
   import { auth, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
@@ -152,6 +153,7 @@
     if (searchInput) params.search = searchInput;
     if (runtimeFilter) params.runtime = runtimeFilter;
     if (statusFilter) params.status = statusFilter;
+    if (serverCtx.selectedId) params.server_id = serverCtx.selectedId;
     try {
       const d = await apiFetch(auth.token, 'GET', `sites?${buildQuery(params)}`);
       sites = d?.sites || [];
@@ -174,7 +176,14 @@
 
   onMount(() => { fetchServers(); });
   // Refetch whenever paging or filters change (also runs once on mount).
-  $effect(() => { page; pageSize; runtimeFilter; statusFilter; untrack(fetchSites); });
+  $effect(() => { page; pageSize; runtimeFilter; statusFilter; serverCtx.selectedId; untrack(fetchSites); });
+  // A new server choice starts at the first page.
+  let lastServer = serverCtx.selectedId;
+  $effect(() => { const id = serverCtx.selectedId; if (id !== lastServer) { lastServer = id; untrack(() => { page = 1; }); } });
+  // New sites go to the server chosen in the header (the form can change it).
+  $effect(() => { if (showCreate && form.server_id === 0 && serverCtx.selectedId) form.server_id = serverCtx.selectedId; });
+  onMount(() => { void serverCtx.ensure(); });
+  const showServer = $derived(!serverCtx.selectedId && serverCtx.servers.length > 1);
   $effect(() => { if (servers.length === 1 && form.server_id === 0) form.server_id = servers[0].id; });
 
   // PHP-FPM versions actually installed on the chosen server (null = unknown).
@@ -276,7 +285,7 @@
 </script>
 
 <DashboardLayout active="Sites">
-  <PageHeader title="Sites" description={loading ? 'Loading…' : loadError ? 'Sites unavailable' : `${totalCount} site${totalCount === 1 ? '' : 's'} total`}>
+  <PageHeader title="Sites" description={loading ? 'Loading…' : loadError ? 'Sites unavailable' : `${totalCount} site${totalCount === 1 ? '' : 's'}${serverCtx.selected ? ` on ${serverCtx.selected.name}` : ' total'}`}>
     {#snippet actions()}
       <button onclick={() => (showCreate = !showCreate)} class="btn btn-primary btn-sm">
         {#if showCreate}<X size={14} /> Close{:else}<Plus size={14} /> Create site{/if}
@@ -512,6 +521,7 @@
               <tr>
                 <td class="font-medium">
                   <a href="/sites/{s.id}" class="text-fg hover:text-accent">{s.domain}</a>
+                  {#if showServer}<div class="mt-0.5 text-[11.5px] font-normal text-subtle">{serverCtx.nameOf(s.server_id)}</div>{/if}
                 </td>
                 <td><span class="badge">{s.runtime}</span></td>
                 <td class="max-2xl:hidden"><span class="badge badge-accent">{s.managed_by || 'sigardapanel'}</span></td>

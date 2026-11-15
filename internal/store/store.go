@@ -37,6 +37,7 @@ type Store struct {
 	UserSites          *SQLiteUserSiteStore
 	Roles              *SQLiteRoleStore
 	SiteDNS            *SiteDNSStore
+	Git                *GitStore
 	BackupProviders    *SQLiteBackupStorageProviderStore
 	BackupSchedules    BackupScheduleRepository
 	BackupConfigs      BackupConfigRepository
@@ -79,6 +80,7 @@ func New(db *sql.DB) *Store {
 		UserSites:          NewUserSiteStore(db),
 		Roles:              NewRoleStore(db),
 		SiteDNS:            &SiteDNSStore{db: db},
+		Git:                &GitStore{db: db},
 		BackupProviders:    NewBackupStorageProviderStore(db),
 		BackupSchedules:    NewBackupScheduleStore(db),
 		BackupConfigs:      NewBackupConfigStore(db),

@@ -10,7 +10,8 @@
     Zap, X, RefreshCw, Globe, Trash2, Rocket, ShieldCheck, Server, Database, Users, UserMinus,
     Play, Square, HardDrive, Download, RotateCcw, ChevronDown, Copy, Check, AlertTriangle,
   } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { serverCtx } from '$lib/serverContext.svelte';
   import { toasts } from '$lib/toast.svelte';
 
   let jobs = $state<any[]>([]);
@@ -41,7 +42,9 @@
     if (!auth.user || inFlight) return;
     inFlight = true;
     try {
-      const d = await apiFetch(auth.token, 'GET', 'jobs?limit=200');
+      const sid = serverCtx.selectedId;
+      const d = await apiFetch(auth.token, 'GET', `jobs?limit=200${sid ? `&server_id=${sid}` : ''}`);
+      if (sid !== serverCtx.selectedId) return; // the choice changed meanwhile
       jobs = d?.jobs || [];
       loadError = '';
     } catch (e: any) {
@@ -50,6 +53,16 @@
     inFlight = false;
     if (loading) loading = false;
   }
+  // Reload right away when the header's server choice changes.
+  let lastServer = -1;
+  $effect(() => {
+    const id = serverCtx.selectedId;
+    if (id === lastServer) return;
+    const first = lastServer === -1;
+    lastServer = id;
+    if (!first) untrack(() => { inFlight = false; void loadJobs(); });
+  });
+  onMount(() => { void serverCtx.ensure(); });
 
   async function manualRefresh() {
     refreshing = true;
@@ -226,8 +239,9 @@
                 <td class="whitespace-nowrap text-[13px] text-muted max-sm:hidden">
                   {#if j.site_id}
                     <a href="/sites/{j.site_id}" class="inline-flex items-center gap-1.5 hover:text-accent"><Globe size={14} /> Site #{j.site_id}</a>
+                    {#if !serverCtx.selectedId && serverCtx.servers.length > 1 && j.server_id}<div class="text-[11.5px] text-subtle">{serverCtx.nameOf(j.server_id)}</div>{/if}
                   {:else if j.server_id}
-                    <span class="inline-flex items-center gap-1.5"><Server size={14} /> Server #{j.server_id}</span>
+                    <span class="inline-flex items-center gap-1.5"><Server size={14} /> {serverCtx.nameOf(j.server_id)}</span>
                   {:else}
                     <span class="text-subtle">—</span>
                   {/if}
