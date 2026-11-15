@@ -386,26 +386,19 @@ func (h *siteHandler) create(c *echo.Context) error {
 	// ── App process management ──
 	appPort := int64(0)
 	appCmd := ""
-	appStatus := "stopped"
+	// The port is picked and stored under one lock, unique in the panel and
+	// free on the site's server (see app_ports.go).
 	switch body.Runtime {
-	case "node":
-		appPort, err = h.store.Sites.FindFreePort(c.Request().Context(), 30000, 40000)
+	case "node", "go", "python", "docker":
+		appPortMu.Lock()
+		defer appPortMu.Unlock()
+		appPort, err = h.allocateAppPort(c.Request().Context(), body.ServerID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "no available port")
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
 		}
-		appCmd = "node server.js"
-	case "go":
-		appPort, err = h.store.Sites.FindFreePort(c.Request().Context(), 30000, 40000)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "no available port")
-		}
-		appCmd = "./app"
-	case "python":
-		appPort, err = h.store.Sites.FindFreePort(c.Request().Context(), 30000, 40000)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "no available port")
-		}
-		appCmd = "python3 app.py"
+		appCmd = map[string]string{"node": "node server.js", "go": "./app", "python": "python3 app.py"}[body.Runtime]
+	}
+	switch body.Runtime {
 	case "proxy":
 		if body.ProxyPassURL == "" {
 			return echo.NewHTTPError(http.StatusBadRequest, "proxy_pass_url required for proxy runtime")
@@ -413,8 +406,10 @@ func (h *siteHandler) create(c *echo.Context) error {
 	}
 	if appPort > 0 {
 		site.AppPort = sql.NullInt64{Int64: appPort, Valid: true}
-		site.AppCommand = sql.NullString{String: appCmd, Valid: true}
-		site.AppStatus = sql.NullString{String: appStatus, Valid: true}
+		if appCmd != "" { // docker sites keep only the port (the container serves it)
+			site.AppCommand = sql.NullString{String: appCmd, Valid: true}
+			site.AppStatus = sql.NullString{String: "starting", Valid: true}
+		}
 	}
 
 	if err := h.store.Sites.Create(c.Request().Context(), site); err != nil {
@@ -447,6 +442,9 @@ func (h *siteHandler) create(c *echo.Context) error {
 		"docker_volume":   body.DockerVolume,
 		"docker_restart":  body.DockerRestart,
 		"system_user":     systemUser,
+		// The agent starts a new node/python/go app right after setup.
+		"app_command":    appCmd,
+		"app_memory_max": 512,
 	})
 	job := &jobmodel.Job{
 		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},

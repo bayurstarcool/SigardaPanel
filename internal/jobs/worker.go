@@ -278,8 +278,27 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 	if job.Type == jobmodel.TypeSiteDeploy {
 		w.deployStarting(ctx, job)
 	}
+	// A new certificate waits until its domain resolves (see ssl_dns.go).
+	if w.sslDNSGate(ctx, job) {
+		return
+	}
 	result, execErr := agent.Execute(ctx, job.Type, dispatchPayload)
 
+	if execErr != nil && (job.Type == jobmodel.TypeSSLIssue || job.Type == jobmodel.TypeSSLRenew) {
+		// certbot's output is long; keep what explains the failure.
+		text := execErr.Error()
+		if result != nil {
+			text += " " + result.Error + " " + result.Output
+		}
+		summary := summarizeSSLError(text, sslDomain(job.Payload))
+		// DNS still propagating: try again for a while instead of failing.
+		if job.Type == jobmodel.TypeSSLIssue && isDNSPending(text) && time.Since(job.CreatedAt) < sslDNSWindow {
+			_ = w.store.Jobs.Requeue(ctx, job.ID, time.Now().Add(5*time.Minute), summary+" Retrying automatically in 5 minutes.")
+			slog.Info("worker: ssl.issue waiting for DNS", "id", job.ID, "error", summary)
+			return
+		}
+		execErr = fmt.Errorf("%s", summary)
+	}
 	if execErr != nil {
 		permanent := isPermanentJobError(job.Type, execErr, result)
 		if permanent && job.Attempts < job.MaxAttempts {
@@ -412,6 +431,12 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 			if isNew {
 				if err := w.store.Sites.UpdateStatus(ctx, siteID, "active"); err != nil {
 					slog.Error("worker: update site status", "id", siteID, "error", err)
+				}
+			}
+			// A new app site's app was started by the agent.
+			if result != nil && result.AppStatus != "" {
+				if err := w.store.Sites.UpdateAppStatus(ctx, siteID, result.AppStatus); err != nil {
+					slog.Error("worker: update app status", "id", siteID, "error", err)
 				}
 			}
 

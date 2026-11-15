@@ -347,8 +347,16 @@ checkedOut:
 			}
 		}
 		if payload.Runtime == "go" && has("go.mod") {
-			if err := run("go mod download", "go", "mod", "download"); err != nil {
+			gobin := goBinary()
+			if gobin == "" {
+				return fail(http.StatusUnprocessableEntity, "Go is not installed on this server (Stack page)")
+			}
+			if err := run("go mod download", gobin, "mod", "download"); err != nil {
 				return fail(http.StatusUnprocessableEntity, "go mod download failed")
+			}
+			// The app runs ./app (the default command): rebuild it.
+			if err := run("go build", gobin, "build", "-o", "app", "."); err != nil {
+				return fail(http.StatusUnprocessableEntity, "go build failed")
 			}
 		}
 	}

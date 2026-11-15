@@ -305,6 +305,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	// System specifications and benchmarks
 	tasks.GET("/system/spec", r.systemSpecTask)
 	tasks.GET("/system/public-ip", r.publicIPTask)
+	tasks.GET("/system/ports", r.listeningPortsTask)
 	tasks.GET("/system/benchmark", r.systemBenchmarkTask)
 
 	// Stack management (install/manage software on the server)
@@ -583,6 +584,10 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		// VhostRegen: an existing site, only its vhost is regenerated (no
 		// starter files, no container re-creation).
 		VhostRegen bool `json:"vhost_regen,omitempty"`
+		// AppCommand / AppMemoryMax: a new node, python or go site starts
+		// its app right after setup (never on vhost regenerations).
+		AppCommand   string `json:"app_command,omitempty"`
+		AppMemoryMax int64  `json:"app_memory_max,omitempty"`
 		// Security: the site's basic auth and blocked IPs (validated again
 		// by nginx.GenerateVhost before anything is written).
 		Security *struct {
@@ -716,28 +721,36 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		// Determine container port (different images expose different ports)
 		containerPort := dockerContainerPort(dockerLang, payload.DockerImage)
 
-		// Port mapping: use container port mapped to a host port
-		hostPort := fmt.Sprintf("%d:%d", 10000+payload.SiteID%50000, containerPort)
+		// Port mapping. The panel allocates the host port (unique on this
+		// server) and the container is published on 127.0.0.1 only: the site
+		// is reached through nginx, never on the port directly.
+		hostPortNum := 0
 		if payload.DockerPorts != "" {
-			// Validate requested port is available
+			// An explicit mapping (super admins) is used as given when free.
 			requestedHostPort := strings.Split(payload.DockerPorts, ":")[0]
 			if isPortAvailable(requestedHostPort) {
 				args = append(args, "-p", payload.DockerPorts)
-				hostPort = payload.DockerPorts
+				hostPortNum, _ = strconv.Atoi(requestedHostPort)
 			} else {
-				slog.Warn("agent: requested port unavailable, using auto-assigned", "requested", requestedHostPort, "auto", hostPort)
-				args = append(args, "-p", hostPort)
+				slog.Warn("agent: requested docker port unavailable, using the allocated one", "requested", requestedHostPort)
 			}
-		} else {
-			// Auto-assign: find next available port
-			for i := 0; i < 100; i++ {
-				port := fmt.Sprintf("%d", 10000+((int(payload.SiteID)+i)%50000))
-				if isPortAvailable(port) {
-					hostPort = fmt.Sprintf("%s:%d", port, containerPort)
-					break
+		}
+		if hostPortNum == 0 {
+			hostPortNum = payload.Port
+			if hostPortNum <= 0 || !isPortAvailable(strconv.Itoa(hostPortNum)) {
+				hostPortNum = 0
+				for i := 0; i < 1000; i++ { // older panels send no port
+					p := 30000 + (int(payload.SiteID)+i)%10000
+					if isPortAvailable(strconv.Itoa(p)) {
+						hostPortNum = p
+						break
+					}
 				}
 			}
-			args = append(args, "-p", hostPort)
+			if hostPortNum == 0 {
+				return echo.NewHTTPError(http.StatusConflict, "no free port for the container")
+			}
+			args = append(args, "-p", fmt.Sprintf("127.0.0.1:%d:%d", hostPortNum, containerPort))
 		}
 
 		// Volumes — auto-mount site root into container
@@ -793,7 +806,7 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 
 		// Set proxy_pass to the container's host port
 		if payload.ProxyPassURL == "" {
-			payload.ProxyPassURL = "http://127.0.0.1:" + strings.Split(hostPort, ":")[0]
+			payload.ProxyPassURL = fmt.Sprintf("http://127.0.0.1:%d", hostPortNum)
 		}
 	}
 
@@ -887,8 +900,29 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		slog.Warn("agent: nginx reload after site.create", "error", reloadErr, "output", strings.TrimSpace(reloadOut))
 	}
 
+	// 6. A new app site starts its app (the starter, or code already in the
+	// folder), so the domain answers right away instead of 502.
+	appStatus, appMessage := "", ""
+	if !payload.VhostRegen && payload.AppCommand != "" && payload.Port > 0 && isAppRuntime(payload.Runtime) {
+		if err := validateAppUnitInput(payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand); err == nil {
+			st, msg, logs, err := r.startApp(ctx, payload.SiteID, payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand, int64(payload.Port), payload.AppMemoryMax)
+			if err == nil {
+				appStatus, appMessage = st, msg
+				if logs != "" {
+					appMessage += ": " + lastLines(logs, 5)
+				}
+			} else {
+				appStatus, appMessage = "errored", err.Error()
+			}
+		} else {
+			appStatus, appMessage = "errored", err.Error()
+		}
+	}
+
 	return c.JSON(http.StatusOK, map[string]any{
 		"ok":                true,
+		"app_status":        appStatus,
+		"app_message":       appMessage,
 		"message":           fmt.Sprintf("site %s created (runtime: %s)", payload.Domain, payload.Runtime),
 		"root_path":         payload.RootPath,
 		"nginx_config":      nginxConfigPath,
@@ -902,6 +936,8 @@ func (r *Router) siteCreateTask(c *echo.Context) error {
 		"php_pool": phpSocket != "",
 	})
 }
+
+func isAppRuntime(rt string) bool { return rt == "node" || rt == "python" || rt == "go" }
 
 // ─── Docker language helpers ───────────────────────────────────────
 
