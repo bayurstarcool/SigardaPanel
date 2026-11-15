@@ -384,7 +384,6 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e.GET("/api/v1/databases/:id/viewer/tables", dbH.viewerTables, RequireAuth(s))
 	e.GET("/api/v1/databases/:id/viewer/columns", dbH.viewerColumns, RequireAuth(s))
 	e.GET("/api/v1/databases/:id/viewer/rows", dbH.viewerRows, RequireAuth(s))
-	e.POST("/api/v1/databases/exec-sql", dbH.execSQL, RequireAuth(s), RequireUserSession, RequirePermission(s, "database.exec_sql"))
 
 	// Reset passwords for imported users (admin only)
 	e.POST("/api/v1/databases/phpmyadmin-reset-passwords", dbH.phpMyAdminResetPasswords, RequireAuth(s), RequireUserSession, RequirePermission(s, "database.admin"))

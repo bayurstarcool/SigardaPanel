@@ -352,7 +352,6 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/email/manage", r.manageEmail)
 
 	// Python app management (Gunicorn/WSGI)
-	tasks.POST("/python/manage", r.managePythonApp)
 
 	// Bot blocker management
 	tasks.POST("/bot-blocker/manage", r.manageBotBlocker)
@@ -1574,7 +1573,13 @@ func (r *Router) logsReadTask(c *echo.Context) error {
 		return c.JSON(http.StatusOK, resp)
 	}
 
-	logPath := filepath.Join(r.logDir, payload.Domain+"."+payload.Type+".log")
+	// A file name in the log directory, never a path (the domain is already
+	// validated; this also keeps it out of other directories).
+	logName := payload.Domain + "." + payload.Type + ".log"
+	if strings.Contains(logName, "..") || filepath.Base(logName) != logName {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid domain")
+	}
+	logPath := filepath.Join(r.logDir, filepath.Base(logName))
 	if payload.Type == "php" {
 		logPath = phpFPMLogPath(payload.PHPVersion)
 	}

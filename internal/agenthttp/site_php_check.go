@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"sigardapanel/internal/nginx"
+	"sigardapanel/internal/siteinput"
 )
 
 // defaultPHPRunDir is where distro / ondrej PHP-FPM pools put their sockets
@@ -17,7 +18,11 @@ import (
 const defaultPHPRunDir = "/run/php"
 
 func (r *Router) phpSocket(version string) string {
-	return filepath.Join(r.phpRunDir, "php"+version+"-fpm.sock")
+	v, ok := siteinput.CanonicalPHPVersion(version)
+	if !ok {
+		return filepath.Join(r.phpRunDir, "php-invalid-version-fpm.sock") // never exists
+	}
+	return filepath.Join(r.phpRunDir, "php"+v+"-fpm.sock")
 }
 
 // installedPHPFPMVersions lists the versions with a php<version>-fpm.sock.

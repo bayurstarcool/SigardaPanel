@@ -6,9 +6,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/labstack/echo/v5"
+	"sigardapanel/internal/sitefs"
 )
+
+// pm2NameRe: PM2 app names (also never an option such as "--name").
+var pm2NameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // managePM2 handles PM2 operations (start, stop, restart, delete, list, logs).
 func (r *Router) managePM2(c *echo.Context) error {
@@ -24,6 +29,15 @@ func (r *Router) managePM2(c *echo.Context) error {
 	}
 	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+	}
+	if payload.AppName != "" && !pm2NameRe.MatchString(payload.AppName) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid app_name (letters, digits, '.', '_' and '-')")
+	}
+	if payload.Env != "" && !pm2NameRe.MatchString(payload.Env) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid env")
+	}
+	if payload.Instances < 0 || payload.Instances > 64 {
+		return echo.NewHTTPError(http.StatusBadRequest, "instances must be 1-64")
 	}
 
 	// Check if PM2 is installed
@@ -46,14 +60,36 @@ func (r *Router) managePM2(c *echo.Context) error {
 			payload.Instances = 1
 		}
 
-		// Install deps if needed
-		nodeModules := filepath.Join(payload.RootPath, "node_modules")
-		if _, err := os.Stat(nodeModules); os.IsNotExist(err) {
-			slog.Info("pm2: installing dependencies")
-			r.executor.RunShell(ctx, "npm", "install", "--production", "--prefix", payload.RootPath)
+		// The app must be a site's folder (the agent runs as root: never an
+		// arbitrary path), opened and verified before use; the script is a
+		// file inside it.
+		if !r.isAllowedSitePath(payload.RootPath) {
+			return echo.NewHTTPError(http.StatusBadRequest, "root_path must be a site folder on this server")
+		}
+		if !filepath.IsLocal(payload.Script) {
+			return echo.NewHTTPError(http.StatusBadRequest, "script must be a path inside root_path")
+		}
+		pin, err := sitefs.PinDir(payload.RootPath)
+		if err != nil {
+			return echo.NewHTTPError(sitefs.StatusOf(err), err.Error())
+		}
+		defer pin.Close()
+		root, err := os.OpenRoot(pin.Path)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "cannot open root_path")
+		}
+		defer root.Close()
+		if fi, err := root.Lstat(payload.Script); err != nil || !fi.Mode().IsRegular() {
+			return echo.NewHTTPError(http.StatusBadRequest, "script not found in root_path")
 		}
 
-		args := []string{"start", payload.Script, "--name", payload.AppName, "--env", payload.Env}
+		// Install deps if needed
+		if _, err := root.Lstat("node_modules"); os.IsNotExist(err) {
+			slog.Info("pm2: installing dependencies")
+			r.executor.RunShell(ctx, "npm", "install", "--production", "--prefix", pin.Real)
+		}
+
+		args := []string{"start", filepath.Join(pin.Real, payload.Script), "--cwd", pin.Real, "--name", payload.AppName, "--env", payload.Env}
 		if payload.Instances > 1 {
 			args = append(args, "-i", fmt.Sprintf("%d", payload.Instances))
 		}

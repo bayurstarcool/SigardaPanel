@@ -466,3 +466,44 @@ func RootPathsOverlap(a, b string) bool {
 	a, b = path.Clean(a), path.Clean(b)
 	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
+
+// knownPHPVersions is every version PHPVersion accepts ("5.0" … "9.99"),
+// built from numbers so it never carries request data.
+var knownPHPVersions = func() map[string]string {
+	m := map[string]string{}
+	for major := 0; major <= 9; major++ {
+		for minor := 0; minor <= 99; minor++ {
+			v := fmt.Sprintf("%d.%d", major, minor)
+			m[v] = v
+		}
+	}
+	return m
+}()
+
+// CanonicalPHPVersion returns the allow-listed copy of a PHP version such as
+// "8.3" (ok false when it is not one). File paths are built from the
+// returned value, never from the input.
+func CanonicalPHPVersion(v string) (string, bool) {
+	c, ok := knownPHPVersions[v]
+	return c, ok
+}
+
+// CanonicalDBPrivileges validates a comma separated privilege list
+// (DBPrivileges) and returns it rebuilt from the allow-list, so SQL holds
+// only the allow-listed keywords, never request text.
+func CanonicalDBPrivileges(s string) (string, error) {
+	if err := DBPrivileges(s); err != nil {
+		return "", err
+	}
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.Join(strings.Fields(strings.ToUpper(p)), " ")
+		for k := range dbPrivileges {
+			if k == p {
+				out = append(out, k)
+				break
+			}
+		}
+	}
+	return strings.Join(out, ", "), nil
+}

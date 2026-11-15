@@ -572,8 +572,10 @@ var PHPFPMDefaultVersions = []string{"8.3", "8.4", "8.2", "8.1", "8.0"}
 // phpFpmAddr returns the TCP address for a specific PHP version.
 func phpFpmAddr(version string) string {
 	if p, ok := phpFpmTCPPorts[version]; ok {
-		// Check if PHP-FPM is actually listening on TCP, otherwise use Unix socket
-		socketPath := fmt.Sprintf("/run/php/php%s-fpm.sock", version)
+		// Check if PHP-FPM is actually listening on TCP, otherwise use Unix
+		// socket (the path is built from the allow-listed version).
+		v, _ := siteinput.CanonicalPHPVersion(version)
+		socketPath := fmt.Sprintf("/run/php/php%s-fpm.sock", v)
 		if _, err := os.Stat(socketPath); err == nil {
 			return fmt.Sprintf("unix:%s", socketPath)
 		}

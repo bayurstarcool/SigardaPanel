@@ -78,8 +78,7 @@ const (
 	SiteChooseOwner   = "site.choose_owner"   // own or created users' account and home for a site
 	SiteProxyInternal = "site.proxy_internal" // proxy sites to private/internal addresses or host names
 	// Databases
-	DatabaseExecSQL = "database.exec_sql" // free SQL on the database server
-	DatabaseAdmin   = "database.admin"    // database server settings, import, phpMyAdmin password reset
+	DatabaseAdmin = "database.admin" // database server settings, import, phpMyAdmin password reset
 	// Panel
 	PanelUpdate    = "panel.update"   // update/roll back the panel
 	AgentUpdate    = "agent.update"   // update remote agents
@@ -134,7 +133,6 @@ var registry = []Permission{
 	{DockerControl, "servers", "Start, stop and restart your site containers", false, RoleAdmin},
 	{DockerViewAll, "servers", "See every container on a server", true, RoleSuperAdmin},
 
-	{DatabaseExecSQL, "databases", "Run free SQL on the database server", true, RoleSuperAdmin},
 	{DatabaseAdmin, "databases", "Database server settings, import, phpMyAdmin password reset", true, RoleSuperAdmin},
 
 	{PanelUpdate, "panel", "Update and roll back the panel", true, RoleSuperAdmin},

@@ -269,4 +269,3 @@ func (s *SQLiteUserStore) UpdateRole(ctx context.Context, userID int64, role str
 	}
 	return nil
 }
-
