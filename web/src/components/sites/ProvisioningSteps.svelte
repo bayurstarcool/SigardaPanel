@@ -81,8 +81,9 @@
     let ssl: Step = { key: 'ssl', title: 'SSL certificate', state: 'pending', detail: 'Starts after the server setup' };
     if (site.ssl_status === 'active') ssl = { ...ssl, state: 'done', detail: "Let's Encrypt certificate installed" };
     else if (sslJob?.status === 'succeeded') ssl = { ...ssl, state: 'done', detail: "Let's Encrypt certificate installed" };
-    else if (sslJob?.status === 'running' || sslJob?.status === 'queued') ssl = { ...ssl, state: 'active', detail: "Requesting a certificate from Let's Encrypt…" };
-    else if (sslJob?.status === 'failed') ssl = { ...ssl, state: 'warn', detail: `Not issued: ${sslJob.error || 'unknown error'}. The site works over HTTP; retry from the SSL tab once DNS points to this server.` };
+    else if (sslJob?.status === 'running') ssl = { ...ssl, state: 'active', detail: "Requesting a certificate from Let's Encrypt…" };
+    else if (sslJob?.status === 'queued') ssl = { ...ssl, state: 'active', detail: sslJob.error || "Requesting a certificate from Let's Encrypt…" };
+    else if (sslJob?.status === 'failed') ssl = { ...ssl, state: 'warn', detail: `Not issued: ${sslJob.error || 'unknown error'} The site works over HTTP meanwhile.` };
     else if (setup.state === 'done') ssl = { ...ssl, state: 'skip', detail: 'Not requested (issue one from the SSL tab)' };
     else if (setup.state === 'error') ssl = { ...ssl, state: 'skip', detail: 'Skipped' };
     out.push(ssl);
@@ -117,6 +118,16 @@
     }, 2500);
     return () => clearInterval(timer);
   });
+
+  // Ask for the certificate again (after fixing DNS or the firewall).
+  let retrying = $state(false);
+  async function retrySSL() {
+    retrying = true;
+    try {
+      await apiFetch(auth.token, 'POST', `sites/${site.id}/ssl/issue`);
+      await loadJobs();
+    } catch {} finally { retrying = false; }
+  }
 
   function dismiss() {
     dismissed = true;
@@ -176,6 +187,11 @@
             </div>
             {#if step.detail}
               <p class="mt-0.5 text-[12.5px] break-words {step.state === 'error' ? 'text-danger' : step.state === 'warn' ? 'text-warning' : 'text-subtle'}">{step.detail}</p>
+            {/if}
+            {#if step.key === 'ssl' && step.state === 'warn' && site.can_write}
+              <button onclick={retrySSL} disabled={retrying} class="btn btn-secondary btn-xs mt-2">
+                {#if retrying}<LoaderCircle size={12} class="animate-spin" />{/if} Retry SSL
+              </button>
             {/if}
             {#if step.items && step.state !== 'pending'}
               <ul class="mt-2 space-y-1">

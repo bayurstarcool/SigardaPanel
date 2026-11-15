@@ -18,6 +18,9 @@ type JobRepository interface {
 	UpdateStatus(ctx context.Context, id int64, status string) error
 	ClaimNext(ctx context.Context, jobType string) (*jobmodel.Job, error)
 	ScheduleRetry(ctx context.Context, id int64, retryAt time.Time) error
+	// Requeue puts a claimed job back for later without using an attempt
+	// (it waited for a precondition such as DNS), recording why.
+	Requeue(ctx context.Context, id int64, retryAt time.Time, reason string) error
 	SetError(ctx context.Context, id int64, errMsg string) error
 	SetResult(ctx context.Context, id int64, result string) error
 	MarkStarted(ctx context.Context, id int64) error
@@ -274,6 +277,19 @@ func (s *SQLiteJobStore) ScheduleRetry(ctx context.Context, id int64, retryAt ti
 	)
 	if err != nil {
 		return fmt.Errorf("schedule retry: %w", err)
+	}
+	return nil
+}
+
+// Requeue puts a claimed job back in the queue for retryAt without counting
+// the claim as an attempt.
+func (s *SQLiteJobStore) Requeue(ctx context.Context, id int64, retryAt time.Time, reason string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE jobs SET status = ?, next_retry_at = ?, attempts = MAX(attempts - 1, 0), error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		jobmodel.StatusQueued, retryAt.UTC().Format("2006-01-02 15:04:05"), reason, id,
+	)
+	if err != nil {
+		return fmt.Errorf("requeue job: %w", err)
 	}
 	return nil
 }

@@ -39,6 +39,9 @@
         if (st === 'succeeded') return 'success';
         if (st === 'failed') return `error: ${d?.error || 'Job failed'}`;
         if (st === 'canceled') return 'error: Job was canceled';
+        // Waiting for DNS (or retrying after a DNS failure): the panel keeps
+        // trying on its own; say so instead of polling on.
+        if (st === 'queued' && d?.error) return `info: ${d.error} The panel keeps trying for 45 minutes.`;
       } catch {}
     }
     return 'timeout: Job still processing, check later';
