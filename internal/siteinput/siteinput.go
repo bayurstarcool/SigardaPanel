@@ -282,7 +282,7 @@ func DBPrivileges(s string) error {
 	return nil
 }
 
-// DBPassword accepts 8-128 printable characters excluding backslash, so the
+// DBPassword accepts 8-128 printable ASCII characters excluding backslash, so the
 // value can be embedded in a quoted SQL literal without any escaping rules
 // (MySQL NO_BACKSLASH_ESCAPES vs. default) or psql meta-command tricks.
 func DBPassword(s string) error {
@@ -290,8 +290,8 @@ func DBPassword(s string) error {
 		return fmt.Errorf("password must be 8-128 characters")
 	}
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || r == '\\' {
-			return fmt.Errorf("password contains unsupported characters (control characters and backslash are not allowed)")
+		if r < 0x20 || r >= 0x7f || r == '\\' {
+			return fmt.Errorf("password contains unsupported characters (use printable ASCII; backslash is not allowed)")
 		}
 	}
 	return nil

@@ -377,9 +377,13 @@ func (m *MySQLConn) CreateUser(ctx context.Context, username, password, host, db
 	// Determine auth plugin
 	// MariaDB 10.x uses mysql_native_password by default and only supports IDENTIFIED BY.
 	// MySQL 8.0+ uses caching_sha2_password by default; we use mysql_native_password for compatibility.
-	authClause := fmt.Sprintf("IDENTIFIED BY '%s'", safeSQLString(password))
+	pwLit, err := passwordLiteral(password)
+	if err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	authClause := fmt.Sprintf("IDENTIFIED BY '%s'", pwLit)
 	if !strings.Contains(strings.ToLower(m.engine), "mariadb") {
-		authClause = fmt.Sprintf("IDENTIFIED WITH mysql_native_password BY '%s'", safeSQLString(password))
+		authClause = fmt.Sprintf("IDENTIFIED WITH mysql_native_password BY '%s'", pwLit)
 	}
 
 	// Create user
@@ -468,10 +472,14 @@ func (m *MySQLConn) ChangePassword(ctx context.Context, username, host, newPassw
 	if err := checkIdents(username, host); err != nil {
 		return err
 	}
+	pwLit, err := passwordLiteral(newPassword)
+	if err != nil {
+		return err
+	}
 	// Use simple IDENTIFIED BY syntax (works on both MySQL 5.7/8.0 and MariaDB 10.x)
 	q := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'",
-		safeIdent(username), safeIdent(host), safeSQLString(newPassword))
-	_, err := m.db.ExecContext(ctx, q)
+		safeIdent(username), safeIdent(host), pwLit)
+	_, err = m.db.ExecContext(ctx, q)
 	if err != nil {
 		return err
 	}
@@ -539,6 +547,27 @@ func charsetName(s string) (string, error) {
 // (siteinput.DBPassword); nothing is silently dropped from the value.
 func safeSQLString(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+// passwordChars: printable ASCII except backslash (siteinput.DBPassword).
+var passwordChars = func() string {
+	var b strings.Builder
+	for c := byte(0x20); c < 0x7f; c++ {
+		if c != '\\' {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}()
+
+// passwordLiteral returns the password as the body of a single-quoted SQL
+// literal: rebuilt from passwordChars, quotes doubled.
+func passwordLiteral(pw string) (string, error) {
+	out, ok := allowOnly(pw, passwordChars)
+	if !ok || out == "" {
+		return "", fmt.Errorf("password contains unsupported characters")
+	}
+	return safeSQLString(out), nil
 }
 
 func boolToInt(b bool) int {

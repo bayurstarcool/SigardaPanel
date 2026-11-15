@@ -90,6 +90,6 @@ func TestDBPrivilegesAndPassword(t *testing.T) {
 		[]string{"ALL", "select, insert,update", "ALL PRIVILEGES", "create temporary tables"},
 		[]string{"", "ALL ON *.* TO 'x'@'%' WITH GRANT OPTION --", "GRANT OPTION", "SUPER", "FILE", "ALL;DROP", "SELECT,"})
 	check(t, "DBPassword", DBPassword,
-		[]string{"abcdefgh", "p@ss'w0rd$$!", "päss-wörd-ok"},
-		[]string{"short", `back\slash12`, "new\nline123", "nul\x00byte12", "\\! id 12345"})
+		[]string{"abcdefgh", "p@ss'w0rd$$!", "pass word ok"},
+		[]string{"short", `back\slash12`, "new\nline123", "nul\x00byte12", "\\! id 12345", "päss-wörd-no"}) // printable ASCII only
 }

@@ -43,3 +43,14 @@ func TestCanonicalPrivileges(t *testing.T) {
 		}
 	}
 }
+
+func TestPasswordLiteral(t *testing.T) {
+	if got, err := passwordLiteral("it's-Ok_123!"); err != nil || got != "it''s-Ok_123!" {
+		t.Fatalf("%q %v", got, err)
+	}
+	for _, bad := range []string{"", "back\\slash", "tab\there", "ünïcode"} {
+		if _, err := passwordLiteral(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
