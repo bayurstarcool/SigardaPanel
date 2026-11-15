@@ -108,7 +108,7 @@
           {
             label: 'CPU', icon: Cpu, value: Math.min(100, Math.max(0, Number(metrics.cpu_percent) || 0)),
             big: `${(Number(metrics.cpu_percent) || 0).toFixed(1)}%`,
-            detail: `${specs?.cpu?.cores ?? '—'} core(s) · ${specs?.cpu?.threads ?? '—'} thread(s)`,
+            detail: `${specs?.cpu?.threads ?? '—'} vCPU · ${specs?.cpu?.cores ?? '—'} core(s) × ${specs?.cpu?.threads_per_core || 1} thread(s)`,
           },
           {
             label: 'Memory', icon: MemoryStick, value: pct(metrics.mem_used || 0, metrics.mem_total || 0),
@@ -164,7 +164,7 @@
       </div>
 
       <div class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="CPU cores" value={specs?.cpu?.cores ?? '—'} hint={`${specs?.cpu?.threads ?? '—'} threads · ${specs?.cpu?.sockets ?? '—'} socket(s)`} icon={Cpu} />
+        <StatCard label={specs?.virtualization && specs.virtualization !== 'none' ? 'vCPUs' : 'CPUs'} value={specs?.cpu?.threads || specs?.cpu?.cores || '—'} hint={specs?.cpu ? `${specs.cpu.cores} core(s) × ${specs.cpu.threads_per_core || 1} thread(s) · ${specs.cpu.sockets || 1} socket(s)` : ''} icon={Cpu} />
         <StatCard label="GPU" value={specs?.gpu?.count ?? '—'} hint={specs?.gpu?.name || 'No GPU detected'} icon={MonitorCog} />
         <StatCard
           label="GPU usage"

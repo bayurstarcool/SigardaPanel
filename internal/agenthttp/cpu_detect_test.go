@@ -227,3 +227,26 @@ func TestCgroupQuotaAndHelpers(t *testing.T) {
 		t.Errorf("size = %s", fmtIEC(b))
 	}
 }
+
+// KVM guests: 2 vCPUs as 1 core × 2 threads (what providers sell as
+// "2 cores"), and vCPUs that all report core 0 without siblings.
+func TestVMTopologies(t *testing.T) {
+	ht := CPUInfo{Threads: 2, Cores: 1, ThreadsPerCore: 2, Sockets: 1}
+	finishCPU(&ht)
+	if ht.Threads != 2 || ht.Cores != 1 || ht.ThreadsPerCore != 2 {
+		t.Errorf("hyperthreaded vCPUs = %+v", ht)
+	}
+	flat := CPUInfo{Threads: 4, Cores: 1, ThreadsPerCore: 1, Sockets: 1}
+	finishCPU(&flat)
+	if flat.Cores != 4 || flat.CoresPerSocket != 4 {
+		t.Errorf("same core id on every vCPU = %+v", flat)
+	}
+	fakeSys(t, 1, 1, 1, nil, false) // one core in /sys ...
+	info := CPUInfo{}
+	applySysfsCPU(&info)
+	info.Threads = 4 // ... but the kernel runs 4 CPUs
+	finishCPU(&info)
+	if info.Cores != 4 {
+		t.Errorf("inconsistent sysfs = %+v", info)
+	}
+}
