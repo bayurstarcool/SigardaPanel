@@ -433,4 +433,3 @@ func packageHasScript(path, name string) bool {
 	}
 	return strings.TrimSpace(pkg.Scripts[name]) != ""
 }
-

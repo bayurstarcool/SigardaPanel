@@ -31,8 +31,9 @@ type SystemSpec struct {
 	KernelVersion string        `json:"kernel_version"`
 	// Virtualization: none (bare metal), kvm, qemu, xen, vmware, microsoft,
 	// lxc, openvz, docker, … (systemd-detect-virt naming); "" when unknown.
-	Virtualization string `json:"virtualization,omitempty"`
-	PublicIP       string `json:"public_ip,omitempty"`
+	Virtualization string     `json:"virtualization,omitempty"`
+	PublicIP       string     `json:"public_ip,omitempty"`
+	System         SystemInfo `json:"system"`
 }
 
 type CloudInfo struct {
@@ -54,13 +55,41 @@ type OSInfo struct {
 type CPUInfo struct {
 	ModelName    string `json:"model_name"`
 	VendorID     string `json:"vendor_id"`
-	Cores        int    `json:"cores"`
-	Threads      int    `json:"threads"`
+	Cores        int    `json:"cores"`   // physical cores (all sockets)
+	Threads      int    `json:"threads"` // logical CPUs online
 	Sockets      int    `json:"sockets"`
 	Architecture string `json:"architecture"`
-	MaxMHz       string `json:"max_mhz,omitempty"`
+	MaxMHz       string `json:"max_mhz,omitempty"` // the best clock known: max, else nominal, else current
 	CacheSize    string `json:"cache_size,omitempty"`
 	Hypervisor   string `json:"hypervisor,omitempty"`
+
+	CoresPerSocket int         `json:"cores_per_socket,omitempty"`
+	ThreadsPerCore int         `json:"threads_per_core,omitempty"`
+	OfflineCPUs    int         `json:"offline_cpus,omitempty"`
+	NUMANodes      int         `json:"numa_nodes,omitempty"`
+	Family         string      `json:"family,omitempty"`
+	Model          string      `json:"model,omitempty"`
+	Stepping       string      `json:"stepping,omitempty"`
+	Microcode      string      `json:"microcode,omitempty"`
+	BogoMIPS       string      `json:"bogomips,omitempty"`
+	BaseMHz        string      `json:"base_mhz,omitempty"`      // nominal / base clock
+	MaxTurboMHz    string      `json:"max_turbo_mhz,omitempty"` // cpufreq maximum (bare metal)
+	CurrentMHz     string      `json:"current_mhz,omitempty"`
+	MinMHz         string      `json:"min_mhz,omitempty"`
+	Governor       string      `json:"governor,omitempty"`
+	Caches         []CacheInfo `json:"caches,omitempty"`
+	Features       []string    `json:"features,omitempty"`     // notable instruction set extensions
+	VirtSupport    string      `json:"virt_support,omitempty"` // VT-x / AMD-V exposed to this system
+	CPUQuota       string      `json:"cpu_quota,omitempty"`    // cgroup CPU limit (containers)
+	Source         string      `json:"source,omitempty"`       // where topology came from
+}
+
+// CacheInfo is one cache level (sum over all instances).
+type CacheInfo struct {
+	Level     string `json:"level"` // L1d, L1i, L2, L3
+	Size      string `json:"size"`  // per instance, e.g. "48 KiB"
+	Instances int    `json:"instances"`
+	Total     string `json:"total"` // e.g. "192 KiB"
 }
 
 // GPUInfo describes detected graphics/compute devices. Usage is populated when
@@ -85,6 +114,8 @@ type MemoryInfo struct {
 	UsedBytes      int64 `json:"used_bytes"`
 	SwapTotal      int64 `json:"swap_total"`
 	SwapUsed       int64 `json:"swap_used"`
+	// Modules: populated slots (dmidecode); empty when not available.
+	Modules []MemoryModule `json:"modules,omitempty"`
 }
 
 type DiskInfo struct {
@@ -127,6 +158,11 @@ type NetworkInfo struct {
 	IPv6Addrs []string `json:"ipv6_addresses,omitempty"` // global addresses only
 	MAC       string   `json:"mac,omitempty"`
 	Status    string   `json:"status"`
+	SpeedMbps int      `json:"speed_mbps,omitempty"`
+	Duplex    string   `json:"duplex,omitempty"`
+	MTU       int      `json:"mtu,omitempty"`
+	Driver    string   `json:"driver,omitempty"`
+	Virtual   bool     `json:"virtual,omitempty"`
 }
 
 // BenchmarkResult holds benchmark results.
@@ -182,8 +218,13 @@ func (r *Router) systemSpecTask(c *echo.Context) error {
 	spec.CPU = getCPUInfo()
 	spec.GPU = getGPUInfo()
 	spec.Memory = getMemoryInfo(spec.Virtualization)
+	if !isContainerVirt(spec.Virtualization) {
+		spec.Memory.Modules = memoryModules()
+	}
 	spec.Disk = getDiskInfo(spec.Virtualization)
 	spec.Network = getNetworkInfo()
+	linkDetails(spec.Network)
+	spec.System = getSystemInfo()
 	wg.Wait()
 	if spec.Cloud != nil && spec.Cloud.PublicIP == "" {
 		spec.Cloud.PublicIP = spec.PublicIP

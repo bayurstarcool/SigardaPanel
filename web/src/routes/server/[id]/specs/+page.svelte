@@ -175,20 +175,87 @@
     </div>
 
     <div class="space-y-4">
+      {#if specs.cpu && !specs.cpu.source}
+        <div class="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-[13px] text-fg">
+          This server's agent is older than the panel, so some details (CPU topology, caches, clocks, system) are missing or less accurate.
+          Update it under <a href="/settings#panel-update" class="link">Settings → Panel update → Agents</a>.
+        </div>
+      {/if}
       <!-- CPU -->
       <section class="card">
-        <div class="card-header"><h2 class="card-title flex items-center gap-2"><Cpu size={16} class="text-subtle" /> CPU</h2></div>
-        <dl class="card-body grid grid-cols-2 gap-4 md:grid-cols-4">
-          <div class="col-span-2 md:col-span-1"><dt class="stat-label">Model</dt><dd class="mt-1 text-sm text-fg">{specs.cpu?.model_name || '—'}</dd></div>
-          <div><dt class="stat-label">Vendor</dt><dd class="mt-1 text-sm text-fg">{specs.cpu?.vendor_id || '—'}</dd></div>
-          <div><dt class="stat-label">Architecture</dt><dd class="mt-1 text-sm text-fg">{specs.cpu?.architecture || '—'}</dd></div>
-          <div><dt class="stat-label">Cores / threads</dt><dd class="mt-1 text-sm text-fg tabular-nums">{specs.cpu?.cores || 0}C / {specs.cpu?.threads || 0}T</dd></div>
-          <div><dt class="stat-label">Sockets</dt><dd class="mt-1 text-sm text-fg tabular-nums">{specs.cpu?.sockets || 0}</dd></div>
-          {#if specs.cpu?.max_mhz}<div><dt class="stat-label">Clock</dt><dd class="mt-1 text-sm text-fg tabular-nums">{fmtClock(specs.cpu.max_mhz)}</dd></div>{/if}
-          {#if specs.cpu?.hypervisor}<div><dt class="stat-label">Hypervisor</dt><dd class="mt-1 text-sm text-fg">{specs.cpu.hypervisor}</dd></div>{/if}
-          {#if specs.cpu?.cache_size}<div><dt class="stat-label">Cache</dt><dd class="mt-1 text-sm text-fg">{specs.cpu.cache_size}</dd></div>{/if}
-        </dl>
+        <div class="card-header">
+          <h2 class="card-title flex items-center gap-2"><Cpu size={16} class="text-subtle" /> CPU</h2>
+          {#if specs.cpu?.virt_support}<span class="badge badge-success">{specs.cpu.virt_support}</span>{/if}
+        </div>
+        <div class="card-body space-y-5">
+          <div>
+            <div class="text-[15px] font-semibold text-fg">{specs.cpu?.model_name || 'Unknown processor'}</div>
+            <div class="mt-0.5 text-xs text-muted">
+              {[specs.cpu?.vendor_id, specs.cpu?.architecture, specs.cpu?.hypervisor ? `${specs.cpu.hypervisor} guest` : ''].filter(Boolean).join(' · ')}
+              {#if specs.cpu?.family} · family {specs.cpu.family}, model {specs.cpu.model}{#if specs.cpu?.stepping}, stepping {specs.cpu.stepping}{/if}{/if}
+            </div>
+          </div>
+          <dl class="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <div><dt class="stat-label">Cores</dt><dd class="stat-value text-lg">{specs.cpu?.cores || 0}</dd><dd class="text-xs text-subtle">{specs.cpu?.cores_per_socket || specs.cpu?.cores || 0} per socket</dd></div>
+            <div><dt class="stat-label">Threads</dt><dd class="stat-value text-lg">{specs.cpu?.threads || 0}</dd><dd class="text-xs text-subtle">{specs.cpu?.threads_per_core || 1} per core{#if specs.cpu?.offline_cpus} · {specs.cpu.offline_cpus} offline{/if}</dd></div>
+            <div><dt class="stat-label">Sockets</dt><dd class="stat-value text-lg">{specs.cpu?.sockets || 1}</dd><dd class="text-xs text-subtle">{specs.cpu?.numa_nodes || 1} NUMA node{(specs.cpu?.numa_nodes || 1) === 1 ? '' : 's'}</dd></div>
+            <div>
+              <dt class="stat-label">Clock</dt>
+              <dd class="stat-value text-lg">{fmtClock(specs.cpu?.max_turbo_mhz || specs.cpu?.base_mhz || specs.cpu?.current_mhz || specs.cpu?.max_mhz) || '—'}</dd>
+              <dd class="text-xs text-subtle">
+                {[specs.cpu?.max_turbo_mhz ? 'max' : specs.cpu?.base_mhz ? 'base' : specs.cpu?.current_mhz ? 'current' : '',
+                  specs.cpu?.max_turbo_mhz && specs.cpu?.base_mhz ? `base ${fmtClock(specs.cpu.base_mhz)}` : '',
+                  specs.cpu?.current_mhz && (specs.cpu?.max_turbo_mhz || specs.cpu?.base_mhz) ? `now ${fmtClock(specs.cpu.current_mhz)}` : ''].filter(Boolean).join(' · ')}
+              </dd>
+            </div>
+          </dl>
+          {#if specs.cpu?.caches?.length}
+            <div>
+              <div class="stat-label mb-2">Cache</div>
+              <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {#each specs.cpu.caches as c (c.level)}
+                  <div class="rounded-lg border border-line px-3 py-2">
+                    <div class="text-[11.5px] font-medium text-subtle">{c.level}</div>
+                    <div class="text-sm font-semibold text-fg tabular-nums">{c.total}</div>
+                    {#if c.instances > 1}<div class="text-[11.5px] text-subtle tabular-nums">{c.size} × {c.instances}</div>{/if}
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+          {#if specs.cpu?.features?.length}
+            <div>
+              <div class="stat-label mb-2">Instruction sets</div>
+              <div class="flex flex-wrap gap-1.5">{#each specs.cpu.features as f (f)}<span class="badge">{f}</span>{/each}</div>
+            </div>
+          {/if}
+          {#if specs.cpu?.microcode || specs.cpu?.bogomips || specs.cpu?.governor || specs.cpu?.cpu_quota}
+            <div class="flex flex-wrap gap-x-5 gap-y-1 border-t border-line pt-3 text-xs text-subtle">
+              {#if specs.cpu?.cpu_quota}<span class="text-warning">Limited to {specs.cpu.cpu_quota}</span>{/if}
+              {#if specs.cpu?.governor}<span>Governor: <span class="text-muted">{specs.cpu.governor}</span></span>{/if}
+              {#if specs.cpu?.min_mhz}<span>Min: <span class="text-muted">{fmtClock(specs.cpu.min_mhz)}</span></span>{/if}
+              {#if specs.cpu?.microcode}<span>Microcode: <span class="font-mono text-muted">{specs.cpu.microcode}</span></span>{/if}
+              {#if specs.cpu?.bogomips}<span>BogoMIPS: <span class="tabular-nums text-muted">{specs.cpu.bogomips}</span></span>{/if}
+            </div>
+          {/if}
+        </div>
       </section>
+
+      <!-- System -->
+      {#if specs.system && (specs.system.manufacturer || specs.system.product || specs.system.boot_time)}
+        <section class="card">
+          <div class="card-header"><h2 class="card-title flex items-center gap-2"><Server size={16} class="text-subtle" /> System</h2></div>
+          <dl class="card-body grid grid-cols-2 gap-4 md:grid-cols-4">
+            {#if specs.system.manufacturer || specs.system.product}<div class="col-span-2"><dt class="stat-label">Machine</dt><dd class="mt-1 text-sm text-fg">{[specs.system.manufacturer, specs.system.product, specs.system.version].filter(Boolean).join(' ')}</dd>{#if specs.system.chassis_type}<dd class="text-xs text-subtle">{specs.system.chassis_type}</dd>{/if}</div>{/if}
+            {#if specs.system.board_name}<div><dt class="stat-label">Board</dt><dd class="mt-1 text-sm text-fg">{[specs.system.board_vendor, specs.system.board_name].filter(Boolean).join(' ')}</dd></div>{/if}
+            {#if specs.system.bios_vendor || specs.system.bios_version}<div><dt class="stat-label">BIOS</dt><dd class="mt-1 text-sm text-fg">{[specs.system.bios_vendor, specs.system.bios_version].filter(Boolean).join(' ')}</dd>{#if specs.system.bios_date}<dd class="text-xs text-subtle">{specs.system.bios_date}</dd>{/if}</div>{/if}
+            {#if specs.system.boot_time}<div><dt class="stat-label">Booted</dt><dd class="mt-1 text-sm text-fg">{fmtDateTime(specs.system.boot_time)}</dd></div>{/if}
+            <div><dt class="stat-label">Load average</dt><dd class="mt-1 text-sm text-fg tabular-nums">{(specs.system.load_avg || [0, 0, 0]).map((v: number) => v.toFixed(2)).join(' · ')}</dd><dd class="text-xs text-subtle">1 · 5 · 15 min</dd></div>
+            {#if specs.system.processes}<div><dt class="stat-label">Processes</dt><dd class="mt-1 text-sm text-fg tabular-nums">{specs.system.processes}</dd></div>{/if}
+            {#if specs.system.timezone}<div><dt class="stat-label">Time zone</dt><dd class="mt-1 text-sm text-fg">{specs.system.timezone}</dd></div>{/if}
+          </dl>
+        </section>
+      {/if}
 
       <!-- GPU -->
       <section class="card">
@@ -228,6 +295,22 @@
             <div class="mt-1 text-right text-xs text-subtle tabular-nums">{swapPct.toFixed(1)}% used</div>
           </div>
         </div>
+        {#if specs.memory?.modules?.length}
+          <div class="border-t border-line px-5 py-3">
+            <div class="stat-label mb-2">Modules</div>
+            <div class="flex flex-wrap gap-2">
+              {#each specs.memory.modules as m, i (i)}
+                <div class="rounded-lg border border-line px-3 py-1.5 text-xs">
+                  <span class="font-semibold text-fg">{m.size}</span>
+                  {#if m.type}<span class="text-muted"> {m.type}</span>{/if}
+                  {#if m.speed}<span class="text-subtle"> · {m.speed}</span>{/if}
+                  {#if m.manufacturer}<span class="text-subtle"> · {m.manufacturer}</span>{/if}
+                  {#if m.locator}<span class="text-subtle"> · {m.locator}</span>{/if}
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </section>
 
       <!-- Disk -->
@@ -283,13 +366,17 @@
         {#if specs.network?.length > 0}
           <div class="table-wrap">
             <table class="table">
-              <thead><tr><th>Interface</th><th>IP address</th><th>Status</th><th class="max-sm:hidden">IPv6</th></tr></thead>
+              <thead><tr><th>Interface</th><th>IP address</th><th>Status</th><th class="max-md:hidden">Link</th><th class="max-sm:hidden">IPv6</th></tr></thead>
               <tbody>
                 {#each specs.network as net, i (i)}
                   <tr>
                     <td class="font-medium">{net.interface}</td>
                     <td class="font-mono text-[13px] text-muted">{#if net.ipv4_addresses?.length}{#each net.ipv4_addresses as a (a)}<div>{a}</div>{/each}{:else}{net.ip_address || '—'}{/if}{#if net.mac}<div class="text-[11px] text-subtle">{net.mac}</div>{/if}</td>
                     <td><span class="inline-flex items-center gap-1.5 text-xs {net.status === 'UP' ? 'text-success' : net.status === 'UNKNOWN' ? 'text-warning' : 'text-danger'}"><span class="dot"></span>{net.status}</span></td>
+                    <td class="text-xs text-muted max-md:hidden">
+                      {#if net.speed_mbps}{net.speed_mbps >= 1000 ? `${net.speed_mbps / 1000} Gbit/s` : `${net.speed_mbps} Mbit/s`}{#if net.duplex} {net.duplex}{/if}{:else if net.virtual}Virtual{:else}—{/if}
+                      <div class="text-[11px] text-subtle">{[net.driver, net.mtu ? `MTU ${net.mtu}` : ''].filter(Boolean).join(' · ')}</div>
+                    </td>
                     <td class="font-mono text-xs text-subtle max-sm:hidden">{#if net.ipv6_addresses?.length}{#each net.ipv6_addresses as a (a)}<div>{a}</div>{/each}{:else}—{/if}</td>
                   </tr>
                 {/each}
