@@ -23,3 +23,20 @@ func TestOldStartersDifferFromCurrent(t *testing.T) {
 		}
 	}
 }
+
+func TestAppLogRotationNames(t *testing.T) {
+	for s, want := range map[string]bool{"": false, ".1": true, ".2.gz": true, "-20261115": true, "-20261115.gz": true, "istics.com.log": false, ".1.bak": false} {
+		if got := appLogRotation.MatchString(s); got != want {
+			t.Errorf("%q: got %v", s, got)
+		}
+	}
+}
+
+func TestAppUnitWritesOwnLog(t *testing.T) {
+	u := systemdUnitContent("a.test", "u", "/home/u/htdocs/a.test", "node server.js", 30000, 256)
+	for _, want := range []string{"StandardOutput=append:/var/log/sigardapanel/apps/a.test.log", "StandardError=append:/var/log/sigardapanel/apps/a.test.log"} {
+		if !strings.Contains(u, want) {
+			t.Errorf("unit misses %q", want)
+		}
+	}
+}

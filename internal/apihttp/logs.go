@@ -65,9 +65,13 @@ func (h *logsHandler) tail(c *echo.Context) error {
 	if logType == "" {
 		logType = "access"
 	}
-	validTypes := map[string]bool{"access": true, "error": true, "php": true}
+	// app: the output of the site's Node.js / Python / Go process.
+	validTypes := map[string]bool{"access": true, "error": true, "php": true, "app": true}
 	if !validTypes[logType] {
-		return echo.NewHTTPError(http.StatusBadRequest, "type must be access, error, or php")
+		return echo.NewHTTPError(http.StatusBadRequest, "type must be access, error, php or app")
+	}
+	if logType == "app" && !isAppRuntime(site.Runtime) {
+		return echo.NewHTTPError(http.StatusBadRequest, "only Node.js, Python and Go sites have an app log")
 	}
 
 	// Default: tail 200 lines
@@ -93,6 +97,8 @@ func (h *logsHandler) tail(c *echo.Context) error {
 		switch {
 		case err != nil && code == 0:
 			fileErr = "the site's agent is unreachable"
+		case code == http.StatusBadRequest && logType == "app" && strings.Contains(agentMessage(out, ""), "type must be"):
+			fileErr = "this server's agent is too old to read app logs: update it (Settings → Panel update → Agents)"
 		case code >= 400:
 			fileErr = agentMessage(out, "the agent could not read the log")
 		default:
@@ -221,3 +227,6 @@ func parseNginxTime(s string) string {
 func (h *logsHandler) canAccess(ctx context.Context, sess *store.Session, site *store.Site) bool {
 	return hasSitePermission(ctx, h.store, sess, site, sitePermRead)
 }
+
+// isAppRuntime: sites whose app runs as a systemd service (and has an app log).
+func isAppRuntime(rt string) bool { return rt == "node" || rt == "python" || rt == "go" }
