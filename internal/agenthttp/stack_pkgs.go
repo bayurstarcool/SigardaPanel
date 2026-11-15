@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"sigardapanel/internal/siteinput"
+
 	"sigardapanel/internal/nginx"
 )
 
@@ -535,7 +537,11 @@ func (m *stackManager) verifyPHP(ctx context.Context, w io.Writer, version strin
 		m.unitDiagnostics(ctx, w, unit)
 		return fmt.Errorf("packages are installed but %s is %s", unit, st)
 	}
-	sock := filepath.Join(m.phpRunDir, "php"+version+"-fpm.sock")
+	cv, ok := siteinput.CanonicalPHPVersion(version)
+	if !ok {
+		return fmt.Errorf("invalid PHP version %q", version)
+	}
+	sock := filepath.Join(m.phpRunDir, "php"+cv+"-fpm.sock")
 	for i := 0; i < 15 && !m.sys.Exists(sock); i++ {
 		m.sys.Sleep(ctx, time.Second)
 	}

@@ -329,17 +329,23 @@ func (r *Router) terminalWebSocket(c *echo.Context) error {
 
 		var cmd *exec.Cmd
 		if runAsUser != "" && runAsUser != "root" {
-			// Run shell as the specified user via su
+			// The site user's login shell, started directly with that
+			// account's ids (no su, no user name on a command line).
 			slog.Info("terminal: spawning shell as user", "user", runAsUser)
-			cmd = exec.Command("su", "-", runAsUser, "-s", shell)
+			uc, err := siteUserShell(runAsUser)
+			if err != nil {
+				ws.WriteMessage(websocket.TextMessage, []byte("terminal: "+err.Error()+"\r\n"))
+				return nil
+			}
+			cmd = uc
 		} else {
 			cmd = exec.Command(shell)
+			cmd.Env = append(os.Environ(),
+				"TERM=xterm-256color",
+				"LANG=en_US.UTF-8",
+				"LC_ALL=en_US.UTF-8",
+			)
 		}
-		cmd.Env = append(os.Environ(),
-			"TERM=xterm-256color",
-			"LANG=en_US.UTF-8",
-			"LC_ALL=en_US.UTF-8",
-		)
 		ptmx, err := pty.Start(cmd)
 		if err != nil {
 			slog.Error("terminal: pty start failed", "error", err)

@@ -292,9 +292,37 @@ func (m *MySQLConn) CreateDatabase(ctx context.Context, name string, charset, co
 	if siteinput.ReservedDatabaseName(name) {
 		return fmt.Errorf("reserved database name %q", name)
 	}
+	if err := checkIdents(name); err != nil {
+		return err
+	}
+	cs, err := charsetName(charset)
+	if err != nil {
+		return err
+	}
+	co, err := charsetName(collation)
+	if err != nil {
+		return err
+	}
 	// No IF NOT EXISTS: an existing database is never adopted.
-	q := fmt.Sprintf("CREATE DATABASE `%s` CHARACTER SET %s COLLATE %s", safeIdent(name), safeIdent(charset), safeIdent(collation))
-	_, err := m.db.ExecContext(ctx, q)
+	q := fmt.Sprintf("CREATE DATABASE `%s` CHARACTER SET %s COLLATE %s", safeIdent(name), cs, co)
+	_, err = m.db.ExecContext(ctx, q)
+	return err
+}
+
+// AlterCharset changes a database's default character set and collation.
+func (m *MySQLConn) AlterCharset(ctx context.Context, name, charset, collation string) error {
+	if err := checkIdents(name); err != nil {
+		return err
+	}
+	cs, err := charsetName(charset)
+	if err != nil {
+		return err
+	}
+	co, err := charsetName(collation)
+	if err != nil {
+		return err
+	}
+	_, err = m.db.ExecContext(ctx, fmt.Sprintf("ALTER DATABASE `%s` CHARACTER SET %s COLLATE %s", safeIdent(name), cs, co))
 	return err
 }
 
@@ -302,6 +330,9 @@ func (m *MySQLConn) CreateDatabase(ctx context.Context, name string, charset, co
 func (m *MySQLConn) DropDatabase(ctx context.Context, name string) error {
 	if siteinput.ReservedDatabaseName(name) {
 		return fmt.Errorf("reserved database name %q", name)
+	}
+	if err := checkIdents(name); err != nil {
+		return err
 	}
 	q := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", safeIdent(name))
 	_, err := m.db.ExecContext(ctx, q)
@@ -324,8 +355,17 @@ func (m *MySQLConn) CreateUser(ctx context.Context, username, password, host, db
 	if privileges == "" {
 		privileges = "ALL"
 	}
-	if err := siteinput.DBPrivileges(privileges); err != nil {
+	privs, err := siteinput.CanonicalDBPrivileges(privileges)
+	if err != nil {
 		return fmt.Errorf("create user: %w", err)
+	}
+	if err := checkIdents(username, host); err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	if dbName != "" {
+		if err := checkIdents(dbName); err != nil {
+			return fmt.Errorf("create user: %w", err)
+		}
 	}
 	if err := siteinput.DBHost(host); err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -337,13 +377,17 @@ func (m *MySQLConn) CreateUser(ctx context.Context, username, password, host, db
 	// Determine auth plugin
 	// MariaDB 10.x uses mysql_native_password by default and only supports IDENTIFIED BY.
 	// MySQL 8.0+ uses caching_sha2_password by default; we use mysql_native_password for compatibility.
-	authClause := fmt.Sprintf("IDENTIFIED BY '%s'", safeSQLString(password))
+	pwLit, err := passwordLiteral(password)
+	if err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	authClause := fmt.Sprintf("IDENTIFIED BY '%s'", pwLit)
 	if !strings.Contains(strings.ToLower(m.engine), "mariadb") {
-		authClause = fmt.Sprintf("IDENTIFIED WITH mysql_native_password BY '%s'", safeSQLString(password))
+		authClause = fmt.Sprintf("IDENTIFIED WITH mysql_native_password BY '%s'", pwLit)
 	}
 
 	// Create user
-	_, err := m.db.ExecContext(ctx,
+	_, err = m.db.ExecContext(ctx,
 		fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%s' %s", safeIdent(username), safeIdent(host), authClause))
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -351,7 +395,7 @@ func (m *MySQLConn) CreateUser(ctx context.Context, username, password, host, db
 
 	// Grant privileges
 	if dbName != "" {
-		grantSQL := fmt.Sprintf("GRANT %s ON `%s`.* TO '%s'@'%s'", privileges, safeIdent(dbName), safeIdent(username), safeIdent(host))
+		grantSQL := fmt.Sprintf("GRANT %s ON `%s`.* TO '%s'@'%s'", privs, safeIdent(dbName), safeIdent(username), safeIdent(host))
 		_, err = m.db.ExecContext(ctx, grantSQL)
 		if err != nil {
 			return fmt.Errorf("grant: %w", err)
@@ -402,6 +446,9 @@ func (m *MySQLConn) DeleteUser(ctx context.Context, username, host string) error
 	if host == "" {
 		host = "%"
 	}
+	if err := checkIdents(username, host); err != nil {
+		return err
+	}
 	_, err := m.db.ExecContext(ctx,
 		fmt.Sprintf("DROP USER IF EXISTS '%s'@'%s'", safeIdent(username), safeIdent(host)))
 	if err != nil {
@@ -422,10 +469,17 @@ func (m *MySQLConn) ChangePassword(ctx context.Context, username, host, newPassw
 	if err := siteinput.DBPassword(newPassword); err != nil {
 		return err
 	}
+	if err := checkIdents(username, host); err != nil {
+		return err
+	}
+	pwLit, err := passwordLiteral(newPassword)
+	if err != nil {
+		return err
+	}
 	// Use simple IDENTIFIED BY syntax (works on both MySQL 5.7/8.0 and MariaDB 10.x)
 	q := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'",
-		safeIdent(username), safeIdent(host), safeSQLString(newPassword))
-	_, err := m.db.ExecContext(ctx, q)
+		safeIdent(username), safeIdent(host), pwLit)
+	_, err = m.db.ExecContext(ctx, q)
 	if err != nil {
 		return err
 	}
@@ -435,8 +489,56 @@ func (m *MySQLConn) ChangePassword(ctx context.Context, username, host, newPassw
 
 // ─── Helpers ───────────────────────────────────────────────
 
+// identChars is every character a database, user or host name may hold in
+// the SQL the panel builds (names are validated before; hosts also use '.'
+// and '%').
+const identChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$-.%"
+
+// charsetChars: character set and collation names.
+const charsetChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+
+// allowOnly returns s rebuilt from the characters of allowed (so the SQL
+// text holds nothing else: no quote, backtick, space or separator), and
+// whether s had no other character.
+func allowOnly(s, allowed string) (string, bool) {
+	var b strings.Builder
+	ok := true
+	for _, r := range s {
+		i := strings.IndexRune(allowed, r)
+		if i < 0 {
+			ok = false
+			continue
+		}
+		b.WriteByte(allowed[i])
+	}
+	return b.String(), ok
+}
+
+// safeIdent keeps only identifier characters (callers validate names first;
+// checkIdents refuses them outright).
 func safeIdent(s string) string {
-	return strings.NewReplacer("`", "", "'", "", "\\", "", ";", "", "\n", "", "\r", "").Replace(s)
+	out, _ := allowOnly(s, identChars)
+	return out
+}
+
+// checkIdents refuses names with characters outside identChars (instead of
+// acting on a silently changed name).
+func checkIdents(names ...string) error {
+	for _, n := range names {
+		if _, ok := allowOnly(n, identChars); !ok || n == "" || len(n) > 255 {
+			return fmt.Errorf("invalid name %q", n)
+		}
+	}
+	return nil
+}
+
+// charsetName validates a character set or collation name.
+func charsetName(s string) (string, error) {
+	out, ok := allowOnly(s, charsetChars)
+	if !ok || out == "" || len(out) > 64 {
+		return "", fmt.Errorf("invalid character set or collation %q", s)
+	}
+	return out, nil
 }
 
 // safeSQLString quotes s for use inside a single-quoted SQL literal by doubling
@@ -445,6 +547,27 @@ func safeIdent(s string) string {
 // (siteinput.DBPassword); nothing is silently dropped from the value.
 func safeSQLString(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+// passwordChars: printable ASCII except backslash (siteinput.DBPassword).
+var passwordChars = func() string {
+	var b strings.Builder
+	for c := byte(0x20); c < 0x7f; c++ {
+		if c != '\\' {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}()
+
+// passwordLiteral returns the password as the body of a single-quoted SQL
+// literal: rebuilt from passwordChars, quotes doubled.
+func passwordLiteral(pw string) (string, error) {
+	out, ok := allowOnly(pw, passwordChars)
+	if !ok || out == "" {
+		return "", fmt.Errorf("password contains unsupported characters")
+	}
+	return safeSQLString(out), nil
 }
 
 func boolToInt(b bool) int {
@@ -481,17 +604,27 @@ func (m *MySQLConn) GrantPrivileges(ctx context.Context, username, host, dbName,
 	if siteinput.ReservedDatabaseName(dbName) {
 		return fmt.Errorf("reserved database name %q", dbName)
 	}
-	q := fmt.Sprintf("GRANT %s ON `%s`.* TO '%s'@'%s'", privileges, safeIdent(dbName), safeIdent(username), safeIdent(host))
+	privs, err := siteinput.CanonicalDBPrivileges(privileges)
+	if err != nil {
+		return err
+	}
+	if err := checkIdents(username, host, dbName); err != nil {
+		return err
+	}
+	q := fmt.Sprintf("GRANT %s ON `%s`.* TO '%s'@'%s'", privs, safeIdent(dbName), safeIdent(username), safeIdent(host))
 	if _, err := m.db.ExecContext(ctx, q); err != nil {
 		return err
 	}
-	_, err := m.db.ExecContext(ctx, "FLUSH PRIVILEGES")
+	_, err = m.db.ExecContext(ctx, "FLUSH PRIVILEGES")
 	return err
 }
 
 // RevokeAll removes username@host's privileges on dbName (the account and
 // its access to other databases stay).
 func (m *MySQLConn) RevokeAll(ctx context.Context, username, host, dbName string) error {
+	if err := checkIdents(username, host, dbName); err != nil {
+		return err
+	}
 	q := fmt.Sprintf("REVOKE ALL PRIVILEGES ON `%s`.* FROM '%s'@'%s'", safeIdent(dbName), safeIdent(username), safeIdent(host))
 	if _, err := m.db.ExecContext(ctx, q); err != nil {
 		return err

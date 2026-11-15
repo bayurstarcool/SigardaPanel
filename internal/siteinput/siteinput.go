@@ -282,7 +282,7 @@ func DBPrivileges(s string) error {
 	return nil
 }
 
-// DBPassword accepts 8-128 printable characters excluding backslash, so the
+// DBPassword accepts 8-128 printable ASCII characters excluding backslash, so the
 // value can be embedded in a quoted SQL literal without any escaping rules
 // (MySQL NO_BACKSLASH_ESCAPES vs. default) or psql meta-command tricks.
 func DBPassword(s string) error {
@@ -290,8 +290,8 @@ func DBPassword(s string) error {
 		return fmt.Errorf("password must be 8-128 characters")
 	}
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || r == '\\' {
-			return fmt.Errorf("password contains unsupported characters (control characters and backslash are not allowed)")
+		if r < 0x20 || r >= 0x7f || r == '\\' {
+			return fmt.Errorf("password contains unsupported characters (use printable ASCII; backslash is not allowed)")
 		}
 	}
 	return nil
@@ -465,4 +465,45 @@ func RootPathForOwner(root, systemUser string) error {
 func RootPathsOverlap(a, b string) bool {
 	a, b = path.Clean(a), path.Clean(b)
 	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
+// knownPHPVersions is every version PHPVersion accepts ("5.0" … "9.99"),
+// built from numbers so it never carries request data.
+var knownPHPVersions = func() map[string]string {
+	m := map[string]string{}
+	for major := 0; major <= 9; major++ {
+		for minor := 0; minor <= 99; minor++ {
+			v := fmt.Sprintf("%d.%d", major, minor)
+			m[v] = v
+		}
+	}
+	return m
+}()
+
+// CanonicalPHPVersion returns the allow-listed copy of a PHP version such as
+// "8.3" (ok false when it is not one). File paths are built from the
+// returned value, never from the input.
+func CanonicalPHPVersion(v string) (string, bool) {
+	c, ok := knownPHPVersions[v]
+	return c, ok
+}
+
+// CanonicalDBPrivileges validates a comma separated privilege list
+// (DBPrivileges) and returns it rebuilt from the allow-list, so SQL holds
+// only the allow-listed keywords, never request text.
+func CanonicalDBPrivileges(s string) (string, error) {
+	if err := DBPrivileges(s); err != nil {
+		return "", err
+	}
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.Join(strings.Fields(strings.ToUpper(p)), " ")
+		for k := range dbPrivileges {
+			if k == p {
+				out = append(out, k)
+				break
+			}
+		}
+	}
+	return strings.Join(out, ", "), nil
 }

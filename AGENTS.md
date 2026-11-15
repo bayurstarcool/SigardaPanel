@@ -578,7 +578,7 @@ Browser (xterm.js) --ws--> API /api/v1/ws/terminal?ticket=… --ws--> Agent :771
 
 These are enforced in code and covered by tests; keep them when changing handlers.
 
-- **super_admin only**: service tokens, backup configs, exec-sql, phpMyAdmin password
+- **super_admin only**: service tokens, backup configs, phpMyAdmin password
   reset, SSL renew-all, panel update/rollback, agent updates. Non-super admins see only
   their own audit entries and the site mappings of users they created, and can change or
   delete only `user`-role accounts they created.

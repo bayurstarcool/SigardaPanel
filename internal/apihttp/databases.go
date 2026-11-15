@@ -1194,6 +1194,9 @@ func (h *dbHandler) updateDatabase(c *echo.Context) error {
 	if body.Collation != nil {
 		newCollation = *body.Collation
 	}
+	if !dbCharsetRe.MatchString(newCharset) || !dbCharsetRe.MatchString(newCollation) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid charset or collation")
+	}
 
 	// Alter in MySQL if charset/collation changed
 	if (body.Charset != nil || body.Collation != nil) && database.Type == "mysql" {
@@ -1201,9 +1204,7 @@ func (h *dbHandler) updateDatabase(c *echo.Context) error {
 			return errRemoteMySQL("Changing the character set")
 		}
 		_ = h.execMySQL(func(conn *dbserver.MySQLConn) error {
-			alterSQL := fmt.Sprintf("ALTER DATABASE `%s` CHARACTER SET %s COLLATE %s",
-				database.Name, newCharset, newCollation)
-			if _, err := conn.Exec(alterSQL); err != nil {
+			if err := conn.AlterCharset(c.Request().Context(), database.Name, newCharset, newCollation); err != nil {
 				slog.Warn("database: alter charset failed", "error", err)
 				return err
 			}
@@ -1522,86 +1523,6 @@ func extractPHPVar(content, varName string) string {
 		return matches[1]
 	}
 	return ""
-}
-
-// execSQL executes raw SQL on the default database server (admin only).
-func (h *dbHandler) execSQL(c *echo.Context) error {
-	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-
-	var body struct {
-		SQL string `json:"sql"`
-	}
-	if err := c.Bind(&body); err != nil || body.SQL == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "sql required")
-	}
-
-	var result string
-	if err := h.execMySQL(func(conn *dbserver.MySQLConn) error {
-		upper := strings.ToUpper(strings.TrimSpace(body.SQL))
-		if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "DESCRIBE") {
-			// For SELECT/SHOW/DESCRIBE, get the underlying sql.DB from the connection
-			// We need to use the panel's existing MySQL connection
-			svr, svrErr := h.store.DBStore.GetDefault(c.Request().Context())
-			if svrErr != nil || svr == nil {
-				return fmt.Errorf("no database server configured")
-			}
-			pass, passErr := h.store.DBStore.DecryptPassword(svr.PasswordEncrypted)
-			if passErr != nil {
-				return fmt.Errorf("decrypt failed: %w", passErr)
-			}
-			db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/?charset=utf8mb4&parseTime=true&timeout=5s",
-				svr.Username, pass, svr.Host, svr.Port))
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-			rows, err := db.QueryContext(c.Request().Context(), body.SQL)
-			if err != nil {
-				return err
-			}
-			defer rows.Close()
-			cols, _ := rows.Columns()
-			var lines []string
-			lines = append(lines, strings.Join(cols, "\t"))
-			for rows.Next() {
-				vals := make([]interface{}, len(cols))
-				valPtrs := make([]interface{}, len(cols))
-				for i := range vals {
-					valPtrs[i] = &vals[i]
-				}
-				if err := rows.Scan(valPtrs...); err != nil {
-					continue
-				}
-				var row []string
-				for _, v := range vals {
-					if b, ok := v.([]byte); ok {
-						row = append(row, string(b))
-					} else if v == nil {
-						row = append(row, "NULL")
-					} else {
-						row = append(row, fmt.Sprintf("%v", v))
-					}
-				}
-				lines = append(lines, strings.Join(row, "\t"))
-			}
-			result = strings.Join(lines, "\n")
-		} else {
-			res, err := conn.Exec(body.SQL)
-			if err != nil {
-				return err
-			}
-			affected, _ := res.RowsAffected()
-			result = fmt.Sprintf("OK (%d rows affected)", affected)
-		}
-		return nil
-	}); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-	}
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      map[string]any{"result": result},
-		RequestID: rid,
-	})
 }
 
 // isReservedMySQLUser reports system and panel-internal MySQL accounts that
