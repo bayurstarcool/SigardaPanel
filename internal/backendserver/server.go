@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sigardapanel/internal/member"
 	"strings"
@@ -20,8 +21,8 @@ import (
 	"sigardapanel/internal/dbserver"
 	sjobs "sigardapanel/internal/jobs"
 	"sigardapanel/internal/migrations"
-	"sigardapanel/internal/secrets"
 	"sigardapanel/internal/publicip"
+	"sigardapanel/internal/secrets"
 	"sigardapanel/internal/store"
 )
 
@@ -291,6 +292,19 @@ func ensureLocalServer(ctx context.Context, s *store.Store) error {
 	return nil
 }
 
+// publicURLIPv4 is the host of SIGARDAPANEL_PUBLIC_URL when it is a public
+// IPv4 literal ("" for a domain or anything else).
+func publicURLIPv4() string {
+	u, err := url.Parse(strings.TrimSpace(os.Getenv("SIGARDAPANEL_PUBLIC_URL")))
+	if err != nil {
+		return ""
+	}
+	if ip := net.ParseIP(u.Hostname()); ip != nil && publicip.IsPublicIPv4(ip) {
+		return ip.To4().String()
+	}
+	return ""
+}
+
 // detectLocalPublicIP is replaced in tests.
 var detectLocalPublicIP = func(ctx context.Context) (string, error) {
 	r, err := publicip.Detect(ctx, nil)
@@ -315,7 +329,13 @@ func fixLocalServerIP(ctx context.Context, s *store.Store, serverID int64) {
 	if ip := net.ParseIP(strings.TrimSpace(srv.IPAddress.String)); srv.IPAddress.Valid && publicip.IsPublicIPv4(ip) {
 		return
 	}
-	pub, err := detectLocalPublicIP(ctx)
+	// The address the installer chose for the panel URL is the one people
+	// use: take it when it is a public IPv4 (a host with several addresses,
+	// or a NAT whose outbound address differs, could detect another one).
+	pub, err := publicURLIPv4(), error(nil)
+	if pub == "" {
+		pub, err = detectLocalPublicIP(ctx)
+	}
 	if err != nil || !publicip.IsPublicIPv4(net.ParseIP(pub)) {
 		slog.Warn("local server: public IP not detected; set it on the Servers page", "server_id", serverID, "error", err)
 		return

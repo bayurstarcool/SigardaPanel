@@ -517,6 +517,22 @@ func finishCPU(info *CPUInfo) {
 	if info.Sockets == 0 {
 		info.Sockets = 1
 	}
+	// Some hypervisors give every vCPU the same core id without sibling
+	// information: 4 CPUs would read as "1 core × 1 thread". The CPUs are
+	// what counts; a topology that cannot hold them is corrected.
+	if info.ThreadsPerCore == 0 && info.Cores > 0 && info.Threads >= info.Cores {
+		info.ThreadsPerCore = info.Threads / info.Cores
+	}
+	if info.Threads > 0 && info.Cores > 0 {
+		tpc := max(info.ThreadsPerCore, 1)
+		if info.Cores*tpc < info.Threads {
+			info.Cores = (info.Threads + tpc - 1) / tpc
+			info.CoresPerSocket = 0
+		}
+		if info.Cores > info.Threads {
+			info.Cores = info.Threads
+		}
+	}
 	if info.ThreadsPerCore == 0 && info.Cores > 0 && info.Threads >= info.Cores {
 		info.ThreadsPerCore = info.Threads / info.Cores
 	}

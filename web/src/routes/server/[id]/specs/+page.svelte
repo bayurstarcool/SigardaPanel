@@ -46,6 +46,9 @@
     if (!n) return '';
     return n >= 1000 ? `${(n / 1000).toFixed(2)} GHz` : `${n} MHz`;
   }
+  // A VM's CPUs are vCPUs: providers sell "2 cores" that the hypervisor may
+  // present as 1 core × 2 threads.
+  const isVM = $derived(!!specs?.virtualization && specs.virtualization !== 'none');
   const virtLabels: Record<string, string> = {
     none: 'Bare metal', kvm: 'KVM', qemu: 'QEMU', xen: 'Xen', vmware: 'VMware', microsoft: 'Hyper-V', oracle: 'VirtualBox',
     amazon: 'AWS Nitro', lxc: 'LXC container', 'lxc-libvirt': 'LXC container', openvz: 'OpenVZ container', docker: 'Docker container',
@@ -196,8 +199,16 @@
             </div>
           </div>
           <dl class="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <div><dt class="stat-label">Cores</dt><dd class="stat-value text-lg">{specs.cpu?.cores || 0}</dd><dd class="text-xs text-subtle">{specs.cpu?.cores_per_socket || specs.cpu?.cores || 0} per socket</dd></div>
-            <div><dt class="stat-label">Threads</dt><dd class="stat-value text-lg">{specs.cpu?.threads || 0}</dd><dd class="text-xs text-subtle">{specs.cpu?.threads_per_core || 1} per core{#if specs.cpu?.offline_cpus} · {specs.cpu.offline_cpus} offline{/if}</dd></div>
+            <div>
+              <dt class="stat-label">{isVM ? 'vCPUs' : 'CPUs (threads)'}</dt>
+              <dd class="stat-value text-lg">{specs.cpu?.threads || specs.cpu?.cores || 0}</dd>
+              <dd class="text-xs text-subtle">usable by the system{#if specs.cpu?.offline_cpus} · {specs.cpu.offline_cpus} offline{/if}{#if specs.cpu?.cpu_quota} · limited to {specs.cpu.cpu_quota}{/if}</dd>
+            </div>
+            <div>
+              <dt class="stat-label">{isVM ? 'Cores (as presented)' : 'Physical cores'}</dt>
+              <dd class="stat-value text-lg">{specs.cpu?.cores || 0}</dd>
+              <dd class="text-xs text-subtle">{specs.cpu?.threads_per_core || 1} thread{(specs.cpu?.threads_per_core || 1) === 1 ? '' : 's'} per core · {specs.cpu?.cores_per_socket || specs.cpu?.cores || 0} per socket</dd>
+            </div>
             <div><dt class="stat-label">Sockets</dt><dd class="stat-value text-lg">{specs.cpu?.sockets || 1}</dd><dd class="text-xs text-subtle">{specs.cpu?.numa_nodes || 1} NUMA node{(specs.cpu?.numa_nodes || 1) === 1 ? '' : 's'}</dd></div>
             <div>
               <dt class="stat-label">Clock</dt>
