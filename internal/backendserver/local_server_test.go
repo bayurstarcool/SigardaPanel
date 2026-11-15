@@ -92,3 +92,31 @@ func TestFixLocalServerIPUsesPublicAddress(t *testing.T) {
 		}
 	}
 }
+
+func TestFixLocalServerIPPrefersPublicURL(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/panel.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := migrations.Up(database, migrations.AllMigrations); err != nil {
+		t.Fatal(err)
+	}
+	s := store.New(database)
+	ctx := context.Background()
+	prev := detectLocalPublicIP
+	detectLocalPublicIP = func(context.Context) (string, error) { return "198.18.0.9", nil }
+	t.Cleanup(func() { detectLocalPublicIP = prev })
+	t.Setenv("SIGARDAPANEL_PUBLIC_URL", "https://43.173.51.154")
+	srv := &store.Server{Name: "Local Server", Hostname: "h", Status: "active", AgentToken: "t",
+		AgentURL: sql.NullString{String: "http://127.0.0.1:7710", Valid: true}, IPAddress: sql.NullString{String: "10.0.0.4", Valid: true}}
+	s.Servers.Create(ctx, srv)
+	fixLocalServerIP(ctx, s, srv.ID)
+	if got, _ := s.Servers.GetByID(ctx, srv.ID); got.IPAddress.String != "43.173.51.154" {
+		t.Fatalf("ip = %s", got.IPAddress.String)
+	}
+	t.Setenv("SIGARDAPANEL_PUBLIC_URL", "https://panel.example.com")
+	if publicURLIPv4() != "" {
+		t.Fatal("a domain was taken as the address")
+	}
+}
