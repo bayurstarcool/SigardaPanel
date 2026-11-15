@@ -1,11 +1,16 @@
 package apihttp
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/features"
 	"sigardapanel/internal/httpjson"
+	"sigardapanel/internal/license"
 	"sigardapanel/internal/store"
 )
 
@@ -17,74 +22,105 @@ func newLicenseHandler(s *store.Store) *licenseHandler {
 	return &licenseHandler{store: s}
 }
 
-// GetLicense returns current license info + feature access map.
+// effectiveLicense is the panel's license as it stands now: the stored key
+// is verified (signature, expiry) every time, so an expired, altered or
+// made-up key never grants a tier.
+type effectiveLicense struct {
+	Tier       string
+	Status     string // none, active, expired, invalid
+	Message    string
+	Claims     *license.Claims
+	Stored     *store.License
+	MaxServers int
+}
+
+func currentLicense(ctx context.Context, s *store.Store) effectiveLicense {
+	out := effectiveLicense{Tier: features.TierFree, Status: "none", MaxServers: features.TierLimits[features.TierFree].MaxServers}
+	lic, err := s.Licenses.GetActive(ctx)
+	if err != nil || lic == nil {
+		return out
+	}
+	out.Stored = lic
+	c, err := license.Verify(lic.Key, time.Now())
+	out.Claims = c
+	switch {
+	case err == nil:
+		out.Tier, out.Status = c.Tier, "active"
+		out.MaxServers = c.MaxServers
+		if out.MaxServers == 0 {
+			out.MaxServers = features.TierLimits[c.Tier].MaxServers
+		}
+	case errors.Is(err, license.ErrExpired):
+		out.Status, out.Message = "expired", "The license expired on "+c.ExpiresAt.Format("2006-01-02")+": renew it to get its features back."
+	default:
+		// Includes keys activated before keys were signed (plain hex).
+		out.Status, out.Message = "invalid", "The stored license key is not valid ("+err.Error()+"): activate a key issued by SigardaPanel."
+	}
+	return out
+}
+
+func maskKey(k string) string {
+	if len(k) > 12 {
+		return k[:12] + "…"
+	}
+	return "…"
+}
+
+// getLicense returns the current license and the feature access map.
 func (h *licenseHandler) getLicense(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+	ctx := c.Request().Context()
+	eff := currentLicense(ctx, h.store)
 
-	license, err := h.store.Licenses.GetActive(c.Request().Context())
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get license")
-	}
-
-	tier := features.TierFree
-	var activatedAt, expiresAt *string
-	var licenseKey *string
-
-	if license != nil {
-		tier = license.Tier
-		if license.ActivatedAt.Valid {
-			s := license.ActivatedAt.Time.Format("2006-01-02T15:04:05Z")
+	var activatedAt, expiresAt, key, licensee, licenseID *string
+	if eff.Stored != nil {
+		if eff.Stored.ActivatedAt.Valid {
+			s := eff.Stored.ActivatedAt.Time.UTC().Format(time.RFC3339)
 			activatedAt = &s
 		}
-		if license.ExpiresAt.Valid {
-			s := license.ExpiresAt.Time.Format("2006-01-02T15:04:05Z")
+		k := maskKey(eff.Stored.Key)
+		key = &k
+	}
+	if eff.Claims != nil {
+		if !eff.Claims.ExpiresAt.IsZero() {
+			s := eff.Claims.ExpiresAt.UTC().Format(time.RFC3339)
 			expiresAt = &s
 		}
-		// Mask key: show only first 8 chars
-		if len(license.Key) > 8 {
-			masked := license.Key[:8] + "..."
-			licenseKey = &masked
-		}
+		licensee, licenseID = &eff.Claims.Licensee, &eff.Claims.ID
 	}
 
-	limits := features.TierLimits[tier]
-	featureMap := features.TierFeatures(tier)
-
-	// Count current servers
-	serverCount, err := h.store.Servers.List(c.Request().Context())
+	servers, err := h.store.Servers.List(ctx)
 	if err != nil {
-		// Log error but don't fail the request
-		serverCount = []store.Server{}
+		servers = []store.Server{}
 	}
-
-	data := map[string]interface{}{
-		"tier":         tier,
-		"tier_name":    features.TierDescriptions[tier],
-		"key":          licenseKey,
-		"activated_at": activatedAt,
-		"expires_at":   expiresAt,
-		"features":     featureMap,
-		"limits": map[string]interface{}{
-			"servers": map[string]interface{}{
-				"current": len(serverCount),
-				"max":     limits.MaxServers,
-			},
-			"sites": map[string]interface{}{
-				"current": 0,
-				"max":     limits.MaxSites,
-			},
-		},
-	}
+	limits := features.TierLimits[eff.Tier]
 
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data:      data,
+		Data: map[string]any{
+			"tier":         eff.Tier,
+			"tier_name":    features.TierDescriptions[eff.Tier],
+			"status":       eff.Status,
+			"message":      eff.Message,
+			"key":          key,
+			"licensee":     licensee,
+			"license_id":   licenseID,
+			"activated_at": activatedAt,
+			"expires_at":   expiresAt,
+			"features":     features.TierFeatures(eff.Tier),
+			"limits": map[string]any{
+				"servers": map[string]any{"current": len(servers), "max": eff.MaxServers},
+				"sites":   map[string]any{"current": 0, "max": limits.MaxSites},
+			},
+		},
 		RequestID: rid,
 	})
 }
 
-// ActivateLicense activates a license key.
+// activateLicense verifies a signed license key and makes it the panel's
+// license. Only keys issued (signed) by SigardaPanel are accepted.
 func (h *licenseHandler) activateLicense(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
+	ctx := c.Request().Context()
 
 	var req struct {
 		Key string `json:"key"`
@@ -92,79 +128,63 @@ func (h *licenseHandler) activateLicense(c *echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
-
-	if req.Key == "" {
+	key := strings.Join(strings.Fields(req.Key), "")
+	if key == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "license key is required")
 	}
-
-	// Validate key format: must be a hex string of at least 32 characters
-	if len(req.Key) < 32 {
-		return echo.NewHTTPError(http.StatusBadRequest, "license key must be at least 32 characters")
-	}
-	for _, c := range req.Key {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return echo.NewHTTPError(http.StatusBadRequest, "license key must be a valid hex string")
+	claims, err := license.Verify(key, time.Now())
+	if err != nil {
+		if errors.Is(err, license.ErrNoKeys) {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
 		}
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	tier := features.TierPro
 
-	// Deactivate any existing license first
-	if err := h.store.Licenses.Deactivate(c.Request().Context()); err != nil {
+	maxServers := claims.MaxServers
+	if maxServers == 0 {
+		maxServers = features.TierLimits[claims.Tier].MaxServers
+	}
+	if err := h.store.Licenses.Deactivate(ctx); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to deactivate old license")
 	}
-
-	// Activate new — use tier defaults for max servers
-	maxServers := 10
-	if tier == "free" {
-		maxServers = 1
-	}
-	_, err := h.store.Licenses.Activate(c.Request().Context(), req.Key, tier, maxServers)
-	if err != nil {
+	if _, err := h.store.Licenses.Activate(ctx, key, claims.Tier, maxServers); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to activate license")
 	}
 
-	keyPreview := req.Key
-	if len(keyPreview) > 8 {
-		keyPreview = keyPreview[:8] + "..."
+	var expires *string
+	if !claims.ExpiresAt.IsZero() {
+		s := claims.ExpiresAt.UTC().Format(time.RFC3339)
+		expires = &s
 	}
-
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]interface{}{
-			"status": "activated",
-			"tier":   tier,
-			"key":    keyPreview,
+		Data: map[string]any{
+			"status":     "activated",
+			"tier":       claims.Tier,
+			"licensee":   claims.Licensee,
+			"license_id": claims.ID,
+			"expires_at": expires,
+			"key":        maskKey(key),
 		},
 		RequestID: rid,
 	})
 }
 
-// DeactivateLicense reverts to free tier.
+// deactivateLicense reverts to the free tier.
 func (h *licenseHandler) deactivateLicense(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-
 	if err := h.store.Licenses.Deactivate(c.Request().Context()); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to deactivate license")
 	}
-
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]interface{}{
-			"status": "deactivated",
-			"tier":   features.TierFree,
-		},
+		Data:      map[string]any{"status": "deactivated", "tier": features.TierFree},
 		RequestID: rid,
 	})
 }
 
-// GetFeatures returns all features with access status for the current tier.
+// getFeatures returns all features with access status for the current tier.
 func (h *licenseHandler) getFeatures(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-
-	license, err := h.store.Licenses.GetActive(c.Request().Context())
-	tier := features.TierFree
-	if err == nil && license != nil {
-		tier = license.Tier
-	}
-
+	tier := currentLicense(c.Request().Context(), h.store).Tier
 	featureMap := features.TierFeatures(tier)
 
 	type featureInfo struct {
@@ -172,21 +192,12 @@ func (h *licenseHandler) getFeatures(c *echo.Context) error {
 		Available    bool   `json:"available"`
 		RequiredTier string `json:"required_tier"`
 	}
-
-	allFeatures := make([]featureInfo, 0, len(features.FeatureTierMap))
+	all := make([]featureInfo, 0, len(features.FeatureTierMap))
 	for feat, reqTier := range features.FeatureTierMap {
-		allFeatures = append(allFeatures, featureInfo{
-			Name:         feat,
-			Available:    featureMap[feat],
-			RequiredTier: reqTier,
-		})
+		all = append(all, featureInfo{Name: feat, Available: featureMap[feat], RequiredTier: reqTier})
 	}
-
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]interface{}{
-			"current_tier": tier,
-			"features":     allFeatures,
-		},
+		Data:      map[string]any{"current_tier": tier, "features": all},
 		RequestID: rid,
 	})
 }

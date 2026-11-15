@@ -99,6 +99,8 @@ jobs:
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
           GH_TOKEN: ${{ github.token }}
           PUBLIC_REPO: ${{ github.repository }}
+          # Optional repository variable: license public key(s) to build in.
+          LICENSE_PUBLIC_KEYS: ${{ vars.SIGARDAPANEL_LICENSE_PUBLIC_KEYS }}
           # The release (and a missing tag) is created on exactly this commit.
           RELEASE_TARGET: ${{ github.sha }}
         run: |

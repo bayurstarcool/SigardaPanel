@@ -37,9 +37,16 @@ echo "==> web build"
 
 rm -rf "$OUT"; mkdir -p "$OUT"
 echo "==> binaries"
+# LICENSE_PUBLIC_KEYS (optional): license public key(s) that replace the
+# one in internal/license/keys.go (base64 ed25519, comma separated).
+ldflags="-s -w -X sigardapanel/internal/buildinfo.Version=${VERSION}"
+if [ -n "${LICENSE_PUBLIC_KEYS:-}" ]; then
+  case "$LICENSE_PUBLIC_KEYS" in *[!A-Za-z0-9+/=,]*) echo "LICENSE_PUBLIC_KEYS is not base64" >&2; exit 1 ;; esac
+  ldflags="$ldflags -X sigardapanel/internal/license.PublicKeys=${LICENSE_PUBLIC_KEYS}"
+fi
 for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -buildvcs=false -trimpath \
-    -ldflags "-s -w -X sigardapanel/internal/buildinfo.Version=${VERSION}" \
+    -ldflags "$ldflags" \
     -o "$OUT/sigardapanel-linux-${arch}" ./cmd/sigardapanel
 done
 chmod 755 "$OUT"/sigardapanel-linux-*
