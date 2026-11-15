@@ -41,7 +41,7 @@ panels. Implemented in `internal/license` (Go: `license.Sign`,
    holds it can issue licenses.
 
 2. Build the public key into the panel, either:
-   - in `internal/license/keys.go` (`defaultPublicKeys`), or
+   - in `internal/license/keys.go` (`defaultPublicKeys`; the current key is there), or
    - as the repository variable `SIGARDAPANEL_LICENSE_PUBLIC_KEYS`: the
      release workflow passes it to the build (`-ldflags -X
      sigardapanel/internal/license.PublicKeys=...`).
