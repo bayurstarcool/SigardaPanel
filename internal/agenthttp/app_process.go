@@ -48,8 +48,11 @@ ExecStart=/bin/sh -lc %s
 Restart=always
 RestartSec=5
 %s
+StandardOutput=append:%s
+StandardError=append:%s
 Environment=PORT=%d
 Environment=NODE_ENV=production
+Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/usr/local/bin:/usr/local/go/bin:/usr/local/node/bin:/usr/bin:/bin:/usr/sbin:/sbin
 # Resource limits (hemat resource)
 MemoryMax=%dM
@@ -62,7 +65,7 @@ PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
-`, domain, rootPath, systemdQuote(appEnvPrelude+"exec "+command), userLine, port, memoryMaxMB, memoryHighMB)
+`, domain, rootPath, systemdQuote(appEnvPrelude+"exec "+command), userLine, appLogPath(domain), appLogPath(domain), port, memoryMaxMB, memoryHighMB)
 }
 
 // appEnvPrelude loads the site's .env in the app's own shell, which already
@@ -159,6 +162,7 @@ func (r *Router) startApp(ctx context.Context, siteID int64, domain, systemUser,
 	}
 	svc := appServiceName(siteID)
 	unitPath := filepath.Join("/etc/systemd/system", svc+".service")
+	r.ensureAppLogSetup(ctx)
 	unit := systemdUnitContent(domain, systemUser, rootPath, command, port, memoryMax)
 	if err := r.executor.WriteFile(ctx, unitPath, unit, 0644); err != nil {
 		return "", "", "", echo.NewHTTPError(http.StatusInternalServerError, "write unit failed: "+err.Error())
@@ -311,6 +315,7 @@ func (r *Router) appRestartTask(c *echo.Context) error {
 	if payload.AppCommand != "" && payload.AppPort > 0 && isValidDomain(payload.Domain) && r.isAllowedSitePath(payload.RootPath) &&
 		validateAppUnitInput(payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand) == nil {
 		unitPath := filepath.Join("/etc/systemd/system", svc+".service")
+		r.ensureAppLogSetup(ctx)
 		unit := systemdUnitContent(payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand, payload.AppPort, payload.AppMemoryMax)
 		if err := r.executor.WriteFile(ctx, unitPath, unit, 0644); err == nil {
 			r.executor.RunShell(ctx, "systemctl", "daemon-reload")

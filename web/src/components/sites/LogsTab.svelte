@@ -3,13 +3,14 @@
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import EmptyState from '$components/EmptyState.svelte';
-  import { ScrollText, RefreshCw, TriangleAlert, Globe, Server, Box } from 'lucide-svelte';
+  import { ScrollText, RefreshCw, TriangleAlert, Globe, Server, Box, Terminal } from 'lucide-svelte';
   import { toasts } from '$lib/toast.svelte';
 
   let { siteId }: { siteId: number } = $props();
 
   let site = $state<any>(null);
-  let logType = $state('error');
+  let logType = $state('');
+  let logError = $state('');
   type LogLine = { text: string; level: string };
   let logEntries = $state<LogLine[]>([]);
   let logLoading = $state(false);
@@ -27,41 +28,63 @@
         site = data?.site || data;
       }
 
-      if (site?.runtime === 'docker' && site?.server_id) {
-        // Docker container logs
+      // Each runtime opens on its own log first: the app's output, the
+      // container's, PHP-FPM's; static and proxy sites on nginx errors.
+      if (!logType) logType = defaultLogType(site?.runtime);
+      logError = '';
+      if (logType === 'container') {
         const containers = await apiFetch(auth.token, 'GET', `servers/${site.server_id}/docker/containers`);
         const container = findSiteContainer<any>(containers?.containers || [], site);
         if (container) {
-          const d = await apiFetch(auth.token, 'GET', `servers/${site.server_id}/docker/container/logs?container_id=${container.id}&lines=200`);
+          const d = await apiFetch(auth.token, 'GET', `servers/${site.server_id}/docker/container/logs?container_id=${container.id}&lines=300`);
           const raw = d?.logs || '';
-          logEntries = raw.split('\n').filter((l: string) => l.trim()).map((l: string) => ({ text: l, level: '' }));
+          // newest first, like the other logs
+          logEntries = raw.split('\n').filter((l: string) => l.trim()).reverse().map((l: string) => ({ text: l, level: '' }));
           logExists = true;
-          logPath = `docker:${container.name}`;
+          logPath = `docker:${container.name.replace(/^\//, '')}`;
         } else {
-          logEntries = [{ text: 'Container not found', level: '' }];
-          logExists = true;
+          logEntries = [];
+          logExists = false;
+          logPath = '';
         }
       } else {
-        // Standard site logs
         const d = await apiFetch(auth.token, 'GET', `sites/${siteId}/logs?type=${logType}&limit=300`);
         // The API parses lines into {level, message, created_at}; access
-        // lines keep the whole line as the message.
+        // and app lines keep the whole line as the message.
         logEntries = (d?.logs || []).map((e: any) => toLine(e, logType));
         logPath = d?.path || '';
         logExists = d?.exists || false;
+        logError = d?.error || '';
       }
     } catch (e: any) { toasts.error(e.message); } finally { logLoading = false; }
   }
 
   const isDocker = $derived(site?.runtime === 'docker');
-  const logOptions = $derived(isDocker
-    ? [{ key: 'container', label: 'Container logs', icon: Box }]
-    : [
-        { key: 'error', label: 'Nginx error', icon: TriangleAlert },
-        { key: 'access', label: 'Nginx access', icon: Globe },
-        // The PHP-FPM log only exists for PHP sites.
-        ...(site?.runtime === 'php' ? [{ key: 'php', label: 'PHP-FPM', icon: Server }] : []),
-      ]
+  const appRuntimes: Record<string, string> = { node: 'Node.js', python: 'Python', go: 'Go' };
+
+  function defaultLogType(rt: string): string {
+    if (rt && appRuntimes[rt]) return 'app';
+    if (rt === 'docker') return 'container';
+    if (rt === 'php') return 'php';
+    return 'error';
+  }
+
+  const logOptions = $derived([
+    ...(site?.runtime && appRuntimes[site.runtime] ? [{ key: 'app', label: `${appRuntimes[site.runtime]} app`, icon: Terminal }] : []),
+    ...(isDocker ? [{ key: 'container', label: 'Container', icon: Box }] : []),
+    // The PHP-FPM log only exists for PHP sites.
+    ...(site?.runtime === 'php' ? [{ key: 'php', label: 'PHP-FPM', icon: Server }] : []),
+    { key: 'error', label: 'Nginx error', icon: TriangleAlert },
+    { key: 'access', label: 'Nginx access', icon: Globe },
+  ]);
+
+  const emptyTitle = $derived(
+    logType === 'container' ? 'Container not found'
+    : logType === 'app' ? 'No app output yet'
+    : 'Log file not found'
+  );
+  const emptyHint = $derived(
+    logType === 'app' ? 'The app writes here once it has started (and printed something).' : ''
   );
 
   function toLine(e: any, type: string): LogLine {
@@ -87,7 +110,7 @@
   <div class="card-header">
     <div class="flex items-center gap-2">
       <ScrollText size={16} class="text-subtle" />
-      <h3 class="card-title">{isDocker ? 'Docker' : 'Site'} logs</h3>
+      <h3 class="card-title">Site logs</h3>
       {#if logEntries.length > 0}<span class="badge tabular-nums">{logEntries.length} lines</span>{/if}
     </div>
     <button onclick={() => { logLoaded = false; loadLogs(); }} class="btn btn-ghost btn-sm"><RefreshCw size={14} class={logLoading ? 'animate-spin' : ''} /> Refresh</button>
@@ -95,7 +118,7 @@
   <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
     <div class="segmented">
       {#each logOptions as logOpt (logOpt.key)}
-        <button onclick={() => { logType = logOpt.key; logLoaded = false; loadLogs(); }} class="segment {logType === logOpt.key || isDocker ? 'segment-active' : ''}">
+        <button onclick={() => { logType = logOpt.key; logLoaded = false; loadLogs(); }} class="segment {logType === logOpt.key ? 'segment-active' : ''}">
           <logOpt.icon size={12} /> {logOpt.label}
         </button>
       {/each}
@@ -104,8 +127,10 @@
   </div>
   {#if logLoading}
     <div class="space-y-2 p-5">{#each Array(12) as _, i (i)}<div class="skeleton h-2.5" style="width: {40 + (i * 7) % 50}%"></div>{/each}</div>
+  {:else if logError}
+    <EmptyState compact icon={TriangleAlert} title="Log unavailable" description={logError} />
   {:else if !logExists}
-    <EmptyState compact icon={ScrollText} title={isDocker ? 'Container not found' : 'Log file not found'} />
+    <EmptyState compact icon={ScrollText} title={emptyTitle} description={emptyHint} />
   {:else if logEntries.length === 0}
     <EmptyState compact icon={ScrollText} title="Log is empty" />
   {:else}

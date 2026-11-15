@@ -1217,6 +1217,21 @@ func (r *Router) siteDeleteTask(c *echo.Context) error {
 		r.executor.RunShell(ctx, "systemctl", "daemon-reload")
 		cleaned = append(cleaned, "app service")
 	}
+	// 1a. Remove the app's output log and its rotations (name.log.N[.gz],
+	// name.log-YYYYMMDD[.gz]); not another domain that merely starts the
+	// same (a.com.log* also matches a.com.logs.example's log).
+	if isValidDomain(payload.Domain) {
+		base := appLogPath(payload.Domain)
+		m, _ := filepath.Glob(base + "*")
+		for _, f := range m {
+			if f == base || appLogRotation.MatchString(strings.TrimPrefix(f, base)) {
+				r.executor.RunShell(ctx, "rm", "-f", "--", f)
+			}
+		}
+		if len(m) > 0 {
+			cleaned = append(cleaned, "app log")
+		}
+	}
 
 	// 1b. Remove the site's docker container (named by site id).
 	if payload.SiteID > 0 {
@@ -1533,12 +1548,24 @@ func (r *Router) logsReadTask(c *echo.Context) error {
 	if payload.Lines <= 0 || payload.Lines > 10000 {
 		payload.Lines = 100
 	}
-	if payload.Type != "access" && payload.Type != "error" && payload.Type != "php" {
-		return echo.NewHTTPError(http.StatusBadRequest, "type must be access, error or php")
+	if payload.Type != "access" && payload.Type != "error" && payload.Type != "php" && payload.Type != "app" {
+		return echo.NewHTTPError(http.StatusBadRequest, "type must be access, error, php or app")
 	}
 
 	if !isValidDomain(payload.Domain) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid domain")
+	}
+
+	if payload.Type == "app" {
+		path, lines, exists, err := r.readAppLog(ctx, payload.SiteID, payload.Domain, payload.Lines)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "app log: "+err.Error())
+		}
+		resp := map[string]any{"ok": true, "path": path, "lines": lines}
+		if !exists {
+			resp["message"] = "log file does not exist yet"
+		}
+		return c.JSON(http.StatusOK, resp)
 	}
 
 	// A site with its own PHP-FPM pool: its own PHP error log, never the
