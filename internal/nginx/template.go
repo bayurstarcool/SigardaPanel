@@ -732,41 +732,47 @@ func GenerateVhostWithOptions(s *store.Site, port int, security *store.SiteSecur
 
 // TemplateForRuntime returns starter file templates for a runtime (e.g., package.json for node).
 func TemplateForRuntime(runtime, domain string, port int) map[string]string {
+	// Starters read the port the panel gives the app from $PORT (set in the
+	// app's systemd unit, so a port change needs no code change) and listen
+	// on 127.0.0.1 only: the site is reached through nginx, never directly.
 	switch runtime {
 	case "node":
 		return map[string]string{
 			"package.json": fmt.Sprintf(`{
   "name": %q,
   "version": "1.0.0",
+  "private": true,
   "scripts": {
     "start": "node server.js"
   }
-}`, domain),
+}`, strings.ReplaceAll(domain, ".", "-")),
 			"server.js": fmt.Sprintf(`const http = require('http');
-const PORT = %d;
+const PORT = parseInt(process.env.PORT || '%d', 10);
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/html' });
-  res.end('<h1>%s</h1><p>Site created via SigardaPanel</p>');
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end('<h1>%s</h1><p>Site created via SigardaPanel (Node.js)</p>');
 });
-server.listen(PORT, () => console.log('Server running on port ' + PORT));
+server.listen(PORT, '127.0.0.1', () => console.log('Listening on 127.0.0.1:' + PORT));
 `, port, domain),
 		}
 	case "python":
 		return map[string]string{
-			"app.py": fmt.Sprintf(`from http.server import HTTPServer, SimpleHTTPRequestHandler
-import os
+			"app.py": fmt.Sprintf(`import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-PORT = %d
+PORT = int(os.environ.get('PORT', '%d'))
 
-class Handler(SimpleHTTPRequestHandler):
+
+class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/html')
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.end_headers()
-        self.wfile.write(b'<h1>%s</h1><p>Site created via SigardaPanel</p>')
+        self.wfile.write(b'<h1>%s</h1><p>Site created via SigardaPanel (Python)</p>')
+
 
 if __name__ == '__main__':
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    print('Listening on 127.0.0.1:%%d' %% PORT, flush=True)
     HTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
 `, port, domain),
 		}
@@ -776,18 +782,26 @@ if __name__ == '__main__':
 			"main.go": fmt.Sprintf(`package main
 
 import (
-    "fmt"
-    "net/http"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
 )
 
 func main() {
-    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-        fmt.Fprintf(w, "<h1>%s</h1><p>Site created via SigardaPanel</p>")
-    })
-    fmt.Println("Server running on port %d")
-    http.ListenAndServe(":%d", nil)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "%d"
+	}
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, "<h1>%s</h1><p>Site created via SigardaPanel (Go)</p>")
+	})
+	addr := "127.0.0.1:" + port
+	log.Println("Listening on " + addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
-`, domain, port, port),
+`, port, domain),
 		}
 	case "docker", "static", "proxy":
 		return nil

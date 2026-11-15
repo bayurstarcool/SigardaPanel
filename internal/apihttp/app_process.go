@@ -1,7 +1,6 @@
 package apihttp
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -26,17 +25,13 @@ func (h *siteHandler) appStart(c *echo.Context) error {
 	}
 
 	// Pre-flight port check: ensure port is still available
-	avail, reason, err := h.store.Sites.CheckPortAvailable(c.Request().Context(), site.ID, site.AppPort.Int64)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "port check failed")
-	}
-	if !avail {
-		suggested, _ := findSuggestedPort(h, c.Request().Context(), site.AppPort.Int64)
-		msg := reason
-		if suggested > 0 {
-			msg += fmt.Sprintf(". Suggest using port %d instead", suggested)
+	// Another site with the same port? (The app itself may already listen
+	// on it, so the server's listeners are not checked here.)
+	if reason := h.appPortConflict(c.Request().Context(), site, site.AppPort.Int64, false); reason != "" {
+		if suggested := h.suggestAppPort(c.Request().Context(), site); suggested > 0 {
+			reason += fmt.Sprintf(". Suggest using port %d instead", suggested)
 		}
-		return echo.NewHTTPError(http.StatusConflict, msg)
+		return echo.NewHTTPError(http.StatusConflict, reason)
 	}
 
 	var body struct {
@@ -123,17 +118,13 @@ func (h *siteHandler) appRestart(c *echo.Context) error {
 	}
 
 	// Pre-flight port check
-	avail, reason, err := h.store.Sites.CheckPortAvailable(c.Request().Context(), site.ID, site.AppPort.Int64)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "port check failed")
-	}
-	if !avail {
-		suggested, _ := findSuggestedPort(h, c.Request().Context(), site.AppPort.Int64)
-		msg := reason
-		if suggested > 0 {
-			msg += fmt.Sprintf(". Suggest using port %d instead", suggested)
+	// Another site with the same port? (The app itself may already listen
+	// on it, so the server's listeners are not checked here.)
+	if reason := h.appPortConflict(c.Request().Context(), site, site.AppPort.Int64, false); reason != "" {
+		if suggested := h.suggestAppPort(c.Request().Context(), site); suggested > 0 {
+			reason += fmt.Sprintf(". Suggest using port %d instead", suggested)
 		}
-		return echo.NewHTTPError(http.StatusConflict, msg)
+		return echo.NewHTTPError(http.StatusConflict, reason)
 	}
 
 	h.store.Sites.UpdateAppStatus(c.Request().Context(), site.ID, "restarting")
@@ -212,19 +203,13 @@ func (h *siteHandler) appUpdateConfig(c *echo.Context) error {
 		}
 	}
 	// Validate port: check if it's available
-	if body.Port > 0 {
-		avail, reason, err := h.store.Sites.CheckPortAvailable(c.Request().Context(), site.ID, body.Port)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "port check failed")
-		}
-		if !avail {
-			// Suggest next available port
-			suggested, _ := findSuggestedPort(h, c.Request().Context(), body.Port)
-			msg := reason
-			if suggested > 0 {
-				msg += fmt.Sprintf(". Suggest using port %d instead", suggested)
+	if body.Port > 0 && body.Port != site.AppPort.Int64 {
+		// A new port must be free in the panel and on the site's server.
+		if reason := h.appPortConflict(c.Request().Context(), site, body.Port, true); reason != "" {
+			if suggested := h.suggestAppPort(c.Request().Context(), site); suggested > 0 {
+				reason += fmt.Sprintf(". Suggest using port %d instead", suggested)
 			}
-			return echo.NewHTTPError(http.StatusConflict, msg)
+			return echo.NewHTTPError(http.StatusConflict, reason)
 		}
 		port = body.Port
 	}
@@ -266,37 +251,23 @@ func (h *siteHandler) appUpdateConfig(c *echo.Context) error {
 			Payload:  string(payload),
 		}
 		h.store.Jobs.Create(c.Request().Context(), job)
+		// A running app still listens on the old port: restart it with the
+		// new $PORT so nginx and the app agree.
+		if status == "running" || status == "starting" {
+			startPayload, _ := json.Marshal(map[string]any{
+				"site_id": site.ID, "domain": site.Domain, "root_path": site.RootPath, "system_user": site.SystemUser.String,
+				"app_port": port, "app_command": cmd, "app_memory_max": memMax,
+			})
+			h.store.Jobs.Create(c.Request().Context(), &jobmodel.Job{
+				ServerID: sql.NullInt64{Int64: site.ServerID, Valid: true}, SiteID: sql.NullInt64{Int64: site.ID, Valid: true},
+				Type: jobmodel.TypeAppStart, Description: fmt.Sprintf("Restart app on %s (port %d)", site.Domain, port), Payload: string(startPayload),
+			})
+		}
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"data": map[string]any{"app_port": port, "app_command": cmd, "app_status": status, "app_memory_max": memMax},
 	})
-}
-
-// findSuggestedPort finds the next available port near startPort, preferring app range 30000-40000.
-func findSuggestedPort(h *siteHandler, ctx context.Context, startPort int64) (int64, error) {
-	if startPort < 30000 || startPort > 40000 {
-		startPort = 30000
-	}
-	for p := startPort + 1; p <= 40000; p++ {
-		avail, _, err := h.store.Sites.CheckPortAvailable(ctx, 0, p)
-		if err != nil {
-			return 0, err
-		}
-		if avail {
-			return p, nil
-		}
-	}
-	for p := int64(30000); p < startPort; p++ {
-		avail, _, err := h.store.Sites.CheckPortAvailable(ctx, 0, p)
-		if err != nil {
-			return 0, err
-		}
-		if avail {
-			return p, nil
-		}
-	}
-	return 0, fmt.Errorf("no free port in 30000-40000")
 }
 
 // appMemoryOrDefault returns the configured memory limit, or fallback if unset (<= 0).

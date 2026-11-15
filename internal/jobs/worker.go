@@ -433,6 +433,12 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 					slog.Error("worker: update site status", "id", siteID, "error", err)
 				}
 			}
+			// A new app site's app was started by the agent.
+			if result != nil && result.AppStatus != "" {
+				if err := w.store.Sites.UpdateAppStatus(ctx, siteID, result.AppStatus); err != nil {
+					slog.Error("worker: update app status", "id", siteID, "error", err)
+				}
+			}
 
 			// An agent that predates server-level access rules silently
 			// ignores the allowlist and leaves PHP URLs open to blocked IPs.

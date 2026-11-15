@@ -1,12 +1,16 @@
 package agenthttp
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/siteinput"
@@ -45,7 +49,7 @@ RestartSec=5
 %s
 Environment=PORT=%d
 Environment=NODE_ENV=production
-Environment=PATH=/root/.hermes/node/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Environment=PATH=/usr/local/bin:/usr/local/go/bin:/usr/local/node/bin:/usr/bin:/bin:/usr/sbin:/sbin
 # Resource limits (hemat resource)
 MemoryMax=%dM
 MemoryHigh=%dM
@@ -134,43 +138,107 @@ func (r *Router) appStartTask(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	svc := appServiceName(payload.SiteID)
-	unitPath := filepath.Join("/etc/systemd/system", svc+".service")
-	unit := systemdUnitContent(payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand, payload.AppPort, payload.AppMemoryMax)
+	status, msg, logs, err := r.startApp(ctx, payload.SiteID, payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand, payload.AppPort, payload.AppMemoryMax)
+	if err != nil {
+		return err
+	}
+	if status != "running" {
+		return c.JSON(http.StatusOK, map[string]any{"ok": false, "app_status": status, "message": msg, "logs": logs})
+	}
+	return c.JSON(http.StatusOK, map[string]any{"ok": true, "app_status": status, "message": msg})
+}
 
+// startApp builds what the command needs (a Go binary), writes the app's
+// systemd unit and (re)starts it. It returns the resulting status
+// ("running" or "errored") with a message and, on failure, the last logs.
+func (r *Router) startApp(ctx context.Context, siteID int64, domain, systemUser, rootPath, command string, port, memoryMax int64) (string, string, string, error) {
+	r.upgradeOldStarter(ctx, systemUser, rootPath, domain, command, port)
+	if out, err := r.prepareGoApp(ctx, systemUser, rootPath, command); err != nil {
+		return "errored", err.Error(), out, nil
+	}
+	svc := appServiceName(siteID)
+	unitPath := filepath.Join("/etc/systemd/system", svc+".service")
+	unit := systemdUnitContent(domain, systemUser, rootPath, command, port, memoryMax)
 	if err := r.executor.WriteFile(ctx, unitPath, unit, 0644); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "write unit failed: "+err.Error())
+		return "", "", "", echo.NewHTTPError(http.StatusInternalServerError, "write unit failed: "+err.Error())
 	}
 	if out, err := r.executor.RunShell(ctx, "systemctl", "daemon-reload"); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "daemon-reload failed: "+strings.TrimSpace(out))
+		return "", "", "", echo.NewHTTPError(http.StatusInternalServerError, "daemon-reload failed: "+strings.TrimSpace(out))
 	}
 	if out, err := r.executor.RunShell(ctx, "systemctl", "enable", svc); err != nil {
 		slog.Warn("agent: app.start enable", "svc", svc, "error", err, "output", strings.TrimSpace(out))
 	}
 	if out, err := r.executor.RunShell(ctx, "systemctl", "restart", svc); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "start failed: "+strings.TrimSpace(out))
+		return "", "", "", echo.NewHTTPError(http.StatusInternalServerError, "start failed: "+strings.TrimSpace(out))
 	}
-
-	// Verify it's actually running
-	statusOut, _ := r.executor.RunShell(ctx, "systemctl", "is-active", svc)
-	active := strings.TrimSpace(statusOut) == "active"
-
-	slog.Info("agent: app.start", "site_id", payload.SiteID, "domain", payload.Domain, "svc", svc, "active", active)
+	// The process may exit right after starting (bad command, port taken):
+	// check that it stays up and listens.
+	active := false
+	for i := 0; i < 10; i++ {
+		time.Sleep(500 * time.Millisecond)
+		statusOut, _ := r.executor.RunShell(ctx, "systemctl", "is-active", svc)
+		active = strings.TrimSpace(statusOut) == "active"
+		if active && portListening(int(port)) {
+			break
+		}
+	}
+	slog.Info("agent: app.start", "site_id", siteID, "domain", domain, "svc", svc, "active", active)
 	if !active {
-		// Grab last logs for diagnostics
 		logs, _ := r.executor.RunShell(ctx, "journalctl", "-u", svc, "-n", "20", "--no-pager")
-		return c.JSON(http.StatusOK, map[string]any{
-			"ok":         false,
-			"app_status": "errored",
-			"message":    fmt.Sprintf("app %s failed to start", payload.Domain),
-			"logs":       strings.TrimSpace(logs),
-		})
+		return "errored", fmt.Sprintf("app %s failed to start", domain), strings.TrimSpace(logs), nil
 	}
-	return c.JSON(http.StatusOK, map[string]any{
-		"ok":         true,
-		"app_status": "running",
-		"message":    fmt.Sprintf("app %s started (port %d)", payload.Domain, payload.AppPort),
-	})
+	return "running", fmt.Sprintf("app %s started (port %d)", domain, port), "", nil
+}
+
+// portListening reports whether something listens on the TCP port.
+func portListening(port int) bool {
+	for _, p := range listeningTCPPorts() {
+		if p == port {
+			return true
+		}
+	}
+	return false
+}
+
+// goBinary finds the go tool (often /usr/local/go/bin, outside PATH).
+func goBinary() string {
+	if p, err := exec.LookPath("go"); err == nil {
+		return p
+	}
+	for _, p := range []string{"/usr/local/go/bin/go", "/usr/lib/go/bin/go", "/snap/bin/go"} {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// prepareGoApp builds ./app (as the site user) when the command runs it and
+// it does not exist yet but the folder holds a Go module.
+func (r *Router) prepareGoApp(ctx context.Context, systemUser, rootPath, command string) (string, error) {
+	bin := strings.Fields(command)
+	if len(bin) == 0 || bin[0] != "./app" {
+		return "", nil
+	}
+	if fi, err := os.Lstat(filepath.Join(rootPath, "app")); err == nil && fi.Mode().IsRegular() {
+		return "", nil
+	}
+	if _, err := os.Lstat(filepath.Join(rootPath, "go.mod")); err != nil {
+		return "", nil
+	}
+	gobin := goBinary()
+	if gobin == "" {
+		return "", fmt.Errorf("Go is not installed on this server: install it on the Stack page, or upload a built ./app binary")
+	}
+	uid, gid, ok := deployUserIDs(systemUser)
+	if !ok {
+		return "", fmt.Errorf("the site has no usable Linux user to build the Go app as")
+	}
+	out, err := r.runAsSiteUser(ctx, uid, gid, rootPath, gobin, "build", "-o", "app", ".")
+	if err != nil {
+		return strings.TrimSpace(out), fmt.Errorf("go build failed: %s", strings.TrimSpace(out))
+	}
+	return "", nil
 }
 
 // appStopTask stops the app service.
@@ -211,6 +279,20 @@ func (r *Router) appRestartTask(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
 	}
 	svc := appServiceName(payload.SiteID)
+
+	// With the full app config, a restart is a start: rewrite the unit,
+	// build a missing Go binary and wait for the port.
+	if payload.AppCommand != "" && payload.AppPort > 0 && isValidDomain(payload.Domain) && r.isAllowedSitePath(payload.RootPath) &&
+		validateAppUnitInput(payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand) == nil {
+		status, msg, logs, err := r.startApp(ctx, payload.SiteID, payload.Domain, payload.SystemUser, payload.RootPath, payload.AppCommand, payload.AppPort, payload.AppMemoryMax)
+		if err != nil {
+			return err
+		}
+		if status != "running" {
+			return c.JSON(http.StatusOK, map[string]any{"ok": false, "app_status": status, "message": msg, "logs": logs})
+		}
+		return c.JSON(http.StatusOK, map[string]any{"ok": true, "app_status": status, "message": fmt.Sprintf("app %s restarted", payload.Domain)})
+	}
 
 	// Rewrite unit in case command/port/memory changed
 	if payload.AppCommand != "" && payload.AppPort > 0 && isValidDomain(payload.Domain) && r.isAllowedSitePath(payload.RootPath) &&
