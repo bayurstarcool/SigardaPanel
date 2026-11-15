@@ -11,6 +11,7 @@ import (
 	"text/template"
 
 	"sigardapanel/internal/siteinput"
+	"sigardapanel/internal/sitepage"
 	"sigardapanel/internal/store"
 )
 
@@ -746,29 +747,45 @@ func TemplateForRuntime(runtime, domain string, port int) map[string]string {
     "start": "node server.js"
   }
 }`, strings.ReplaceAll(domain, ".", "-")),
+			"index.html": sitepage.HTML(domain, "node"),
 			"server.js": fmt.Sprintf(`const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
 const PORT = parseInt(process.env.PORT || '%d', 10);
+
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end('<h1>%s</h1><p>Site created via SigardaPanel (Node.js)</p>');
+  fs.readFile(path.join(__dirname, 'index.html'), (err, page) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(err ? '<h1>%s</h1><p>Site is live (Node.js).</p>' : page);
+  });
 });
+
 server.listen(PORT, '127.0.0.1', () => console.log('Listening on 127.0.0.1:' + PORT));
 `, port, domain),
 		}
 	case "python":
 		return map[string]string{
+			"index.html": sitepage.HTML(domain, "python"),
 			"app.py": fmt.Sprintf(`import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 PORT = int(os.environ.get('PORT', '%d'))
+PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'index.html')
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        try:
+            with open(PAGE, 'rb') as f:
+                body = f.read()
+        except OSError:
+            body = b'<h1>%s</h1><p>Site is live (Python).</p>'
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(b'<h1>%s</h1><p>Site created via SigardaPanel (Python)</p>')
+        self.wfile.write(body)
 
 
 if __name__ == '__main__':
@@ -778,11 +795,11 @@ if __name__ == '__main__':
 		}
 	case "go":
 		return map[string]string{
-			"go.mod": goModFile(domain),
+			"go.mod":     goModFile(domain),
+			"index.html": sitepage.HTML(domain, "go"),
 			"main.go": fmt.Sprintf(`package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -795,7 +812,11 @@ func main() {
 	}
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, "<h1>%s</h1><p>Site created via SigardaPanel (Go)</p>")
+		page, err := os.ReadFile("index.html")
+		if err != nil {
+			page = []byte("<h1>%s</h1><p>Site is live (Go).</p>")
+		}
+		w.Write(page)
 	})
 	addr := "127.0.0.1:" + port
 	log.Println("Listening on " + addr)
