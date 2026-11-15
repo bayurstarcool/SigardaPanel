@@ -128,3 +128,32 @@ func TestCheckerDoesNotCacheCancelledLookup(t *testing.T) {
 		t.Fatalf("a cancelled lookup was cached: %v %v", rel, err)
 	}
 }
+
+func TestCheckerSendsUpdateTokenOverHTTPSOnly(t *testing.T) {
+	var got string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		w.Write([]byte(`{"tag_name":"v9.9.9","name":"x","body":"","html_url":"https://example.invalid"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SIGARDAPANEL_UPDATE_TOKEN", "tok123")
+	c := &Checker{HTTP: srv.Client(), APIBase: srv.URL, Repo: "owner/private"}
+	if rel, _, err := c.Latest(context.Background(), 0); err != nil || rel.Tag != "v9.9.9" {
+		t.Fatalf("latest: %v %+v", err, rel)
+	}
+	if got != "Bearer tok123" {
+		t.Fatalf("Authorization = %q", got)
+	}
+
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		w.Write([]byte(`{"tag_name":"v9.9.9"}`))
+	}))
+	defer plain.Close()
+	got = ""
+	c2 := &Checker{HTTP: plain.Client(), APIBase: plain.URL, Repo: "owner/private"}
+	c2.Latest(context.Background(), 0)
+	if got != "" {
+		t.Fatal("token sent over plain http")
+	}
+}

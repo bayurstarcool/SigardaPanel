@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,8 +18,17 @@ import (
 	"time"
 )
 
-// Repo is the public repository releases are published to (scripts/release.sh).
-const Repo = "bayurstarcool/SigardaPanel"
+// PublicRepo is the public repository releases are published to
+// (scripts/release.sh).
+const PublicRepo = "bayurstarcool/SigardaPanel"
+
+// Repo is where this build looks for its own releases: the public
+// repository, or the master panel's private one (set by that build). A
+// private repository needs a read-only token in SIGARDAPANEL_UPDATE_TOKEN.
+var Repo = PublicRepo
+
+// updateToken is the GitHub token for a private release repository.
+func updateToken() string { return strings.TrimSpace(os.Getenv("SIGARDAPANEL_UPDATE_TOKEN")) }
 
 // tagRe matches the tags scripts/release.sh creates (vX.Y.Z).
 var tagRe = regexp.MustCompile(`^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
@@ -214,12 +224,18 @@ func (c *Checker) fetch(ctx context.Context) (*Release, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "sigardapanel-updater")
+	if t := updateToken(); t != "" && strings.HasPrefix(base, "https://") {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("could not reach GitHub: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusNotFound && repo != PublicRepo {
+			return nil, fmt.Errorf("GitHub answered HTTP 404 for %s: a private release repository needs a read-only token in SIGARDAPANEL_UPDATE_TOKEN", repo)
+		}
 		return nil, fmt.Errorf("GitHub answered HTTP %d", resp.StatusCode)
 	}
 	var body struct {

@@ -317,7 +317,9 @@ func (u *panelUpdater) start(ctx context.Context, tag string, auto bool) (int, s
 		}
 	}
 	args := []string{"update"}
-	env := []string{"SIGARDA_VERSION=" + tag}
+	// The installer fetches the release from this build's repository; a
+	// private repository's token is read by the installer from panel.env.
+	env := []string{"SIGARDA_VERSION=" + tag, "SIGARDA_REPO=" + selfupdate.Repo}
 	desc := "SigardaPanel update to " + tag
 	if u.kind == "agent" {
 		args, env, desc = []string{tag}, nil, "SigardaPanel agent update to "+tag
