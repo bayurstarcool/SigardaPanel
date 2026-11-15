@@ -253,6 +253,7 @@ certificate) or **Full**; "Flexible" causes a redirect loop.
 | `SIGARDAPANEL_LANDING_PAGE` | not set (`false`) | `true`: `/` shows the Sigarda SaaS landing page. Otherwise they redirect to the login (self-hosted). |
 | `SIGARDAPANEL_CHECKIN` | on | `off`: no daily check-in with the master panel (no automatic free/upgraded license; see docs/LICENSING.md). |
 | `SIGARDAPANEL_MASTER_URL` | `https://panel.sigarda.com` | Master panel for check-in and upgrades (https). |
+| `SIGARDAPANEL_UPDATE_TOKEN` | not set | Read-only GitHub token when the panel's releases come from a private repository (the master panel). Used to check for and download updates; never needed for public releases. |
 | `SIGARDAPANEL_ALLOW_MEMBER_SIGNUP` | not set (`false`) | `true`: member (SaaS customer) sign-up on `/register` (also needs the member database, `MEMBER_DB_*`). |
 | `SIGARDAPANEL_ALLOW_PRIVATE_AGENTS` | not set (`false`) | `true`: servers added with the [install command](#option-a-install-command) may register a private (RFC 1918 / ULA) address. See [Private networks](#private-networks). |
 | `MEMBER_DB_*` | commented out | Optional member area (PostgreSQL) |

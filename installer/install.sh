@@ -19,11 +19,16 @@
 #   ADMIN_PASS            admin password          (default: random, printed once)
 #   INSTALL_FIREWALL=yes  allow SSH/80/443 in ufw and enable it (never resets rules)
 #   SIGARDA_ASSET_BASE    alternative download directory (testing; verification still applies)
+#   SIGARDA_REPO          GitHub repository the releases come from (default below;
+#                         the master panel uses its private repository)
+#   SIGARDA_UPDATE_TOKEN  read-only GitHub token for a private release repository
+#                         (default: SIGARDAPANEL_UPDATE_TOKEN in /etc/sigardapanel/panel.env)
 #   FORCE=1               with "update": reinstall even if already on the target version
 set -euo pipefail
 umask 022
 
-REPO="bayurstarcool/SigardaPanel"
+REPO="${SIGARDA_REPO:-bayurstarcool/SigardaPanel}"
+[[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "Invalid SIGARDA_REPO '$REPO'" >&2; exit 1; }
 # minisign public key used to verify releases. Also published in the repository README.
 PUBKEY="RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM"
 
@@ -85,9 +90,36 @@ install_packages() {
   ok "Packages ready (node $v, minisign $(minisign -v 2>&1 | awk '{print $2}'))"
 }
 
+# update_token: the token for a private release repository, if any. It is
+# read from the root-only panel.env, never passed on a command line.
+update_token() {
+  if [ -n "${SIGARDA_UPDATE_TOKEN:-}" ]; then printf '%s' "$SIGARDA_UPDATE_TOKEN"; return; fi
+  [ -f "$CONF_DIR/panel.env" ] || return 0
+  grep -E '^SIGARDAPANEL_UPDATE_TOKEN=' "$CONF_DIR/panel.env" | tail -n1 | cut -d= -f2- | tr -d '"'"'"'\r' || true
+}
+
+# github_api <path>: GET from the GitHub API with the update token.
+# The token goes to curl on stdin (-K -), never on its command line (ps).
+auth_header() { printf 'header = "Authorization: Bearer %s"\n' "$(update_token)"; }
+github_api() {
+  auth_header | curl -fsSL --max-time 30 -K - -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${REPO}$1"
+}
+
+need_python() {
+  command -v python3 >/dev/null || { apt-get update -qq; apt-get install -y -qq python3 >/dev/null; } || die "python3 is required"
+}
+
 resolve_tag() {
   if [ -n "${SIGARDA_VERSION:-}" ]; then TAG="$SIGARDA_VERSION"; return; fi
   if [ -n "${SIGARDA_ASSET_BASE:-}" ]; then die "Set SIGARDA_VERSION together with SIGARDA_ASSET_BASE"; fi
+  if [ -n "$(update_token)" ]; then
+    need_python
+    TAG="$(github_api /releases/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')" \
+      || die "Could not read the latest release of ${REPO} (check SIGARDAPANEL_UPDATE_TOKEN)"
+    [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || die "Unexpected release tag '$TAG'"
+    return
+  fi
   local url
   url="$(curl -fsSL --max-time 20 -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest")" \
     || die "Could not reach GitHub to find the latest release"
@@ -101,9 +133,25 @@ download_release() {
   base="${SIGARDA_ASSET_BASE:-https://github.com/${REPO}/releases/download/${TAG}}"
   log "Downloading ${TAG} (linux-${ARCH})..."
   local f
-  for f in "sigardapanel-linux-${ARCH}" "sigardapanel-web.tar.gz" "SHA256SUMS" "SHA256SUMS.minisig"; do
-    curl -fsSL --max-time 600 --retry 3 -o "${dir}/${f}" "${base}/${f}" || die "Download failed: ${base}/${f}"
-  done
+  if [ -z "${SIGARDA_ASSET_BASE:-}" ] && [ -n "$(update_token)" ]; then
+    # Private repository: assets are fetched through the API with the token
+    # (curl does not forward it to the storage host the API redirects to).
+    need_python
+    local assets
+    assets="$(github_api "/releases/tags/${TAG}")" || die "Could not read release ${TAG} of ${REPO} (check SIGARDAPANEL_UPDATE_TOKEN)"
+    for f in "sigardapanel-linux-${ARCH}" "sigardapanel-web.tar.gz" "SHA256SUMS" "SHA256SUMS.minisig"; do
+      local url
+      url="$(printf '%s' "$assets" | F="$f" python3 -c 'import json,os,sys; print(next(a["url"] for a in json.load(sys.stdin)["assets"] if a["name"] == os.environ["F"]))')" \
+        || die "Release ${TAG} has no asset ${f}"
+      [[ "$url" =~ ^https://api\.github\.com/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/assets/[0-9]+$ ]] || die "Unexpected asset URL for ${f}"
+      auth_header | curl -fsSL --max-time 600 --retry 3 -K - -H "Accept: application/octet-stream" \
+        -o "${dir}/${f}" "$url" || die "Download failed: ${f}"
+    done
+  else
+    for f in "sigardapanel-linux-${ARCH}" "sigardapanel-web.tar.gz" "SHA256SUMS" "SHA256SUMS.minisig"; do
+      curl -fsSL --max-time 600 --retry 3 -o "${dir}/${f}" "${base}/${f}" || die "Download failed: ${base}/${f}"
+    done
+  fi
   log "Verifying signature and checksums..."
   minisign -Vm "${dir}/SHA256SUMS" -P "$PUBKEY" -x "${dir}/SHA256SUMS.minisig" >/dev/null \
     || die "SIGNATURE VERIFICATION FAILED - refusing to install. The download may have been tampered with."
