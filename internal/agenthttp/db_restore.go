@@ -3,6 +3,7 @@ package agenthttp
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,6 +42,15 @@ func (r *Router) importDatabaseDump(ctx context.Context, db restoreDatabase, fil
 		return "", err
 	}
 	defer f.Close()
+	return r.importDatabaseReader(ctx, db, f, uid, gid)
+}
+
+// importDatabaseReader runs the database client (as uid:gid, with the
+// database's own account) with the SQL on stdin.
+func (r *Router) importDatabaseReader(ctx context.Context, db restoreDatabase, f io.Reader, uid, gid uint32) (string, error) {
+	if !isValidDBIdentifier(db.Name) || !isValidDBIdentifier(db.User) || db.Password == "" {
+		return "", fmt.Errorf("invalid database or account")
+	}
 	switch strings.ToLower(db.Type) {
 	case "mysql", "mariadb":
 		return r.executor.RunAsUserInput(ctx, uid, gid, []string{"MYSQL_PWD=" + db.Password}, f,

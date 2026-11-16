@@ -7,6 +7,8 @@
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import Combobox from './Combobox.svelte';
   import { openPma, fmtSize, siteLabel } from './pma';
+  import { pmaFeature, loadPmaFeature } from './pmaFeature.svelte';
+  $effect(() => { loadPmaFeature(); });
   import {
     Database as DatabaseIcon, Search, Trash2, ChevronRight, ExternalLink, Users,
     LoaderCircle, Pencil, UserPlus, KeyRound, Table2,
@@ -294,10 +296,10 @@
                       <ExternalLink size={14} /> View site
                     </a>
                   {/if}
-                  <a href="/databases/{db.id}" onclick={(e) => e.stopPropagation()} class="btn btn-ghost btn-xs text-accent" title="Browse tables and run read-only queries">
-                    <Table2 size={14} /><span class="max-sm:hidden">Browse</span>
+                  <a href="/databases/{db.id}" onclick={(e) => e.stopPropagation()} class="btn btn-ghost btn-xs text-accent" title="Browse and edit data, run SQL, import and export">
+                    <Table2 size={14} /><span class="max-sm:hidden">Manage</span>
                   </a>
-                  {#if db.type !== 'postgres'}
+                  {#if db.type !== 'postgres' && pmaFeature.available}
                   <button onclick={(e) => { e.stopPropagation(); openPma(db.id); }} class="btn btn-ghost btn-xs max-md:hidden" title="Open phpMyAdmin">
                     <DatabaseIcon size={14} /><span class="max-lg:hidden">phpMyAdmin</span>
                   </button>

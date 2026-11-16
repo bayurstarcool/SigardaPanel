@@ -77,7 +77,7 @@ sha256sum -c --ignore-missing SHA256SUMS
 |---|---|
 | **Multi-Server** | Per-VPS agent (port 7710) — manage fleet from one panel |
 | **Sites** | Create, deploy, Git, SSL auto, nginx vhost management |
-| **Databases** | MySQL/MariaDB, PostgreSQL, phpMyAdmin integration |
+| **Databases** | MySQL/MariaDB and PostgreSQL with a built-in manager (edit rows, SQL console, structure, export/import); optional phpMyAdmin (`install.sh phpmyadmin`) |
 | **Backups** | B2/S3 cloud, scheduled, restore |
 | **SSL** | Let's Encrypt DNS-01 (Cloudflare), self-signed, custom |
 | **Monitoring** | CPU, RAM, disk, processes (live + 30-day history) |

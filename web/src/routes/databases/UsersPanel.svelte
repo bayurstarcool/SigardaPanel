@@ -7,6 +7,8 @@
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
   import Combobox from './Combobox.svelte';
   import { openPma, canonicalHost, dbLabel } from './pma';
+  import { pmaFeature, loadPmaFeature } from './pmaFeature.svelte';
+  $effect(() => { loadPmaFeature(); });
   import { Database as DatabaseIcon, Search, Trash2, Users, LoaderCircle, Check, Pencil, X, KeyRound } from 'lucide-svelte';
 
   let {
@@ -309,7 +311,7 @@
                     <button onclick={() => rotateUserById(u)} disabled={busyId === u.id} class="btn btn-ghost btn-icon btn-xs" title="Rotate password" aria-label="Rotate password for {u.username}">
                       {#if busyId === u.id}<LoaderCircle size={14} class="animate-spin" />{:else}<KeyRound size={14} />{/if}
                     </button>
-                    {#if u.database_type !== 'postgres'}
+                    {#if u.database_type !== 'postgres' && pmaFeature.available}
                       <button onclick={() => openPma(u.database_id)} class="btn btn-ghost btn-icon btn-xs max-sm:hidden" title="Open phpMyAdmin" aria-label="Open phpMyAdmin for {u.database_name}">
                         <DatabaseIcon size={14} />
                       </button>

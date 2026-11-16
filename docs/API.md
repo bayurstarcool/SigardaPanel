@@ -156,9 +156,21 @@ certbot cannot be removed, and `uninstall`/`stop` need super_admin (403). Every 
 | GET | `/db-users` | user | List DB users |
 | POST | `/databases/:id/users` | user | Create DB user |
 | POST | `/databases/:id/users/:userId/rotate-password` | user | Rotate password |
-| GET | `/databases/:id/pma-credentials` | user | Get phpMyAdmin login |
+| GET | `/databases/features` | user | Optional tools on this panel (`{"phpmyadmin": bool}`) |
+| GET | `/databases/:id/viewer/tables` | site write | Tables (and `pma_available`) |
+| GET | `/databases/:id/viewer/columns?table=&schema=` | site write | Columns of a table |
+| GET | `/databases/:id/viewer/rows?table=&schema=&limit=&offset=&order_by=&desc=&filters=` | site write | Browse rows (read-only) |
+| GET | `/databases/:id/manager/structure?table=&schema=` | site write | Indexes and foreign keys |
+| POST | `/databases/:id/manager/rows` | site write | `{table, schema, op: insert\|update\|delete, keys, values}`; rows are found by their full primary key (audited) |
+| POST | `/databases/:id/manager/sql` | site write | `{sql, read_only}`; one statement; read-only runs only reading statements, in a read-only transaction (writes are audited) |
+| GET | `/databases/:id/manager/export` | site write | Whole database as a `.sql` download (mysqldump / pg_dump) |
+| POST | `/databases/:id/manager/import` | site write | Raw `.sql` body (max 30 MB), or `?path=` a `.sql` file in the site's folder (any size) |
+| GET | `/databases/:id/pma-credentials` | site write | phpMyAdmin sign-on account (used by `/pma/ticket`; only when phpMyAdmin is installed) |
 | POST | `/pma/ticket` | user | Generate phpMyAdmin auth ticket |
 | GET | `/pma/t/:ticket` | (no auth) | phpMyAdmin entry |
+
+The viewer and manager always connect with one of the database's own accounts
+whose password the panel stores, so they can never do more than that account.
 
 ## Backups
 

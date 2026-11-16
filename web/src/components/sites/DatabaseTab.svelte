@@ -4,6 +4,8 @@
   import EmptyState from '$components/EmptyState.svelte';
   import { Database, Globe, Plus, Trash2, Pencil, Check, Search, LoaderCircle, Users, UserPlus, Key, TriangleAlert, Copy, ArrowRight, ArrowLeft, Table2 } from 'lucide-svelte';
   import { openPma } from '../../routes/databases/pma';
+  import { pmaFeature, loadPmaFeature } from '../../routes/databases/pmaFeature.svelte';
+  $effect(() => { loadPmaFeature(); });
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
@@ -225,9 +227,9 @@
                   {#if db.size_bytes}<span class="font-mono text-xs text-subtle tabular-nums">{fmtBytes(db.size_bytes)}</span>{/if}
                 </div>
                 <div class="flex shrink-0 items-center gap-0.5">
-                  <a href="/databases/{db.id}" class="btn btn-ghost btn-xs text-accent" title="Browse tables and run read-only queries"><Table2 size={13} /> Browse</a>
+                  <a href="/databases/{db.id}" class="btn btn-ghost btn-xs text-accent" title="Browse and edit data, run SQL, import and export"><Table2 size={13} /> Manage</a>
                   {#if db.type !== 'postgres'}
-                    <button onclick={() => openPma(db.id)} class="btn btn-ghost btn-xs max-sm:hidden" title="Open phpMyAdmin"><Database size={13} /> phpMyAdmin</button>
+                    {#if pmaFeature.available}<button onclick={() => openPma(db.id)} class="btn btn-ghost btn-xs max-sm:hidden" title="Open phpMyAdmin"><Database size={13} /> phpMyAdmin</button>{/if}
                     <button onclick={() => startEditDb(db)} class="btn btn-ghost btn-icon btn-xs" aria-label="Edit charset and collation of {db.name}" title="Edit charset/collation"><Pencil size={13} /></button>
                   {/if}
                   <button onclick={() => deleteDB(db)} class="btn btn-danger-ghost btn-icon btn-xs" aria-label="Delete database {db.name}" title="Delete database"><Trash2 size={13} /></button>

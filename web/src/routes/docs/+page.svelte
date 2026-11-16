@@ -279,13 +279,21 @@ sigardapanel server add --name "Production" --hostname prod.example.com --ip 1.2
         <h2 class="text-2xl font-semibold tracking-tight text-fg">Databases</h2>
         <p class="mt-1.5 mb-2 text-muted">Manage MariaDB/MySQL & PostgreSQL databases, users, and integrated phpMyAdmin.</p>
 
-        <h3 class="mt-8 mb-3 text-base font-semibold text-fg">phpMyAdmin Web Access</h3>
-        <p class="mb-3 text-sm leading-relaxed text-muted">SigardaPanel provides direct integrated phpMyAdmin with single-click authentication.</p>
-        <div class="mb-4 rounded-lg border border-line bg-surface-2 p-4">
-          <pre class="overflow-x-auto font-mono text-[13px] leading-relaxed text-fg"><code># Access via panel URL:
-https://cp.sigarda.dev/pma/
+        <h3 class="mt-8 mb-3 text-base font-semibold text-fg">Built-in manager</h3>
+        <p class="mb-3 text-sm leading-relaxed text-muted">
+          Click <strong>Manage</strong> on any database (MySQL/MariaDB or PostgreSQL) to browse and filter rows, insert, edit and delete rows
+          (tables need a primary key), see columns, indexes and foreign keys, run SQL (read-only by default) and export or import
+          <code>.sql</code> files. Everything runs as the database's own account; changes are written to the audit log.
+        </p>
 
-# Or click "phpMyAdmin" on any database in the Databases dashboard for auto-login ticket.</code></pre>
+        <h3 class="mt-8 mb-3 text-base font-semibold text-fg">phpMyAdmin (optional)</h3>
+        <p class="mb-3 text-sm leading-relaxed text-muted">phpMyAdmin is not installed by default. Add it on the panel host for MySQL/MariaDB databases; the <strong>phpMyAdmin</strong> button then signs in with the database's own account (no phpMyAdmin login page).</p>
+        <div class="mb-4 rounded-lg border border-line bg-surface-2 p-4">
+          <pre class="overflow-x-auto font-mono text-[13px] leading-relaxed text-fg"><code># On the panel server:
+sudo bash install.sh phpmyadmin
+
+# Remove it from the panel again:
+sudo bash install.sh phpmyadmin off</code></pre>
         </div>
       </section>
 

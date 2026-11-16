@@ -2,11 +2,8 @@ package apihttp
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -838,70 +835,6 @@ func execMySQLConn(s *store.Store, fn func(conn *dbserver.MySQLConn) error) erro
 	return fn(conn)
 }
 
-// phpMyAdminCredentials creates a dedicated, short-lived-login account for one database.
-// Only callable from localhost with a signed request from the web process.
-// POST /api/v1/databases/phpmyadmin-credentials
-func (h *dbHandler) phpMyAdminCredentials(c *echo.Context) error {
-	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-
-	var body struct {
-		DatabaseID int64  `json:"database_id"`
-		Expires    int64  `json:"expires"`
-		Signature  string `json:"signature"`
-	}
-	if err := c.Bind(&body); err != nil || body.DatabaseID <= 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "valid database_id required")
-	}
-	secret := os.Getenv("SIGARDAPANEL_PMA_SECRET")
-	if len(secret) < 32 || body.Expires <= time.Now().Unix() || body.Expires > time.Now().Add(2*time.Minute).Unix() {
-		return echo.NewHTTPError(http.StatusUnauthorized, "invalid signed request")
-	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	fmt.Fprintf(mac, "%d:%d", body.DatabaseID, body.Expires)
-	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(expected), []byte(body.Signature)) {
-		return echo.NewHTTPError(http.StatusUnauthorized, "invalid signed request")
-	}
-
-	database, err := h.store.Databases.GetByID(c.Request().Context(), body.DatabaseID)
-	if err != nil || database == nil || database.Type != "mysql" {
-		return echo.NewHTTPError(http.StatusNotFound, "mysql database not found")
-	}
-
-	// Unique random principal per ticket prevents concurrent sessions from
-	// rotating each other's credentials. Host=localhost blocks remote DB login.
-	suffix := make([]byte, 6)
-	if _, err := rand.Read(suffix); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "credential generation failed")
-	}
-	username := fmt.Sprintf("sp_pma_%d_%s", database.ID, hex.EncodeToString(suffix))
-	password := generateDBPassword()
-	const host = "localhost"
-	if err := h.execMySQL(func(conn *dbserver.MySQLConn) error {
-		if err := conn.CreateUser(c.Request().Context(), username, password, host, database.Name, "ALL"); err != nil {
-			return fmt.Errorf("create dedicated user: %w", err)
-		}
-		if err := conn.ScheduleDeleteUser(c.Request().Context(), username, host, time.Hour+time.Minute); err != nil {
-			_ = conn.DeleteUser(context.Background(), username, host)
-			return fmt.Errorf("schedule dedicated user cleanup: %w", err)
-		}
-		return nil
-	}); err != nil {
-		slog.Error("phpmyadmin: failed to prepare dedicated database login", "database_id", database.ID, "error", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to prepare phpMyAdmin login")
-	}
-
-	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]any{
-			"username": username,
-			"password": password,
-		},
-		RequestID: rid,
-	})
-}
-
-// phpMyAdminResetPasswords resets MySQL passwords for all users that have
-// password_hash = "imported" (i.e., imported from CloudPanel without a known password).
 // POST /api/v1/databases/phpmyadmin-reset-passwords
 func (h *dbHandler) phpMyAdminResetPasswords(c *echo.Context) error {
 	rid := c.Response().Header().Get(echo.HeaderXRequestID)
@@ -1424,105 +1357,35 @@ func (h *dbHandler) listAvailableMySQLUsers(c *echo.Context) error {
 	})
 }
 
-// pmaCredentials returns MySQL credentials for phpMyAdmin per-site.
-// Finds the MySQL user that has ALL PRIVILEGES on the database.
-// Uses encrypted password from db_users if available, otherwise phpmyadmin control user.
+// pmaCredentials returns the account phpMyAdmin signs in with for one
+// database: one of the database's own accounts whose password the panel
+// stores (the same one the built-in manager uses), never a server-wide or
+// phpMyAdmin control account. Called by the web process's /pma/ticket.
 func (h *dbHandler) pmaCredentials(c *echo.Context) error {
-	rid := c.Response().Header().Get(echo.HeaderXRequestID)
-	sess := sessionFromEcho(c)
-	if sess == nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, "not authenticated")
+	d, site, user, pass, err := h.managedDB(c)
+	if err != nil {
+		return err
 	}
-
-	dbID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || dbID <= 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid database id")
+	if !phpMyAdminEnabled() {
+		return echo.NewHTTPError(http.StatusNotFound, "phpMyAdmin is not installed on this panel (sudo bash install.sh phpmyadmin)")
 	}
-
-	database, err := h.store.Databases.GetByID(c.Request().Context(), dbID)
-	if err != nil || database == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "database not found")
+	if d.Type != "mysql" {
+		return echo.NewHTTPError(http.StatusConflict, "phpMyAdmin is for MySQL/MariaDB databases; use the built-in manager for PostgreSQL")
 	}
-
-	// Check access
-	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
-	if !h.canManage(c.Request().Context(), sess, site) {
-		return h.denyDB(c.Request().Context(), sess, site, "database not found")
-	}
-	if database.Type == "mysql" && !h.panelMySQL(c.Request().Context(), site) {
+	if !h.panelMySQL(c.Request().Context(), site) {
 		return errRemoteMySQL("phpMyAdmin")
 	}
-
-	// Find the MySQL user for this database from db_users
-	dbUsers, _ := h.store.DBUsers.ListByDatabase(c.Request().Context(), dbID)
-	for _, u := range dbUsers {
-		if u.EncryptedPassword != "" {
-			pass, err := h.store.DBStore.DecryptPassword(u.EncryptedPassword)
-			if err == nil && pass != "" {
-				return c.JSON(http.StatusOK, httpjson.Success{
-					Data: map[string]any{
-						"username": u.Username,
-						"password": pass,
-						"host":     u.HostPattern,
-					},
-					RequestID: rid,
-				})
-			}
-		}
-	}
-
-	// 2. Fallback: generate a dedicated temporary login for this database
-	if database.Type == "mysql" {
-		suffix := make([]byte, 4)
-		_, _ = rand.Read(suffix)
-		username := fmt.Sprintf("pma_%d_%s", database.ID, hex.EncodeToString(suffix))
-		password := generateDBPassword()
-		if err := h.execMySQL(func(conn *dbserver.MySQLConn) error {
-			return conn.CreateUser(c.Request().Context(), username, password, "localhost", database.Name, "ALL")
-		}); err == nil {
-			return c.JSON(http.StatusOK, httpjson.Success{
-				Data: map[string]any{
-					"username": username,
-					"password": password,
-					"host":     "localhost",
-				},
-				RequestID: rid,
-			})
-		}
-	}
-
-	// 3. Fallback: phpmyadmin control user from config-db.php
-	configData, err := os.ReadFile("/etc/phpmyadmin/config-db.php")
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "phpmyadmin config not found")
-	}
-	cfg := string(configData)
-
-	pmaUser := extractPHPVar(cfg, "dbuser")
-	pmaPass := extractPHPVar(cfg, "dbpass")
-	if pmaUser == "" || pmaPass == "" {
-		return echo.NewHTTPError(http.StatusInternalServerError, "phpmyadmin credentials not configured")
-	}
-
+	h.auditDB(c, d, "database_phpmyadmin", map[string]any{"account": user})
 	return c.JSON(http.StatusOK, httpjson.Success{
-		Data: map[string]any{
-			"username": pmaUser,
-			"password": pmaPass,
-			"host":     "localhost",
-		},
-		RequestID: rid,
+		Data:      map[string]any{"username": user, "password": pass, "host": "localhost"},
+		RequestID: c.Response().Header().Get(echo.HeaderXRequestID),
 	})
 }
 
-// extractPHPVar extracts a PHP variable value from config-db.php content.
-func extractPHPVar(content, varName string) string {
-	// Match: $varname='value'; or $varname="value";
-	re := regexp.MustCompile(`\$` + varName + `\s*=\s*['"]([^'"]+)['"]`)
-	matches := re.FindStringSubmatch(content)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
+// phpMyAdminEnabled: the installer's "phpmyadmin" command set it up on the
+// panel host (package, internal vhost, /pma/ proxy and ticket secret).
+func phpMyAdminEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("SIGARDAPANEL_PHPMYADMIN")), "enabled")
 }
 
 // isReservedMySQLUser reports system and panel-internal MySQL accounts that

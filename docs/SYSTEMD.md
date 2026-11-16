@@ -74,7 +74,8 @@ The first group is written by the installer; the rest are optional.
 | `SIGARDAPANEL_API_TLS_CERT`, `SIGARDAPANEL_API_TLS_KEY` | empty | - | Serve the API over TLS directly (not needed behind nginx) |
 | `SIGARDAPANEL_API_READ_TIMEOUT`, `SIGARDAPANEL_API_WRITE_TIMEOUT` | `10`, `30` | - | Seconds |
 | `SIGARDAPANEL_MYSQL_ROOT_PASSWORD` | empty | - | If set, a default MySQL/MariaDB database server is registered on first start |
-| `SIGARDAPANEL_PMA_SECRET` | empty | - | Shared secret (min. 32 characters) for the signed phpMyAdmin sign-on bridge |
+| `SIGARDAPANEL_PHPMYADMIN` | empty | set by `install.sh phpmyadmin` | `enabled`: phpMyAdmin is set up on the panel host; the panel shows its buttons and hands out sign-on accounts |
+| `SIGARDAPANEL_PMA_SECRET` | empty | in `web.env` (`install.sh phpmyadmin`) | Web process only: key (min. 32 characters) that encrypts phpMyAdmin tickets |
 | `MEMBER_DB_HOST` | empty | commented out | Enables the optional member area (PostgreSQL) |
 | `MEMBER_DB_PORT`, `MEMBER_DB_USER`, `MEMBER_DB_PASSWORD`, `MEMBER_DB_NAME` | `5432`, `sigardapanel`, empty, `sigardapanel_member` | commented out | Member area connection |
 | `SIGARDAPANEL_DEV` | empty | - | `true` only for local development (non-secure cookies, no rate limits, skips Cloudflare token checks). Never set it in production. |
