@@ -173,7 +173,7 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
-User=root
+Environment=HOME=/root
 EnvironmentFile=/etc/sigardapanel/agent.env
 ExecStart=/usr/local/bin/sigardapanel agent
 Restart=on-failure

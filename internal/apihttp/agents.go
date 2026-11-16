@@ -535,7 +535,7 @@ Wants=nginx.service
 
 [Service]
 Type=simple
-User=root
+Environment=HOME=/root
 EnvironmentFile=$CONFIG_DIR/agent.env
 ExecStart=$INSTALL_DIR/sigardapanel agent
 Restart=always
