@@ -103,7 +103,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+Environment=HOME=/root
 EnvironmentFile=/etc/sigardapanel/agent.env
 ExecStart=/usr/local/bin/sigardapanel agent
 Restart=always
@@ -120,6 +120,16 @@ WantedBy=multi-user.target
 
 The agent runs as root because it manages nginx, packages, services, the
 firewall and Docker. Every task endpoint requires the bearer token.
+
+Root is the default user of a system service, so the unit does not say
+`User=root`. Do not add it: with systemd 255, an explicit `User=root`
+together with `NoNewPrivileges=true` and any seccomp option
+(`LockPersonality`, `SystemCallArchitectures`, `RestrictAddressFamilies`)
+starts the agent without `CAP_SETUID`, and every task that runs a command as
+another account fails with "operation not permitted" (PostgreSQL through the
+`postgres` account, git deploys as the site owner, the site terminal,
+database restores). `Environment=HOME=/root` keeps what `User=root` set:
+the MySQL client reads root's `~/.my.cnf`.
 
 ### `agent.env`
 
