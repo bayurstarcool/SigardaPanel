@@ -27,6 +27,8 @@
 #                         the master panel uses its private repository)
 #   SIGARDA_UPDATE_TOKEN  read-only GitHub token for a private release repository
 #                         (default: SIGARDAPANEL_UPDATE_TOKEN in /etc/sigardapanel/panel.env)
+#   SIGARDA_UPDATE_TOKEN_FILE  file holding that token (set by the agent for a
+#                         token from a super admin's GitHub connection)
 #   FORCE=1               with "update": reinstall even if already on the target version
 set -euo pipefail
 umask 022
@@ -95,9 +97,13 @@ install_packages() {
 }
 
 # update_token: the token for a private release repository, if any. It is
-# read from the root-only panel.env, never passed on a command line.
+# read from the root-only panel.env (or a 0600 file the agent writes for a
+# token from a super admin's GitHub connection), never passed on a command line.
 update_token() {
   if [ -n "${SIGARDA_UPDATE_TOKEN:-}" ]; then printf '%s' "$SIGARDA_UPDATE_TOKEN"; return; fi
+  if [ -n "${SIGARDA_UPDATE_TOKEN_FILE:-}" ] && [ -f "$SIGARDA_UPDATE_TOKEN_FILE" ]; then
+    tr -d '\r\n' < "$SIGARDA_UPDATE_TOKEN_FILE"; return
+  fi
   [ -f "$CONF_DIR/panel.env" ] || return 0
   grep -E '^SIGARDAPANEL_UPDATE_TOKEN=' "$CONF_DIR/panel.env" | tail -n1 | cut -d= -f2- | tr -d '"'"'"'\r' || true
 }

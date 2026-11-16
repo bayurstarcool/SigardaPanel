@@ -359,3 +359,40 @@ func TestAgentUpdateRefusedOnPanelHost(t *testing.T) {
 		}
 	}
 }
+
+// A token from a super admin's GitHub connection reaches the installer in a
+// 0600 file named by SIGARDA_UPDATE_TOKEN_FILE, never in the unit's
+// environment (readable by every local user through systemctl show); the
+// wrapper removes the file when the run ends.
+func TestPanelUpdateTokenGoesToAFileNotTheEnvironment(t *testing.T) {
+	h, host, state := newUpdateRouter(t, "1.6.2", true)
+	code, out := doJSON(t, h, "POST", "/tasks/panel/update", `{"tag":"v1.7.0","token":"ghp_secret123"}`)
+	if code != http.StatusAccepted {
+		t.Fatalf("start = %d %v", code, out)
+	}
+	joined := strings.Join(host.lastRun(), " ")
+	if strings.Contains(joined, "ghp_secret123") {
+		t.Fatalf("token on the systemd-run command line: %s", joined)
+	}
+	tokenFile := filepath.Join(state, "update-token")
+	if !strings.Contains(joined, "--setenv=SIGARDA_UPDATE_TOKEN_FILE="+tokenFile) || !strings.Contains(joined, `rm -f "$SIGARDA_UPDATE_TOKEN_FILE"`) {
+		t.Fatalf("token file not passed or not removed after the run: %s", joined)
+	}
+	fi, err := os.Stat(tokenFile)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("token file: %v %v", fi, err)
+	}
+	if raw, _ := os.ReadFile(tokenFile); strings.TrimSpace(string(raw)) != "ghp_secret123" {
+		t.Fatalf("token file content = %q", raw)
+	}
+
+	// Without a token nothing is written.
+	h2, host2, state2 := newUpdateRouter(t, "1.6.2", true)
+	doJSON(t, h2, "POST", "/tasks/panel/update", `{"tag":"v1.7.0"}`)
+	if strings.Contains(strings.Join(host2.lastRun(), " "), "--setenv=SIGARDA_UPDATE_TOKEN_FILE") {
+		t.Fatal("token file passed without a token")
+	}
+	if _, err := os.Stat(filepath.Join(state2, "update-token")); err == nil {
+		t.Fatal("token file written without a token")
+	}
+}

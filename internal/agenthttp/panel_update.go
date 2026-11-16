@@ -297,7 +297,7 @@ func (u *panelUpdater) current(ctx context.Context) PanelUpdateStatus {
 
 // start launches the update to tag in the background. auto marks a start
 // by the panel's automatic updater, which respects a rollback hold.
-func (u *panelUpdater) start(ctx context.Context, tag string, auto bool) (int, string) {
+func (u *panelUpdater) start(ctx context.Context, tag string, auto bool, token string) (int, string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if reason := u.unsupported(); reason != "" {
@@ -318,13 +318,30 @@ func (u *panelUpdater) start(ctx context.Context, tag string, auto bool) (int, s
 	}
 	args := []string{"update"}
 	// The installer fetches the release from this build's repository; a
-	// private repository's token is read by the installer from panel.env.
+	// private repository's token is read by the installer from panel.env,
+	// or, for a token from a super admin's GitHub connection, from a 0600
+	// file in the state directory that the run removes when it ends (never
+	// an environment variable: a transient unit's environment is readable
+	// by every local user through systemctl show).
 	env := []string{"SIGARDA_VERSION=" + tag, "SIGARDA_REPO=" + selfupdate.Repo}
 	desc := "SigardaPanel update to " + tag
+	tokenFile := ""
 	if u.kind == "agent" {
 		args, env, desc = []string{tag}, nil, "SigardaPanel agent update to "+tag
+	} else if token = strings.TrimSpace(token); token != "" {
+		tokenFile = u.path("update-token")
+		if err := os.MkdirAll(u.stateDir, 0o700); err != nil {
+			return http.StatusInternalServerError, "cannot create the update state directory: " + err.Error()
+		}
+		if err := writeFileAtomic(tokenFile, []byte(token+"\n"), 0o600); err != nil {
+			return http.StatusInternalServerError, "cannot write the update token: " + err.Error()
+		}
+		env = append(env, "SIGARDA_UPDATE_TOKEN_FILE="+tokenFile)
 	}
 	code, msg := u.launch(ctx, panelUpdateMeta{Action: "update", Tag: tag, FromVersion: u.version}, desc, args, env)
+	if code != http.StatusAccepted && tokenFile != "" {
+		_ = os.Remove(tokenFile)
+	}
 	if code == http.StatusAccepted && !auto {
 		_ = os.Remove(u.path("hold"))
 	}
@@ -402,7 +419,7 @@ func (u *panelUpdater) launch(ctx context.Context, meta panelUpdateMeta, desc st
 
 	// The exit code is written through a temp file + rename so a reader never
 	// sees a half-written value.
-	const wrapper = `s="$1"; l="$2"; x="$3"; shift 3; bash "$s" "$@" >"$l" 2>&1; rc=$?; echo "$rc" >"$x.tmp" && mv -f "$x.tmp" "$x"`
+	const wrapper = `s="$1"; l="$2"; x="$3"; shift 3; bash "$s" "$@" >"$l" 2>&1; rc=$?; if [ -n "${SIGARDA_UPDATE_TOKEN_FILE:-}" ]; then rm -f "$SIGARDA_UPDATE_TOKEN_FILE"; fi; echo "$rc" >"$x.tmp" && mv -f "$x.tmp" "$x"`
 	cmd := []string{
 		"--unit=" + u.unit,
 		"--collect",
@@ -707,11 +724,15 @@ func startUpdateTask(c *echo.Context, u *panelUpdater) error {
 	var req struct {
 		Tag  string `json:"tag"`
 		Auto bool   `json:"auto"`
+		// Token: a GitHub token from a super admin's connection, for a
+		// private release repository (only sent over the panel host's own
+		// loopback agent; see panelAgentStart).
+		Token string `json:"token,omitempty"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]any{"ok": false, "message": "invalid payload"})
 	}
-	code, msg := u.start(c.Request().Context(), strings.TrimSpace(req.Tag), req.Auto)
+	code, msg := u.start(c.Request().Context(), strings.TrimSpace(req.Tag), req.Auto, req.Token)
 	if code != http.StatusAccepted {
 		return c.JSON(code, map[string]any{"ok": false, "message": msg})
 	}
