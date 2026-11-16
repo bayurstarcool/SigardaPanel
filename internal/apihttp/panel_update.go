@@ -121,7 +121,46 @@ func panelAgentStatus(ctx context.Context) (map[string]any, error) {
 }
 
 func panelAgentStart(ctx context.Context, tag string, auto bool) (int, map[string]any, error) {
-	return panelAgentCall(ctx, http.MethodPost, "/tasks/panel/update", map[string]any{"tag": tag, "auto": auto})
+	body := map[string]any{"tag": tag, "auto": auto}
+	// A token from a super admin's GitHub connection goes to the panel
+	// host's own agent (loopback), which hands it to the installer in a 0600
+	// file; a token in panel.env is read by the installer itself.
+	if t := selfupdate.ConnectedToken(); t != "" {
+		body["token"] = t
+	}
+	return panelAgentCall(ctx, http.MethodPost, "/tasks/panel/update", body)
+}
+
+// githubConnectionToken returns the token of the oldest GitHub (github.com)
+// connection of a super admin, or "". It is selfupdate.TokenSource, so a
+// panel whose owner connected GitHub can read a private release repository
+// without SIGARDAPANEL_UPDATE_TOKEN.
+func githubConnectionToken(s *store.Store) func() string {
+	return func() string {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rows, err := s.DB().QueryContext(ctx, `SELECT c.id FROM git_connections c JOIN users u ON u.id = c.user_id
+			WHERE u.role = 'super_admin' AND c.provider = 'github'
+			  AND (c.base_url = '' OR c.base_url = 'https://github.com' OR c.base_url = 'https://api.github.com')
+			ORDER BY c.id`)
+		if err != nil {
+			return ""
+		}
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if rows.Scan(&id) == nil {
+				ids = append(ids, id)
+			}
+		}
+		rows.Close()
+		for _, id := range ids {
+			if c, err := s.Git.GetConnection(ctx, id); err == nil && c != nil && strings.TrimSpace(c.Token) != "" {
+				return c.Token
+			}
+		}
+		return ""
+	}
 }
 
 // panelAgentCall calls the panel host's own agent.

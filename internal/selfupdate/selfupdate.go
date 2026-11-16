@@ -24,11 +24,36 @@ const PublicRepo = "bayurstarcool/SigardaPanel"
 
 // Repo is where this build looks for its own releases: the public
 // repository, or the master panel's private one (set by that build). A
-// private repository needs a read-only token in SIGARDAPANEL_UPDATE_TOKEN.
+// private repository needs a read-only token: SIGARDAPANEL_UPDATE_TOKEN, or
+// the GitHub account a super admin connected (see TokenSource).
 var Repo = PublicRepo
 
+// TokenSource supplies a GitHub token when SIGARDAPANEL_UPDATE_TOKEN is not
+// set. The API points it at a super admin's GitHub connection (Settings →
+// Git), so a panel whose owner connected GitHub can read its private release
+// repository without a separate token.
+var TokenSource func() string
+
 // updateToken is the GitHub token for a private release repository.
-func updateToken() string { return strings.TrimSpace(os.Getenv("SIGARDAPANEL_UPDATE_TOKEN")) }
+func updateToken() string {
+	if t := strings.TrimSpace(os.Getenv("SIGARDAPANEL_UPDATE_TOKEN")); t != "" {
+		return t
+	}
+	if TokenSource != nil {
+		return strings.TrimSpace(TokenSource())
+	}
+	return ""
+}
+
+// ConnectedToken is the token from TokenSource when SIGARDAPANEL_UPDATE_TOKEN
+// is not set ("" otherwise): the installer reads panel.env itself, so only a
+// token from a GitHub connection has to be handed to it.
+func ConnectedToken() string {
+	if strings.TrimSpace(os.Getenv("SIGARDAPANEL_UPDATE_TOKEN")) != "" || TokenSource == nil {
+		return ""
+	}
+	return strings.TrimSpace(TokenSource())
+}
 
 // tagRe matches the tags scripts/release.sh creates (vX.Y.Z).
 var tagRe = regexp.MustCompile(`^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
@@ -234,7 +259,7 @@ func (c *Checker) fetch(ctx context.Context) (*Release, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusNotFound && repo != PublicRepo {
-			return nil, fmt.Errorf("GitHub answered HTTP 404 for %s: a private release repository needs a read-only token in SIGARDAPANEL_UPDATE_TOKEN", repo)
+			return nil, fmt.Errorf("GitHub answered HTTP 404 for %s: a private release repository needs a read-only token: SIGARDAPANEL_UPDATE_TOKEN in panel.env, or a super admin's GitHub connection (Git integration) that can read %s", repo, repo)
 		}
 		return nil, fmt.Errorf("GitHub answered HTTP %d", resp.StatusCode)
 	}

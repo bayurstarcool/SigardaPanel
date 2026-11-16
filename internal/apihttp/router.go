@@ -15,12 +15,16 @@ import (
 	"sigardapanel/internal/buildinfo"
 	"sigardapanel/internal/httpjson"
 	"sigardapanel/internal/member"
+	"sigardapanel/internal/selfupdate"
 	"sigardapanel/internal/store"
 )
 
 // NewRouter returns a new Echo router wired with the given store and database.
 func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	e := echo.New()
+	// Panel update: a super admin's GitHub connection can read a private
+	// release repository when SIGARDAPANEL_UPDATE_TOKEN is not set.
+	selfupdate.TokenSource = githubConnectionToken(s)
 	// Only trust X-Real-IP when it comes from the local nginx proxy; a client
 	// must not be able to spoof its IP via X-Forwarded-For to dodge rate limits
 	// or poison audit logs.
