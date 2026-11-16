@@ -230,6 +230,8 @@ func (h *dbHandler) listDatabases(c *echo.Context) error {
 			"charset":     db.Charset,
 			"collation":   db.Collation,
 			"size_bytes":  db.SizeBytes,
+			"managed_by":  db.ManagedBy,
+			"external":    db.IsExternal(),
 			"created_at":  db.CreatedAt,
 			"server_host": serverHost,
 			"server_port": serverPort,
@@ -286,6 +288,8 @@ func (h *dbHandler) listAllDatabases(c *echo.Context) error {
 			"charset":     db.Charset,
 			"collation":   db.Collation,
 			"size_bytes":  db.SizeBytes,
+			"managed_by":  db.ManagedBy,
+			"external":    db.IsExternal(),
 			"created_at":  db.CreatedAt,
 			"server_host": serverHost,
 			"server_port": serverPort,
@@ -322,6 +326,12 @@ func (h *dbHandler) rotateDBUserPassword(c *echo.Context) error {
 	dbUser, _ := h.store.DBUsers.GetByID(c.Request().Context(), uID)
 	if dbUser == nil || dbUser.DatabaseID != dbID {
 		return echo.NewHTTPError(http.StatusNotFound, "user not found")
+	}
+	// An external database's application signs in with this password: a new
+	// one would break it. The same holds when the account also serves an
+	// external database.
+	if database.IsExternal() || h.usedByExternalDatabase(c.Request().Context(), dbUser.Username) {
+		return errExternalDatabase()
 	}
 	// The account may also serve other tenants' databases: only rotate a
 	// password the caller controls everywhere it is used.
@@ -428,6 +438,8 @@ func (h *dbHandler) getDatabase(c *echo.Context) error {
 			"charset":    database.Charset,
 			"collation":  database.Collation,
 			"size_bytes": database.SizeBytes,
+			"managed_by": database.ManagedBy,
+			"external":   database.IsExternal(),
 			"created_at": database.CreatedAt,
 		},
 		RequestID: rid,
@@ -459,6 +471,12 @@ func (h *dbHandler) deleteDatabase(c *echo.Context) error {
 	}
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "database not found")
+	}
+
+	// An external database (imported, created outside the panel) is only
+	// removed from the panel: no DROP, no agent job; its accounts stay too.
+	if database.IsExternal() {
+		return h.unlinkExternalDatabase(c, rid, userID, database)
 	}
 
 	// Drop from MySQL directly first (panel host only; the job below runs on
@@ -525,6 +543,9 @@ func (h *dbHandler) createDBUser(c *echo.Context) error {
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "database not found")
+	}
+	if database.IsExternal() {
+		return errExternalDatabase()
 	}
 
 	var body struct {
@@ -709,6 +730,22 @@ func (h *dbHandler) deleteDBUser(c *echo.Context) error {
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "user not found")
+	}
+
+	// An external database's account belongs to its application: only the
+	// panel record (and the stored password) goes; the account and its
+	// grants stay on the server (no DROP USER, no REVOKE, no agent job).
+	if database.IsExternal() {
+		if err := h.store.DBUsers.Delete(c.Request().Context(), dbUser.ID); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		h.audit.RecordAction(c.Request().Context(), userID, "dbuser_unlink", "dbuser", dbUser.ID, map[string]any{
+			"database": database.Name, "username": dbUser.Username, "external": true,
+		})
+		return c.JSON(http.StatusOK, httpjson.Success{
+			Data:      map[string]any{"user_id": dbUser.ID, "external": true},
+			RequestID: rid,
+		})
 	}
 
 	// The same account may be assigned to other databases: then only its
@@ -955,6 +992,7 @@ func (h *dbHandler) listAllDBUsers(c *echo.Context) error {
 				"database_id":   u.DatabaseID,
 				"database_name": database.Name,
 				"database_type": database.Type,
+				"external":      database.IsExternal(),
 				"site_id":       database.SiteID,
 				"domain":        domain,
 				"username":      u.Username,
@@ -998,6 +1036,9 @@ func (h *dbHandler) updateDBUser(c *echo.Context) error {
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "user not found")
+	}
+	if database.IsExternal() {
+		return errExternalDatabase()
 	}
 	if database.Type == "mysql" && !h.panelMySQL(c.Request().Context(), site) {
 		return errRemoteMySQL("Changing a user's host or privileges")
@@ -1110,6 +1151,9 @@ func (h *dbHandler) updateDatabase(c *echo.Context) error {
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "database not found")
 	}
+	if database.IsExternal() {
+		return errExternalDatabase()
+	}
 
 	var body struct {
 		Charset   *string `json:"charset"`
@@ -1182,6 +1226,9 @@ func (h *dbHandler) grantExistingUser(c *echo.Context) error {
 	site, _ := h.store.Sites.GetByID(c.Request().Context(), database.SiteID)
 	if !h.canManage(c.Request().Context(), sess, site) {
 		return h.denyDB(c.Request().Context(), sess, site, "database not found")
+	}
+	if database.IsExternal() {
+		return errExternalDatabase()
 	}
 
 	var body struct {

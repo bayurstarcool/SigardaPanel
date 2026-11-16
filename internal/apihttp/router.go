@@ -403,6 +403,10 @@ func NewRouter(s *store.Store, db *sql.DB, memberDB *sql.DB) *echo.Echo {
 	// Server-wide MySQL management: super_admin only.
 	e.GET("/api/v1/database-server", dbServerH.getDBServer, RequireAuth(s), RequirePermission(s, "database.admin"))
 	e.POST("/api/v1/database-server/import", dbServerH.importDatabases, RequireAuth(s), RequirePermission(s, "database.admin"))
+	// Import databases created outside the panel as "external" databases
+	// (listed and used, never changed on the server): super_admin only.
+	e.GET("/api/v1/servers/:id/databases/discover", dbH.discoverDatabases, RequireAuth(s), RequireUserSession, RequirePermission(s, "database.admin"))
+	e.POST("/api/v1/databases/import", dbH.importDatabase, RequireAuth(s), RequireUserSession, RequirePermission(s, "database.admin"))
 
 	// Audit log endpoint (admin only)
 	auditH := audit.NewHandler(s.AuditLogs, scopeAuditLogs(s))

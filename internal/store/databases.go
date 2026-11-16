@@ -16,7 +16,23 @@ type Database struct {
 	Charset   string
 	Collation string
 	SizeBytes int64
+	// ManagedBy is "sigardapanel" for databases the panel created and
+	// "external" for databases imported from a server (created outside the
+	// panel). The panel never drops, alters or re-grants an external database.
+	ManagedBy string
 	CreatedAt time.Time
+}
+
+// Database ownership values for Database.ManagedBy.
+const (
+	DatabaseManagedByPanel    = "sigardapanel"
+	DatabaseManagedByExternal = "external"
+)
+
+// IsExternal reports whether the database was imported from a server
+// rather than created by the panel.
+func (d *Database) IsExternal() bool {
+	return d != nil && d.ManagedBy == DatabaseManagedByExternal
 }
 
 // DBUser represents a database user with access to a specific database.
@@ -84,10 +100,13 @@ func (s *SQLiteDatabaseStore) Create(ctx context.Context, db *Database) error {
 	if db.Collation == "" {
 		db.Collation = "utf8mb4_unicode_ci"
 	}
+	if db.ManagedBy == "" {
+		db.ManagedBy = DatabaseManagedByPanel
+	}
 
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO databases (site_id, name, type, charset, collation, size_bytes) VALUES (?, ?, ?, ?, ?, ?)`,
-		db.SiteID, db.Name, db.Type, db.Charset, db.Collation, db.SizeBytes,
+		`INSERT INTO databases (site_id, name, type, charset, collation, size_bytes, managed_by) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		db.SiteID, db.Name, db.Type, db.Charset, db.Collation, db.SizeBytes, db.ManagedBy,
 	)
 	if err != nil {
 		return fmt.Errorf("insert database: %w", err)
@@ -103,21 +122,21 @@ func (s *SQLiteDatabaseStore) Create(ctx context.Context, db *Database) error {
 // GetByID retrieves a database by ID. Returns (nil, nil) if not found.
 func (s *SQLiteDatabaseStore) GetByID(ctx context.Context, id int64) (*Database, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, site_id, name, type, charset, collation, size_bytes, created_at FROM databases WHERE id = ?`, id)
+		`SELECT id, site_id, name, type, charset, collation, size_bytes, managed_by, created_at FROM databases WHERE id = ?`, id)
 	return scanDatabase(row)
 }
 
 // GetByName retrieves a database by name. Returns (nil, nil) if not found.
 func (s *SQLiteDatabaseStore) GetByName(ctx context.Context, name string) (*Database, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, site_id, name, type, charset, collation, size_bytes, created_at FROM databases WHERE name = ?`, name)
+		`SELECT id, site_id, name, type, charset, collation, size_bytes, managed_by, created_at FROM databases WHERE name = ?`, name)
 	return scanDatabase(row)
 }
 
 // ListBySite returns databases for a site, ordered by id ASC.
 func (s *SQLiteDatabaseStore) ListBySite(ctx context.Context, siteID int64) ([]Database, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, site_id, name, type, charset, collation, size_bytes, created_at FROM databases WHERE site_id = ? ORDER BY id ASC`, siteID)
+		`SELECT id, site_id, name, type, charset, collation, size_bytes, managed_by, created_at FROM databases WHERE site_id = ? ORDER BY id ASC`, siteID)
 	if err != nil {
 		return nil, fmt.Errorf("query databases: %w", err)
 	}
@@ -126,7 +145,7 @@ func (s *SQLiteDatabaseStore) ListBySite(ctx context.Context, siteID int64) ([]D
 	var out []Database
 	for rows.Next() {
 		var db Database
-		if err := rows.Scan(&db.ID, &db.SiteID, &db.Name, &db.Type, &db.Charset, &db.Collation, &db.SizeBytes, &db.CreatedAt); err != nil {
+		if err := rows.Scan(&db.ID, &db.SiteID, &db.Name, &db.Type, &db.Charset, &db.Collation, &db.SizeBytes, &db.ManagedBy, &db.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan database: %w", err)
 		}
 		out = append(out, db)
@@ -140,7 +159,7 @@ func (s *SQLiteDatabaseStore) ListBySite(ctx context.Context, siteID int64) ([]D
 // ListAll returns all databases across all sites, ordered by id ASC.
 func (s *SQLiteDatabaseStore) ListAll(ctx context.Context) ([]Database, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, site_id, name, type, charset, collation, size_bytes, created_at FROM databases ORDER BY id ASC`)
+		`SELECT id, site_id, name, type, charset, collation, size_bytes, managed_by, created_at FROM databases ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query all databases: %w", err)
 	}
@@ -149,7 +168,7 @@ func (s *SQLiteDatabaseStore) ListAll(ctx context.Context) ([]Database, error) {
 	var out []Database
 	for rows.Next() {
 		var db Database
-		if err := rows.Scan(&db.ID, &db.SiteID, &db.Name, &db.Type, &db.Charset, &db.Collation, &db.SizeBytes, &db.CreatedAt); err != nil {
+		if err := rows.Scan(&db.ID, &db.SiteID, &db.Name, &db.Type, &db.Charset, &db.Collation, &db.SizeBytes, &db.ManagedBy, &db.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan database: %w", err)
 		}
 		out = append(out, db)
@@ -289,7 +308,7 @@ func (s *SQLiteDBUserStore) Delete(ctx context.Context, id int64) error {
 
 func scanDatabase(row *sql.Row) (*Database, error) {
 	var db Database
-	err := row.Scan(&db.ID, &db.SiteID, &db.Name, &db.Type, &db.Charset, &db.Collation, &db.SizeBytes, &db.CreatedAt)
+	err := row.Scan(&db.ID, &db.SiteID, &db.Name, &db.Type, &db.Charset, &db.Collation, &db.SizeBytes, &db.ManagedBy, &db.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

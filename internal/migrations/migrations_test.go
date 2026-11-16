@@ -88,3 +88,51 @@ func TestUp_Idempotent(t *testing.T) {
 		t.Errorf("Up() second run error = %v, want nil (idempotent)", err)
 	}
 }
+
+// Migration 061 adds databases.managed_by ("sigardapanel" for existing rows)
+// and is safe to run on a database that already has the column.
+func TestDatabaseManagedByMigration(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "sigardapanel-migrations-test-*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+	defer os.Remove(tmpPath + "-wal")
+	defer os.Remove(tmpPath + "-shm")
+
+	database, err := db.Open(tmpPath)
+	if err != nil {
+		t.Fatalf("db.Open() error = %v", err)
+	}
+	defer db.Close(database)
+
+	before := AllMigrations[:len(AllMigrations)-1]
+	if err := Up(database, before); err != nil {
+		t.Fatalf("Up() error = %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO servers (name, hostname, agent_token) VALUES ('s', 'h', 't')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO sites (server_id, name, domain, runtime, root_path) VALUES (1, 'x', 'x.example.com', 'php', '/srv/x')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO databases (site_id, name, type) VALUES (1, 'old', 'mysql')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Up(database, AllMigrations); err != nil {
+		t.Fatalf("Up() with 061 error = %v", err)
+	}
+	var managedBy string
+	if err := database.QueryRow(`SELECT managed_by FROM databases WHERE name = 'old'`).Scan(&managedBy); err != nil || managedBy != "sigardapanel" {
+		t.Fatalf("managed_by = %q, %v", managedBy, err)
+	}
+	// Re-running the migration itself (column present) is a no-op.
+	if _, err := database.Exec(`DELETE FROM schema_migrations WHERE version = 61`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Up(database, AllMigrations); err != nil {
+		t.Fatalf("re-run 061 error = %v", err)
+	}
+}

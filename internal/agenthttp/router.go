@@ -297,6 +297,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/backup/delete", r.backupDeleteTask)
 	tasks.POST("/database/create", r.databaseCreateTask)
 	tasks.POST("/database/delete", r.databaseDeleteTask)
+	tasks.POST("/databases/discover", r.databaseDiscoverTask) // read only: databases on this server (import)
 	tasks.POST("/dbuser/create", r.dbUserCreateTask)
 	tasks.POST("/dbuser/delete", r.dbUserDeleteTask)
 	tasks.POST("/app/start", r.appStartTask)

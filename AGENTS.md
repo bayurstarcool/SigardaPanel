@@ -349,6 +349,8 @@ helpers in `helpers.go`), `internal/cli` (client, config, output); tests use
 - `GET /api/v1/databases/:id/available-users` — Available users
 - `GET /api/v1/db-users` — List all DB users
 - `PATCH /api/v1/db-users/:id` — Update DB user
+- `GET /api/v1/servers/:id/databases/discover` — Databases that exist on a server (agent `/tasks/databases/discover`), each with `registered`/`importable` (super_admin, `database.admin`)
+- `POST /api/v1/databases/import` — Attach an existing database to a site as **external** `{site_id, type, name, username?, password?}` (must be on the site's server, not yet in the panel; credentials are checked by signing in through the agent's viewer). External databases (`databases.managed_by = 'external'`) are never changed on the server: delete (database, account, or with the site) removes only panel records; charset, create/grant/rotate/host changes answer 409; the worker refuses `database.*`/`dbuser.*` jobs for them. Viewer, manager, backups and phpMyAdmin use the stored account
 - `GET /api/v1/databases/:id/viewer/tables|columns|rows` — Read-only database viewer (`rows`: `table, schema, limit, offset, order_by, desc, filters=[{column,op,value}]`)
 
 ### Backups (16 endpoints)
