@@ -84,6 +84,7 @@ installed; use [`update`](#updating) there instead.
 | `install` (default) | Fresh install of the latest (or `SIGARDA_VERSION`) release. |
 | `update` | Update an existing install with backup and automatic rollback. |
 | `verify` | Print the release-signing public key the script trusts. |
+| `phpmyadmin [off]` | Add phpMyAdmin on the panel host (see [phpMyAdmin](#phpmyadmin-optional)), or remove it from the panel with `off`. |
 | `help` | Show the built-in usage text. |
 
 | Variable | Default | Meaning |
@@ -95,6 +96,7 @@ installed; use [`update`](#updating) there instead.
 | `ADMIN_EMAIL` | `admin@localhost` | E-mail of the first account. |
 | `ADMIN_PASS` | random, 20 characters | Password of the first account (min. 8 characters). |
 | `INSTALL_FIREWALL` | `no` | `yes`: install `ufw`, allow your SSH port, 80 and 443, and enable it. Existing rules are kept. |
+| `INSTALL_PHPMYADMIN` | `no` | `yes`: also run `install.sh phpmyadmin` at the end (needs MariaDB/MySQL on this host). |
 | `SIGARDA_ASSET_BASE` | GitHub release URL | Download the assets from another location (mirror, `file:///path`). Requires `SIGARDA_VERSION`. Signature verification still applies. |
 | `FORCE` | empty | With `update`: `FORCE=1` reinstalls even when already on the target version. |
 
@@ -256,7 +258,12 @@ certificate) or **Full**; "Flexible" causes a redirect loop.
 | `SIGARDAPANEL_UPDATE_TOKEN` | not set | Read-only GitHub token when the panel's releases come from a private repository (the master panel). Used to check for and download updates; never needed for public releases. |
 | `SIGARDAPANEL_ALLOW_MEMBER_SIGNUP` | not set (`false`) | `true`: member (SaaS customer) sign-up on `/register` (also needs the member database, `MEMBER_DB_*`). |
 | `SIGARDAPANEL_ALLOW_PRIVATE_AGENTS` | not set (`false`) | `true`: servers added with the [install command](#option-a-install-command) may register a private (RFC 1918 / ULA) address. See [Private networks](#private-networks). |
+| `SIGARDAPANEL_PHPMYADMIN` | not set | `enabled` (written by `install.sh phpmyadmin`): phpMyAdmin is available on this panel. |
 | `MEMBER_DB_*` | commented out | Optional member area (PostgreSQL) |
+
+`/etc/sigardapanel/web.env` (only with phpMyAdmin; read by `sigardapanel-web`
+through the drop-in `sigardapanel-web.service.d/phpmyadmin.conf`):
+`SIGARDAPANEL_PMA_SECRET`, the key that encrypts phpMyAdmin tickets.
 
 `/etc/sigardapanel/agent.env` (read by `sigardapanel-agent`):
 `SIGARDAPANEL_AGENT_ADDR=127.0.0.1:7710` and `SIGARDAPANEL_AGENT_TOKEN`.
@@ -271,6 +278,36 @@ key they were encrypted with. The API takes the key from
 file `encryption.key` next to the database (or `SIGARDAPANEL_ENCRYPTION_KEY_FILE`),
 which it generates with mode 600 on the first start of a new database. Never
 change or lose the key, and always back it up together with the database.
+
+## Databases: built-in manager and phpMyAdmin (optional)
+
+Every database has a built-in manager (**Databases → Manage**) for MySQL/MariaDB
+and PostgreSQL alike: browse and filter rows, insert/edit/delete rows (by primary
+key), view columns, indexes and foreign keys, an SQL console (read-only by
+default) and export/import of `.sql` files. It always connects with one of the
+database's own accounts whose password the panel stores, so it can do exactly
+what that account can. Row edits, SQL that changes data, exports and imports are
+written to the audit log.
+
+<a id="phpmyadmin-optional"></a>
+### phpMyAdmin
+
+phpMyAdmin is not installed by default. To add it for MySQL/MariaDB databases on
+the panel host:
+
+```bash
+sudo bash install.sh phpmyadmin        # or INSTALL_PHPMYADMIN=yes on a fresh install
+```
+
+This installs the distribution's `phpmyadmin` package with PHP-FPM (no Apache,
+no phpMyAdmin storage database), serves it on an internal vhost
+(`127.0.0.1:8081`, own FPM pool) and adds `/pma/` to the panel's nginx site
+(`/etc/nginx/snippets/sigardapanel-pma.conf`). There is no phpMyAdmin login page:
+the **phpMyAdmin** button asks the panel for a one-time ticket and phpMyAdmin
+receives the database's own account from the panel (HTTP auth), so root and
+other databases stay out of reach. Running the command again is safe.
+`sudo bash install.sh phpmyadmin off` removes it from the panel (the package
+stays installed). PostgreSQL databases use the built-in manager.
 
 ## Using a domain and Let's Encrypt later
 

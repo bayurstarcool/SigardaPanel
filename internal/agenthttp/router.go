@@ -149,6 +149,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	e := echo.New()
 	// Uploads are capped at 32 MB (maxUploadBytes); nothing else is near
 	// that. A cap keeps a client from streaming unbounded bodies at root.
+	// Larger SQL imports read a file in the site's folder instead (dbmanager.go).
 	e.Use(middleware.BodyLimit(maxUploadBytes + 8<<20))
 
 	r := &Router{
@@ -324,6 +325,9 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/vhost/put", r.vhostPutTask)
 	tasks.POST("/site/usage", r.siteUsageTask)
 	tasks.POST("/db/view", r.viewerTask)
+	tasks.POST("/db/manage", r.managerTask)
+	tasks.POST("/db/export", r.exportTask)
+	tasks.POST("/db/import", r.importTask)
 
 	// File manager (operations on a site root on this server)
 	tasks.POST("/files/op", r.filesTask)

@@ -12,6 +12,7 @@
   import { css } from '@codemirror/lang-css';
   import { json } from '@codemirror/lang-json';
   import { python } from '@codemirror/lang-python';
+  import { sql, MySQL, PostgreSQL } from '@codemirror/lang-sql';
   import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
   import { Save } from 'lucide-svelte';
   import { theme as appTheme } from '$lib/theme.svelte';
@@ -29,6 +30,8 @@
     height = '100%',
     hideHeader = false,
     hideFooter = false,
+    /** Ctrl/Cmd+Enter handler (e.g. run a query). */
+    onRun = undefined as ((content: string) => void) | undefined,
   } = $props();
 
   let editorContainer: HTMLDivElement;
@@ -46,6 +49,8 @@
       case 'css': case 'scss': case 'less': return css();
       case 'json': return json();
       case 'python': case 'py': return python();
+      case 'sql': case 'mysql': return sql({ dialect: MySQL });
+      case 'pgsql': case 'postgres': return sql({ dialect: PostgreSQL });
       default: return [];
     }
   }
@@ -85,7 +90,10 @@
       history(),
       bracketMatching(),
       foldGutter(),
-      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+      keymap.of([
+        ...(onRun ? [{ key: 'Mod-Enter', preventDefault: true, run: (v: EditorView) => { onRun?.(v.state.sliceDoc()); return true; } }] : []),
+        ...defaultKeymap, ...historyKeymap, indentWithTab,
+      ]),
       highlightCompartment.of(highlightFor(isDark)),
       getLanguageExtension(language),
       chromeTheme,

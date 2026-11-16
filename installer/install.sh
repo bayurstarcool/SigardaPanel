@@ -6,6 +6,9 @@
 #   sudo bash install.sh rollback [BACKUP|list]
 #                                   return to the state before an update (binary, web, database)
 #   sudo bash install.sh verify     show the release-signing key this script trusts
+#   sudo bash install.sh phpmyadmin [off]
+#                                   add (or remove) phpMyAdmin for MariaDB/MySQL databases on
+#                                   this host; the panel signs users in with the database's account
 #
 # Every download is checked against a minisign signature (public key below) and
 # SHA-256 checksums before anything is installed. There is no option to skip it.
@@ -18,6 +21,7 @@
 #   ADMIN_EMAIL           admin e-mail            (default: admin@localhost)
 #   ADMIN_PASS            admin password          (default: random, printed once)
 #   INSTALL_FIREWALL=yes  allow SSH/80/443 in ufw and enable it (never resets rules)
+#   INSTALL_PHPMYADMIN=yes  also run "phpmyadmin" at the end of the install
 #   SIGARDA_ASSET_BASE    alternative download directory (testing; verification still applies)
 #   SIGARDA_REPO          GitHub repository the releases come from (default below;
 #                         the master panel uses its private repository)
@@ -386,6 +390,9 @@ ${LISTEN6_443}
         deny all;
     }
 
+    # Optional tools (install.sh phpmyadmin writes sigardapanel-pma.conf).
+    include /etc/nginx/snippets/sigardapanel-*.conf;
+
     # Go API (also carries the terminal WebSocket)
     location ^~ /api/v1/ {
         limit_req zone=sigarda_panel burst=30 nodelay;
@@ -530,6 +537,10 @@ do_install() {
   fi
 
   ( umask 077; printf 'url=%s\nuser=%s\npassword=%s\n' "$PUBLIC_URL" "$ADMIN_USER" "$ADMIN_PASS" > /root/.sigardapanel_admin_cred )
+
+  if [ "${INSTALL_PHPMYADMIN:-no}" = "yes" ]; then
+    ( do_phpmyadmin ) || warn "phpMyAdmin was not set up; run later: sudo bash install.sh phpmyadmin"
+  fi
 
   echo
   echo "=============================================================="
@@ -703,11 +714,214 @@ do_rollback() {
   die "Rollback failed and restoring ${current} did not bring the panel back. Backups: ${bk}, ${safety}. Check: journalctl -u sigardapanel-api -u sigardapanel-web"
 }
 
+# ─── phpMyAdmin (optional) ─────────────────────────────────────────────────
+# phpMyAdmin runs behind an internal vhost (127.0.0.1:8081) and is reached
+# only through the panel at /pma/: the panel hands out a one-time ticket
+# (/pma/ticket), nginx asks the web process for the database account on every
+# request (auth_request) and phpMyAdmin gets it as HTTP Basic credentials.
+# There is no phpMyAdmin login page and no root or control-user sign-on.
+PMA_SNIPPET=/etc/nginx/snippets/sigardapanel-pma.conf
+PMA_VHOST=/etc/nginx/sites-available/sigardapanel-pma-internal
+PMA_CONF=/etc/phpmyadmin/conf.d/sigardapanel.php
+PMA_WEB_DROPIN=/etc/systemd/system/sigardapanel-web.service.d/phpmyadmin.conf
+
+env_set() { # <file> <KEY> <value>: replace or append KEY=value
+  local f="$1" k="$2" v="$3"
+  if grep -qE "^${k}=" "$f"; then
+    sed -i "s|^${k}=.*|${k}=${v}|" "$f"
+  else
+    printf '%s=%s\n' "$k" "$v" >> "$f"
+  fi
+}
+
+ensure_pma_include() {
+  local site=/etc/nginx/sites-available/sigardapanel
+  [ -f "$site" ] || die "The panel's nginx site ($site) is missing"
+  grep -q 'snippets/sigardapanel-\*.conf' "$site" && return 0
+  # Panels installed before this option: add the include before the API block.
+  grep -q '# Go API (also carries the terminal WebSocket)' "$site" || die "Cannot find where to add phpMyAdmin in $site; add 'include /etc/nginx/snippets/sigardapanel-*.conf;' to its 443 server block"
+  sed -i 's|^    # Go API (also carries the terminal WebSocket)|    # Optional tools (install.sh phpmyadmin writes sigardapanel-pma.conf).\n    include /etc/nginx/snippets/sigardapanel-*.conf;\n\n    # Go API (also carries the terminal WebSocket)|' "$site"
+}
+
+pma_disable() {
+  rm -f "$PMA_SNIPPET" "/etc/nginx/sites-enabled/$(basename "$PMA_VHOST")" "$PMA_VHOST" "$PMA_WEB_DROPIN"
+  sed -i '/^SIGARDAPANEL_PHPMYADMIN=/d' "$CONF_DIR/panel.env"
+  nginx -t >/dev/null 2>&1 && systemctl reload nginx
+  systemctl daemon-reload
+  systemctl restart sigardapanel-api sigardapanel-web || true
+  ok "phpMyAdmin is no longer reachable through the panel (the phpmyadmin package is left installed: apt-get remove phpmyadmin)"
+}
+
+do_phpmyadmin() {
+  require_root; check_os
+  [ -x "$INSTALL_BIN" ] && [ -f "$CONF_DIR/panel.env" ] || die "SigardaPanel is not installed here. Run: bash install.sh"
+  case "${1:-}" in off|disable|remove) pma_disable; return 0 ;; "" | on) ;; *) die "Use: install.sh phpmyadmin [off]" ;; esac
+  if ! command -v mariadbd >/dev/null && ! command -v mysqld >/dev/null && [ ! -x /usr/sbin/mariadbd ] && [ ! -x /usr/sbin/mysqld ]; then
+    die "No MariaDB/MySQL server on this host. Install MariaDB first (Stack page in the panel, or apt-get install mariadb-server)."
+  fi
+  export DEBIAN_FRONTEND=noninteractive
+  log "Installing phpMyAdmin..."
+  # No database for phpMyAdmin's own storage and no Apache configuration.
+  printf '%s\n' "phpmyadmin phpmyadmin/dbconfig-install boolean false" \
+    "phpmyadmin phpmyadmin/reconfigure-webserver multiselect" | debconf-set-selections
+  apt-get update -qq
+  # php-fpm satisfies phpMyAdmin's PHP dependency (otherwise apt may choose Apache's mod_php).
+  apt-get install -y -qq --no-install-recommends php-fpm phpmyadmin >/dev/null || die "Installing phpMyAdmin failed"
+  local phpv; phpv="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null)"
+  [[ "$phpv" =~ ^[0-9]+\.[0-9]+$ ]] || die "PHP did not install correctly"
+  apt-get install -y -qq --no-install-recommends "php${phpv}-fpm" "php${phpv}-mysql" "php${phpv}-mbstring" "php${phpv}-xml" "php${phpv}-zip" "php${phpv}-gd" "php${phpv}-curl" >/dev/null \
+    || die "Installing PHP ${phpv} extensions for phpMyAdmin failed"
+  [ -d /usr/share/phpmyadmin ] || die "phpMyAdmin files are missing (/usr/share/phpmyadmin)"
+
+  # Own FPM pool (socket used only by the internal vhost).
+  cat > "/etc/php/${phpv}/fpm/pool.d/sigardapanel-pma.conf" <<POOL
+; Managed by the SigardaPanel installer (phpMyAdmin).
+[sigardapanel-pma]
+user = www-data
+group = www-data
+listen = /run/php/sigardapanel-pma.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 8
+pm.process_idle_timeout = 60s
+php_admin_value[upload_max_filesize] = 64M
+php_admin_value[post_max_size] = 64M
+php_admin_value[max_execution_time] = 300
+php_admin_value[memory_limit] = 512M
+POOL
+  systemctl enable "php${phpv}-fpm" >/dev/null 2>&1 || true
+  systemctl restart "php${phpv}-fpm" || die "php${phpv}-fpm did not start"
+
+  local origin; origin="$(grep -E '^SIGARDAPANEL_PUBLIC_URL=' "$CONF_DIR/panel.env" | cut -d= -f2- | tr -d '"'"'"'\r')"
+  install -d -m 755 /etc/phpmyadmin/conf.d
+  local blowfish; blowfish="$(rand_hex 16)"
+  [ -f "$PMA_CONF" ] && blowfish="$(sed -n "s/^\$cfg\['blowfish_secret'\] = '\([0-9a-f]\{32\}\)';$/\1/p" "$PMA_CONF")"
+  [ -n "$blowfish" ] || blowfish="$(rand_hex 16)"
+  cat > "$PMA_CONF" <<PHP
+<?php
+// Managed by the SigardaPanel installer. Sign-on comes from the panel (/pma/ticket):
+// nginx passes the database's own account as HTTP Basic credentials.
+\$cfg['blowfish_secret'] = '${blowfish}';
+\$cfg['Servers'][1]['auth_type'] = 'http';
+\$cfg['Servers'][1]['host'] = 'localhost';
+\$cfg['Servers'][1]['AllowRoot'] = false;
+\$cfg['Servers'][1]['AllowNoPassword'] = false;
+\$cfg['Servers'][1]['hide_db'] = '^(information_schema|performance_schema|mysql|sys|phpmyadmin)\$';
+\$cfg['PmaAbsoluteUri'] = '${origin}/pma/';
+\$cfg['VersionCheck'] = false;
+\$cfg['SendErrorReports'] = 'never';
+\$cfg['ShowServerInfo'] = false;
+// No storage database (bookmarks etc.), and passwords are changed in the panel,
+// which keeps the copy it signs in with.
+\$cfg['PmaNoRelation_DisableWarning'] = true;
+\$cfg['ShowChgPassword'] = false;
+PHP
+  chown root:www-data "$PMA_CONF"; chmod 640 "$PMA_CONF"
+
+  cat > "$PMA_VHOST" <<'NGINX'
+# Managed by the SigardaPanel installer: phpMyAdmin, reachable only through the panel's /pma/.
+server {
+    listen 127.0.0.1:8081;
+    server_name localhost;
+    root /usr/share/phpmyadmin;
+    index index.php;
+    client_max_body_size 64M;
+    server_tokens off;
+
+    location ~ ^/(setup|libraries|templates|sql|vendor|tmp|test|doc)(/|$) { deny all; }
+    location / { try_files $uri $uri/ =404; }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/sigardapanel-pma.sock;
+        fastcgi_read_timeout 300s;
+    }
+}
+NGINX
+  ln -sfn "$PMA_VHOST" "/etc/nginx/sites-enabled/$(basename "$PMA_VHOST")"
+
+  install -d -m 755 /etc/nginx/snippets
+  cat > "$PMA_SNIPPET" <<'NGINX'
+# Managed by the SigardaPanel installer (install.sh phpmyadmin). Included in the panel's 443 server.
+location = /pma/ticket {
+    proxy_pass http://127.0.0.1:7720;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+location ^~ /pma/t/ {
+    proxy_pass http://127.0.0.1:7720;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+location ^~ /pma/ {
+    auth_request /pma-auth;
+    auth_request_set $pma_authorization $upstream_http_x_pma_authorization;
+    error_page 401 = @pma_login;
+
+    # The panel's sg_ marker only decorates the browser URL; phpMyAdmin uses
+    # its own "token" parameter, so never forward ours.
+    if ($arg_token ~ "^sg_[A-Za-z0-9_-]{43}$") {
+        set $args "";
+    }
+
+    proxy_pass http://127.0.0.1:8081/;
+    proxy_set_header Host localhost;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Authorization $pma_authorization;
+    proxy_buffering off;
+    proxy_read_timeout 300s;
+    client_max_body_size 64M;
+
+    # add_header here replaces the server-level headers: repeat them.
+    add_header Cache-Control "no-store" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+}
+location = /pma {
+    return 302 /pma/;
+}
+location = /pma-auth {
+    internal;
+    proxy_pass http://127.0.0.1:7720/api/pma-auth;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Cookie $http_cookie;
+}
+location @pma_login {
+    return 302 /databases;
+}
+NGINX
+  ensure_pma_include
+
+  # The ticket secret is for the web process only (it encrypts the tickets).
+  local secret_file="$CONF_DIR/web.env"
+  touch "$secret_file"; chmod 600 "$secret_file"
+  grep -qE '^SIGARDAPANEL_PMA_SECRET=.{32,}' "$secret_file" || env_set "$secret_file" SIGARDAPANEL_PMA_SECRET "$(rand_hex 32)"
+  install -d -m 755 "$(dirname "$PMA_WEB_DROPIN")"
+  printf '[Service]\nEnvironmentFile=%s\n' "$secret_file" > "$PMA_WEB_DROPIN"
+  env_set "$CONF_DIR/panel.env" SIGARDAPANEL_PHPMYADMIN enabled
+
+  nginx -t >/dev/null 2>&1 || { nginx -t; die "nginx configuration test failed (phpMyAdmin left unconfigured: run 'install.sh phpmyadmin off')"; }
+  systemctl reload nginx
+  systemctl daemon-reload
+  systemctl restart sigardapanel-api; sleep 1
+  systemctl restart sigardapanel-web
+  healthy || warn "The panel did not answer after the restart; check: journalctl -u sigardapanel-api -u sigardapanel-web"
+  ok "phpMyAdmin $(dpkg-query -W -f='${Version}' phpmyadmin 2>/dev/null) is ready: open a MySQL database in the panel and click phpMyAdmin"
+}
+
 case "${1:-install}" in
   install) do_install ;;
   update)  do_update ;;
   rollback) shift; do_rollback "${1:-}" ;;
+  phpmyadmin) shift; do_phpmyadmin "${1:-}" ;;
   verify)  echo "Release signing key: ${PUBKEY}"; echo "Published at https://github.com/${REPO}#verifying-releases" ;;
-  -h|--help|help) sed -n '2,22p' "$0" ;;
-  *) die "Unknown command '$1' (use: install | update | rollback | verify)" ;;
+  -h|--help|help) sed -n '2,30p' "$0" ;;
+  *) die "Unknown command '$1' (use: install | update | rollback | verify | phpmyadmin)" ;;
 esac

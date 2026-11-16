@@ -403,22 +403,10 @@ func viewerQuery(ctx context.Context, tx *sql.Tx, q string, args []any, limit in
 		if err := rows.Scan(ptrs...); err != nil {
 			return nil, err
 		}
-		out := make([]any, len(cols))
-		for i, b := range raw {
-			switch {
-			case b == nil:
-				out[i] = nil
-			case !utf8.Valid(b):
-				out[i] = fmt.Sprintf("[binary, %d bytes]", len(b))
-			case len(b) > viewerMaxCell:
-				out[i] = string(b[:viewerMaxCell]) + "…"
-				res.Truncated = true
-			default:
-				out[i] = string(b)
-			}
+		res.Rows = append(res.Rows, viewerValues(raw, res))
+		for _, b := range raw {
 			size += len(b)
 		}
-		res.Rows = append(res.Rows, out)
 		if size > viewerMaxResponse {
 			res.HasMore, res.Truncated = true, true
 			break
@@ -429,4 +417,24 @@ func viewerQuery(ctx context.Context, tx *sql.Tx, q string, args []any, limit in
 	}
 	res.ElapsedMS = time.Since(start).Milliseconds()
 	return res, nil
+}
+
+// viewerValues turns one scanned row into JSON-safe values: text; NULL as
+// nil; binary as a placeholder; long values cut (marking res truncated).
+func viewerValues(raw []sql.RawBytes, res *viewerResult) []any {
+	out := make([]any, len(raw))
+	for i, b := range raw {
+		switch {
+		case b == nil:
+			out[i] = nil
+		case !utf8.Valid(b):
+			out[i] = fmt.Sprintf("[binary, %d bytes]", len(b))
+		case len(b) > viewerMaxCell:
+			out[i] = string(b[:viewerMaxCell]) + "…"
+			res.Truncated = true
+		default:
+			out[i] = string(b)
+		}
+	}
+	return out
 }
