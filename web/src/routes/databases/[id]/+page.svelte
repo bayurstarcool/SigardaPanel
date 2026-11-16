@@ -20,7 +20,7 @@
 
   const dbId = $derived(Number($page.params.id));
 
-  let info = $state<{ name: string; type: string; account: string; site_id?: number; domain?: string; pma?: boolean } | null>(null);
+  let info = $state<{ name: string; type: string; account: string; site_id?: number; domain?: string; pma?: boolean; external?: boolean } | null>(null);
   let tables = $state<TableInfo[]>([]);
   let loading = $state(true);
   let loadError = $state('');
@@ -101,7 +101,7 @@
     loadError = '';
     try {
       const d = await apiFetch(auth.token, 'GET', `databases/${dbId}/viewer/tables`);
-      info = { name: d.database, type: d.type, account: d.account, site_id: d.site_id, domain: d.domain, pma: !!d.pma_available };
+      info = { name: d.database, type: d.type, account: d.account, site_id: d.site_id, domain: d.domain, pma: !!d.pma_available, external: !!d.external };
       tables = toTables(d.result);
       if (current) current = tables.find((t) => label(t) === label(current!)) ?? null;
       if (!current && tables.length) selectTable(tables[0]);
@@ -273,6 +273,7 @@
     {#snippet meta()}
       {#if info}
         <span class="badge">{info.type === 'postgres' ? 'PostgreSQL' : 'MySQL'}</span>
+        {#if info.external}<span class="badge badge-warning" title="Imported: created outside the panel. The panel uses it with this account but never drops, alters or re-grants it.">External</span>{/if}
         <span class="badge" title="Everything here runs as this database account, with its privileges"><KeyRound size={11} /> {info.account}</span>
       {/if}
     {/snippet}

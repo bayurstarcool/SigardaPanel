@@ -106,12 +106,16 @@
   }
 
   function deleteDb(db: any) {
-    ask(`Delete database "${db.name}"?`, `This drops the database from ${db.type === 'postgres' ? 'PostgreSQL' : 'MySQL'} permanently, with all its data.`, 'Delete database', async () => {
+    const title = db.external ? `Remove database "${db.name}" from the panel?` : `Delete database "${db.name}"?`;
+    const message = db.external
+      ? 'This is an external database (imported, created outside the panel): only the panel record and its stored accounts are removed. The database, its data and its accounts stay on the server.'
+      : `This drops the database from ${db.type === 'postgres' ? 'PostgreSQL' : 'MySQL'} permanently, with all its data.`;
+    ask(title, message, db.external ? 'Remove from panel' : 'Delete database', async () => {
       busyId = db.id;
       try {
         await apiFetch(auth.token, 'DELETE', `databases/${db.id}`);
         dbs = dbs.filter((d) => d.id !== db.id);
-        toasts.success(`Database ${db.name} deleted`);
+        toasts.success(db.external ? `Database ${db.name} removed from the panel` : `Database ${db.name} deleted`);
       } catch (e: any) {
         toasts.error(e.message);
       } finally { busyId = null; }
@@ -197,8 +201,11 @@
     } finally { assigningDbId = null; }
   }
 
-  function deleteUser(username: string, dbId: number) {
-    ask(`Delete user "${username}"?`, 'The user is removed for all hosts on this database.', 'Delete user', async () => {
+  function deleteUser(username: string, dbId: number, external = false) {
+    const message = external
+      ? 'External database: only the panel record and the stored password are removed; the account stays on the server.'
+      : 'The user is removed for all hosts on this database.';
+    ask(external ? `Remove user "${username}" from the panel?` : `Delete user "${username}"?`, message, external ? 'Remove from panel' : 'Delete user', async () => {
       try {
         const targetUsers = (userMap[dbId] || []).filter((x: any) => x.username === username);
         await Promise.all(targetUsers.map((u: any) => apiFetch(auth.token, 'DELETE', `databases/${dbId}/users/${u.id}`)));
@@ -274,7 +281,10 @@
                 </button>
               </td>
               <td>
-                <div class="font-medium text-fg">{db.name}</div>
+                <div class="flex items-center gap-1.5 font-medium text-fg">
+                  {db.name}
+                  {#if db.external}<span class="badge badge-warning" title="Imported: created outside the panel. The panel uses it but never changes it on the server.">External</span>{/if}
+                </div>
                 <div class="text-xs text-subtle sm:hidden">{db.domain || 'No site'} · {db.type}</div>
               </td>
               <td class="max-sm:hidden">
@@ -305,7 +315,7 @@
                   </button>
                   {/if}
                   <button
-                    hidden={db.type === 'postgres'}
+                    hidden={db.type === 'postgres' || db.external}
                     onclick={(e) => { e.stopPropagation(); startEditDb(db); }}
                     class="btn btn-ghost btn-icon btn-xs"
                     title="Edit charset/collation"
@@ -316,8 +326,8 @@
                     onclick={(e) => { e.stopPropagation(); deleteDb(db); }}
                     disabled={busyId === db.id}
                     class="btn btn-danger-ghost btn-icon btn-xs"
-                    title="Delete database"
-                    aria-label="Delete database {db.name}">
+                    title={db.external ? 'Remove from the panel (kept on the server)' : 'Delete database'}
+                    aria-label="{db.external ? 'Remove' : 'Delete'} database {db.name}">
                     {#if busyId === db.id}<LoaderCircle size={14} class="animate-spin" />{:else}<Trash2 size={14} />{/if}
                   </button>
                 </div>
@@ -330,9 +340,13 @@
                   <div class="mb-3 flex flex-wrap items-center gap-2">
                     <Users size={14} class="text-subtle" />
                     <span class="text-xs font-medium text-muted">Users</span>
-                    <button onclick={() => openAssignUser(db.id)} class="btn btn-ghost btn-xs text-accent">
-                      <UserPlus size={14} /> Assign user
-                    </button>
+                    {#if db.external}
+                      <span class="text-xs text-subtle">External database: accounts are managed where it was created.</span>
+                    {:else}
+                      <button onclick={() => openAssignUser(db.id)} class="btn btn-ghost btn-xs text-accent">
+                        <UserPlus size={14} /> Assign user
+                      </button>
+                    {/if}
                     <button onclick={onmanageusers} class="link ml-auto text-xs">Manage all users →</button>
                   </div>
 
@@ -352,6 +366,7 @@
                           </code>
                           <span class="badge max-sm:hidden">{g.privileges}</span>
                           <span class="flex-1"></span>
+                          {#if !db.external}
                           <button
                             onclick={() => rotateUserPwd(g.username, db.id)}
                             disabled={busyId === -2}
@@ -360,8 +375,9 @@
                             aria-label="Rotate password for {g.username}">
                             <KeyRound size={14} />
                           </button>
+                          {/if}
                           <button
-                            onclick={() => deleteUser(g.username, db.id)}
+                            onclick={() => deleteUser(g.username, db.id, db.external)}
                             class="btn btn-danger-ghost btn-icon btn-xs"
                             title="Delete user"
                             aria-label="Delete user {g.username}">

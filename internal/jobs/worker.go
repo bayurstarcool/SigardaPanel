@@ -192,6 +192,12 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 		slog.Warn("worker: job refused for an external site", "id", job.ID, "type", job.Type, "site_id", job.SiteID.Int64)
 		return
 	}
+	// External databases are never changed on the server (external_database.go).
+	if externalDatabaseRefuses(ctx, w.store, job) {
+		_ = w.store.Jobs.MarkCompleted(ctx, job.ID, false, "", ExternalDatabaseMessage)
+		slog.Warn("worker: job refused for an external database", "id", job.ID, "type", job.Type)
+		return
+	}
 
 	// Set initial progress for backup jobs
 	if job.Type == jobmodel.TypeBackupCreate || job.Type == jobmodel.TypeDBBackupCreate {

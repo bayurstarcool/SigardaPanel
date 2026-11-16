@@ -560,6 +560,12 @@ func (h *siteHandler) delete(c *echo.Context) error {
 	// otherwise deleted sites leave orphaned databases, users and grants.
 	if databases, err := h.store.Databases.ListBySite(c.Request().Context(), id); err == nil {
 		for _, database := range databases {
+			// An external database (imported, created outside the panel)
+			// is only removed from the panel: never dropped.
+			if database.IsExternal() {
+				_ = removeDatabaseRecords(c.Request().Context(), h.store, database.ID)
+				continue
+			}
 			if database.Type == "mysql" {
 				_ = execMySQLConn(h.store, func(conn *dbserver.MySQLConn) error {
 					if err := conn.DropDatabase(c.Request().Context(), database.Name); err != nil {
@@ -648,7 +654,7 @@ func (h *siteHandler) unlinkExternalSite(c *echo.Context, rid string, userID int
 	ctx := c.Request().Context()
 	if databases, err := h.store.Databases.ListBySite(ctx, site.ID); err == nil {
 		for _, database := range databases {
-			h.store.Databases.Delete(ctx, database.ID)
+			_ = removeDatabaseRecords(ctx, h.store, database.ID)
 		}
 	}
 	h.store.Sites.ClearAppPort(ctx, site.ID)

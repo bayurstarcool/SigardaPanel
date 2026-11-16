@@ -80,6 +80,7 @@ func (h *dbHandler) viewer(c *echo.Context, action string, extra map[string]any)
 	}
 	return c.JSON(http.StatusOK, httpjson.Success{
 		Data: map[string]any{"database": d.Name, "type": d.Type, "account": user, "site_id": site.ID, "domain": site.Domain, "result": out["result"],
+			"external":      d.IsExternal(),
 			"pma_available": phpMyAdminEnabled() && d.Type == "mysql" && h.panelMySQL(ctx, site)},
 		RequestID: rid,
 	})

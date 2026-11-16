@@ -60,11 +60,13 @@
   function userHost(u: any) { return canonicalHost(u.host || u.host_pattern || '%'); }
   function userKey(u: any) { return `${u.username}@${userHost(u)}`; }
 
+  // External databases (imported) never get new accounts or grants.
+  const ownDbs = $derived(dbs.filter((d) => !d.external));
   const filteredNewUserDbOptions = $derived(
-    newUserDbQuery ? dbs.filter((d) => dbLabel(d).toLowerCase().includes(newUserDbQuery.toLowerCase())).slice(0, 12) : dbs.slice(0, 12),
+    newUserDbQuery ? ownDbs.filter((d) => dbLabel(d).toLowerCase().includes(newUserDbQuery.toLowerCase())).slice(0, 12) : ownDbs.slice(0, 12),
   );
   const filteredAddDbOptions = $derived(
-    addDbQuery ? dbs.filter((d) => dbLabel(d).toLowerCase().includes(addDbQuery.toLowerCase())).slice(0, 12) : dbs.slice(0, 12),
+    addDbQuery ? ownDbs.filter((d) => dbLabel(d).toLowerCase().includes(addDbQuery.toLowerCase())).slice(0, 12) : ownDbs.slice(0, 12),
   );
   const filteredAddUserOptions = $derived(
     addUserQuery
@@ -89,11 +91,11 @@
     addUserQuery = userKey(u);
   }
   function selectNewUserDbByQuery() {
-    const found = dbs.find((d) => dbLabel(d) === newUserDbQuery);
+    const found = ownDbs.find((d) => dbLabel(d) === newUserDbQuery);
     newUser.database_id = found?.id || 0;
   }
   function selectAddDbByQuery() {
-    const found = dbs.find((d) => dbLabel(d) === addDbQuery);
+    const found = ownDbs.find((d) => dbLabel(d) === addDbQuery);
     addDbId = found?.id || 0;
     if (found) loadAddUsers();
   }
@@ -158,7 +160,10 @@
   }
 
   function deleteUserById(u: any) {
-    ask(`Delete user "${u.username}"@${u.host_pattern}?`, 'This cannot be undone.', 'Delete user', async () => {
+    const message = u.external
+      ? 'External database: only the panel record and the stored password are removed; the account stays on the server.'
+      : 'This cannot be undone.';
+    ask(u.external ? `Remove user "${u.username}" from the panel?` : `Delete user "${u.username}"@${u.host_pattern}?`, message, u.external ? 'Remove from panel' : 'Delete user', async () => {
       busyId = u.id;
       try {
         await apiFetch(auth.token, 'DELETE', `databases/${u.database_id}/users/${u.id}`);
@@ -292,7 +297,8 @@
                 {/if}
               </td>
               <td class="max-sm:hidden">
-                <span class="inline-flex items-center gap-1.5 text-[13px] text-fg"><DatabaseIcon size={14} class="text-subtle" />{u.database_name}</span>
+                <span class="inline-flex items-center gap-1.5 text-[13px] text-fg"><DatabaseIcon size={14} class="text-subtle" />{u.database_name}
+                  {#if u.external}<span class="badge badge-warning" title="Imported database: the panel never changes its accounts">External</span>{/if}</span>
               </td>
               <td class="text-[13px] text-muted max-md:hidden">{u.domain || '—'}</td>
               <td class="text-right">
@@ -305,12 +311,14 @@
                       <X size={14} />
                     </button>
                   {:else}
+                    {#if !u.external}
                     <button onclick={() => startEditUser(u)} class="btn btn-ghost btn-icon btn-xs" title="Edit host/privileges" aria-label="Edit {u.username}">
                       <Pencil size={14} />
                     </button>
                     <button onclick={() => rotateUserById(u)} disabled={busyId === u.id} class="btn btn-ghost btn-icon btn-xs" title="Rotate password" aria-label="Rotate password for {u.username}">
                       {#if busyId === u.id}<LoaderCircle size={14} class="animate-spin" />{:else}<KeyRound size={14} />{/if}
                     </button>
+                    {/if}
                     {#if u.database_type !== 'postgres' && pmaFeature.available}
                       <button onclick={() => openPma(u.database_id)} class="btn btn-ghost btn-icon btn-xs max-sm:hidden" title="Open phpMyAdmin" aria-label="Open phpMyAdmin for {u.database_name}">
                         <DatabaseIcon size={14} />

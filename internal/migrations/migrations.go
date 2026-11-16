@@ -100,6 +100,7 @@ var AllMigrations = []Migration{
 	RBACRolesSchema,
 	SiteDNSRecordsSchema,
 	GitIntegrationSchema,
+	DatabaseManagedBySchema,
 }
 
 func Down(db *sql.DB) error {

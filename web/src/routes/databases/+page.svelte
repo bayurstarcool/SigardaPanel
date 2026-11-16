@@ -1,15 +1,16 @@
 <script lang="ts">
   import LoadError from '$components/LoadError.svelte';
-  import { auth } from '$lib/auth.svelte';
+  import { auth, hasPermission, hasRole } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import { toasts } from '$lib/toast.svelte';
-  import { Plus, RefreshCw, UserPlus, Copy, X, KeyRound } from 'lucide-svelte';
+  import { Plus, RefreshCw, UserPlus, Copy, X, KeyRound, Import } from 'lucide-svelte';
   import { onMount, untrack } from 'svelte';
   import { serverCtx } from '$lib/serverContext.svelte';
   import DatabasesPanel from './DatabasesPanel.svelte';
   import UsersPanel from './UsersPanel.svelte';
+  import ImportDatabaseModal from './ImportDatabaseModal.svelte';
 
   let dbs = $state<any[]>([]);
   let sites = $state<any[]>([]);
@@ -21,6 +22,10 @@
   let showCreateDb = $state(false);
   let showCreateUser = $state(false);
   let showAddUser = $state(false);
+  let showImport = $state(false);
+  // Importing databases made outside the panel is a server-wide action
+  // (database.admin: super_admin by default); the API checks it again.
+  const canImport = $derived(hasPermission('database.admin') || (!auth.user?.permissions && hasRole(auth.user?.role, 'super_admin')));
 
   async function loadDbs() {
     if (!auth.user) { window.location.href = '/login'; return; }
@@ -72,6 +77,9 @@
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh
       </button>
       {#if activeDbTab === 'databases'}
+        {#if canImport}
+          <button onclick={() => (showImport = true)} class="btn btn-secondary btn-sm" title="Attach a database created outside the panel to a site"><Import size={14} /> Import existing</button>
+        {/if}
         <button onclick={() => (showCreateDb = true)} class="btn btn-primary btn-sm"><Plus size={14} /> New database</button>
       {:else}
         <button onclick={() => (showAddUser = true)} class="btn btn-secondary btn-sm"><UserPlus size={14} /> Add to database</button>
@@ -129,4 +137,8 @@
       {reloadAllUsers}
       onpassword={(p) => (newPwdVisible = p)} />
   </div>
+
+  {#if canImport}
+    <ImportDatabaseModal bind:open={showImport} onimported={loadDbs} />
+  {/if}
 </DashboardLayout>
