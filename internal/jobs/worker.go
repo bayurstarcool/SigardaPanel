@@ -186,6 +186,13 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 
 	slog.Info("worker: executing job", "id", job.ID, "type", job.Type, "attempts", job.Attempts)
 
+	// External sites are never changed on the server (external_site.go).
+	if externalSiteRefuses(ctx, w.store, job) {
+		_ = w.store.Jobs.MarkCompleted(ctx, job.ID, false, "", ExternalSiteMessage)
+		slog.Warn("worker: job refused for an external site", "id", job.ID, "type", job.Type, "site_id", job.SiteID.Int64)
+		return
+	}
+
 	// Set initial progress for backup jobs
 	if job.Type == jobmodel.TypeBackupCreate || job.Type == jobmodel.TypeDBBackupCreate {
 		// Concurrency limit: max 1 concurrent backup job per server to save disk I/O and RAM.

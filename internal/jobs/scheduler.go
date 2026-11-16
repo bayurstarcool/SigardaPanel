@@ -176,6 +176,10 @@ func runSSLAutoRenew(ctx context.Context, s *store.Store) {
 		if site.Status != "active" {
 			continue
 		}
+		// External sites renew their certificate outside the panel.
+		if IsExternalSite(&site) {
+			continue
+		}
 
 		// Check if there's already a queued/running ssl.renew job for this site
 		queued, _ := s.Jobs.List(ctx, store.JobListFilter{

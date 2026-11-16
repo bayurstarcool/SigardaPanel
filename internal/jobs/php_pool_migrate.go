@@ -53,6 +53,10 @@ func migratePHPPools(ctx context.Context, s *store.Store, now time.Time) {
 		if queued >= phpPoolMigrateBatch {
 			return
 		}
+		// External sites keep the PHP setup they were given outside the panel.
+		if IsExternalSite(&site) {
+			continue
+		}
 		if v, _ := store.GetSetting(ctx, s.DB(), phpPoolSettingKey(site.ID)); v != "" {
 			continue
 		}

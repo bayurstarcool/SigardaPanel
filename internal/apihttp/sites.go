@@ -522,6 +522,13 @@ func (h *siteHandler) delete(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "site not found")
 	}
 
+	// An external site (managed outside the panel, e.g. one domain of a
+	// multi-site CMS sharing its root with others) is only removed from the
+	// panel: its files, vhost, certificate, databases and DNS stay untouched.
+	if site.ManagedBy.Valid && site.ManagedBy.String == "external" {
+		return h.unlinkExternalSite(c, rid, userID, site)
+	}
+
 	// ?delete_files=false keeps the site's root directory (and the files in
 	// it) on the server; everything else that belongs to the site is removed.
 	// Absent, the files are deleted as before (API and CLI clients).
@@ -628,6 +635,42 @@ func (h *siteHandler) delete(c *echo.Context) error {
 			"job_id":        job.ID,
 			"files_deleted": deleteFiles,
 			"dns":           dnsNotes,
+		},
+		RequestID: rid,
+	})
+}
+
+// unlinkExternalSite removes an external site from the panel only. Nothing is
+// sent to the agent: the root directory (often shared with other domains),
+// the vhost, the certificate and the databases are kept on the server; the
+// database records are unlinked so the panel no longer manages them.
+func (h *siteHandler) unlinkExternalSite(c *echo.Context, rid string, userID int64, site *store.Site) error {
+	ctx := c.Request().Context()
+	if databases, err := h.store.Databases.ListBySite(ctx, site.ID); err == nil {
+		for _, database := range databases {
+			h.store.Databases.Delete(ctx, database.ID)
+		}
+	}
+	h.store.Sites.ClearAppPort(ctx, site.ID)
+	_ = h.store.Git.DeleteSiteData(ctx, site.ID)
+
+	h.store.NotifyAdmins(ctx, "site_deleted", "Site Removed",
+		fmt.Sprintf("%s removed from the panel (external site: files, vhost and certificate kept)", site.Domain), "info", "site", site.ID)
+
+	if err := h.store.Sites.Delete(ctx, site.ID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+	}
+	h.audit.RecordAction(ctx, userID, audit.ActionSiteDelete, audit.ResourceSite, site.ID, map[string]any{
+		"domain":       site.Domain,
+		"delete_files": false,
+		"external":     true,
+		"root_path":    site.RootPath,
+	})
+	return c.JSON(http.StatusOK, httpjson.Success{
+		Data: map[string]any{
+			"site_id":       site.ID,
+			"files_deleted": false,
+			"external":      true,
 		},
 		RequestID: rid,
 	})
