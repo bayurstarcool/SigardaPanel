@@ -300,6 +300,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/databases/discover", r.databaseDiscoverTask) // read only: databases on this server (import)
 	tasks.POST("/dbuser/create", r.dbUserCreateTask)
 	tasks.POST("/dbuser/delete", r.dbUserDeleteTask)
+	tasks.POST("/db/account", r.dbAccountTask)
 	tasks.POST("/app/start", r.appStartTask)
 	tasks.POST("/app/stop", r.appStopTask)
 	tasks.POST("/app/restart", r.appRestartTask)
@@ -334,6 +335,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/files/op", r.filesTask)
 	tasks.POST("/files/upload", r.filesUploadTask)
 	tasks.GET("/files/download", r.filesDownloadTask)
+	tasks.GET("/backups/download", r.backupDownloadTask)
 
 	// Panel self-update (panel host only; runs the embedded, signature-verifying installer)
 	tasks.GET("/panel/update", r.panelUpdateStatusTask)
@@ -2351,6 +2353,17 @@ func (r *Router) dbUserCreateTask(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid database user grants")
 	}
 
+	// An account that already exists is only ever this database's own user
+	// (password rotation, a re-run job): never one with server-wide powers
+	// or another database's account (e.g. the PostgreSQL superuser).
+	if st, err := r.dbAccountState(ctx, payload.Type, payload.Username, payload.HostPattern, payload.DatabaseName); err != nil {
+		return echo.NewHTTPError(http.StatusFailedDependency, err.Error())
+	} else if st.Exists && (st.Privileged || !st.OnDatabase) {
+		return errForeignAccount(payload.Username)
+	} else if !st.Exists && isReservedDBAccount(payload.Type, payload.Username) {
+		return errForeignAccount(payload.Username)
+	}
+
 	switch payload.Type {
 	case "mysql":
 		sql := fmt.Sprintf(
@@ -2417,6 +2430,14 @@ func (r *Router) dbUserDeleteTask(c *echo.Context) error {
 	}
 	if !isValidDBHostPattern(payload.HostPattern) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid host_pattern")
+	}
+
+	// Never drop the server's own accounts or one with server-wide powers.
+	if isReservedDBAccount(payload.Type, payload.Username) {
+		return echo.NewHTTPError(http.StatusConflict, "refusing to drop the database server's own account "+payload.Username)
+	}
+	if st, err := r.dbAccountState(ctx, payload.Type, payload.Username, payload.HostPattern, payload.DatabaseName); err == nil && st.Privileged {
+		return echo.NewHTTPError(http.StatusConflict, "refusing to drop "+payload.Username+": it has server-wide privileges")
 	}
 
 	switch payload.Type {
