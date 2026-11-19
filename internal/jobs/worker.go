@@ -312,6 +312,16 @@ func (w *Worker) runClaimedJob(ctx context.Context, job *jobmodel.Job) {
 		}
 		execErr = fmt.Errorf("%s", summary)
 	}
+	// The agent refused to "create" an account that exists on the server and
+	// is not this database's (another site's user, the PostgreSQL superuser):
+	// never retry, and drop the panel record made for it so that deleting it
+	// later cannot drop that other account.
+	if execErr != nil && job.Type == jobmodel.TypeDBUserCreate && strings.Contains(execErr.Error(), "already exists on the database server") {
+		w.dropRefusedDBUser(ctx, job)
+		_ = w.store.Jobs.MarkCompleted(ctx, job.ID, false, "", execErr.Error())
+		slog.Warn("worker: dbuser.create refused by the agent", "id", job.ID, "error", execErr)
+		return
+	}
 	if execErr != nil {
 		permanent := isPermanentJobError(job.Type, execErr, result)
 		if permanent && job.Attempts < job.MaxAttempts {
@@ -857,4 +867,19 @@ func databaseCreateRefused(execErr error, result *agentclient.TaskResult) bool {
 	}
 	msg := strings.ToLower(b.String())
 	return strings.Contains(msg, "already exists on the server") || strings.Contains(msg, "reserved database name")
+}
+
+// dropRefusedDBUser removes the db_users record of a refused new account
+// (a password rotation keeps its record).
+func (w *Worker) dropRefusedDBUser(ctx context.Context, job *jobmodel.Job) {
+	var p struct {
+		UserID int64 `json:"user_id"`
+		Rotate bool  `json:"rotate"`
+	}
+	if json.Unmarshal([]byte(job.Payload), &p) != nil || p.Rotate || p.UserID <= 0 {
+		return
+	}
+	if err := w.store.DBUsers.Delete(ctx, p.UserID); err != nil {
+		slog.Warn("worker: drop refused db user record", "user_id", p.UserID, "error", err)
+	}
 }

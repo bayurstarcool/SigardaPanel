@@ -330,6 +330,9 @@ func (h *dbHandler) rotateDBUserPassword(c *echo.Context) error {
 	// An external database's application signs in with this password: a new
 	// one would break it. The same holds when the account also serves an
 	// external database.
+	if dbUser != nil && isReservedDBUser(database.Type, dbUser.Username) {
+		return echo.NewHTTPError(http.StatusConflict, "this account belongs to the database server; its password is not managed by the panel")
+	}
 	if database.IsExternal() || h.usedByExternalDatabase(c.Request().Context(), dbUser.Username) {
 		return errExternalDatabase()
 	}
@@ -369,7 +372,7 @@ func (h *dbHandler) rotateDBUserPassword(c *echo.Context) error {
 	}
 
 	// Enqueue job for agent (fallback)
-	payload := fmt.Sprintf(`{"user_id":%d,"database_id":%d,"database_name":%q,"type":%q,"username":%q,"password":%q,"host_pattern":%q,"privileges":%q}`,
+	payload := fmt.Sprintf(`{"user_id":%d,"database_id":%d,"database_name":%q,"type":%q,"username":%q,"password":%q,"host_pattern":%q,"privileges":%q,"rotate":true}`,
 		dbUser.ID, dbID, database.Name, database.Type, dbUser.Username, newPassword, dbUser.HostPattern, dbUser.Privileges)
 	job := &jobmodel.Job{
 		ServerID:    sql.NullInt64{Int64: site.ServerID, Valid: true},
@@ -561,7 +564,7 @@ func (h *dbHandler) createDBUser(c *echo.Context) error {
 	if !dbNameRegex.MatchString(body.Username) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid username")
 	}
-	if isReservedMySQLUser(body.Username) {
+	if isReservedDBUser(database.Type, body.Username) {
 		return echo.NewHTTPError(http.StatusBadRequest, "this username is reserved")
 	}
 	if database.Type == "postgres" && body.Username != strings.ToLower(body.Username) {
@@ -581,6 +584,17 @@ func (h *dbHandler) createDBUser(c *echo.Context) error {
 	body.HostPattern = canonicalDBHost(body.HostPattern)
 	if err := siteinput.DBHost(body.HostPattern); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	// Accounts are server-wide: one that already exists on the database's
+	// server (the PostgreSQL superuser, another site's user, an
+	// application's account) is never "created" again, which would reset its
+	// password and hand it to this site.
+	// (MySQL on the panel host was checked above through the panel's own
+	// connection; everything else asks the server's agent.)
+	if database.Type == "postgres" || !h.panelMySQL(c.Request().Context(), site) {
+		if err := h.refuseExistingDBAccount(c.Request().Context(), site, database, body.Username, body.HostPattern); err != nil {
+			return err
+		}
 	}
 	if body.Privileges == "" {
 		body.Privileges = "ALL"
@@ -746,6 +760,18 @@ func (h *dbHandler) deleteDBUser(c *echo.Context) error {
 			Data:      map[string]any{"user_id": dbUser.ID, "external": true},
 			RequestID: rid,
 		})
+	}
+
+	// A record for one of the server's own accounts (created before names
+	// like "postgres" were refused) is only unlinked: the account stays.
+	if isReservedDBUser(database.Type, dbUser.Username) {
+		if err := h.store.DBUsers.Delete(c.Request().Context(), dbUser.ID); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "internal error")
+		}
+		h.audit.RecordAction(c.Request().Context(), userID, "dbuser_unlink", "dbuser", dbUser.ID, map[string]any{
+			"database": database.Name, "username": dbUser.Username, "reserved": true,
+		})
+		return c.JSON(http.StatusOK, httpjson.Success{Data: map[string]any{"user_id": dbUser.ID, "unlinked": true}, RequestID: rid})
 	}
 
 	// The same account may be assigned to other databases: then only its
@@ -1433,6 +1459,47 @@ func (h *dbHandler) pmaCredentials(c *echo.Context) error {
 // panel host (package, internal vhost, /pma/ proxy and ticket secret).
 func phpMyAdminEnabled() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("SIGARDAPANEL_PHPMYADMIN")), "enabled")
+}
+
+// isReservedDBUser reports the database server's own accounts for the
+// database's type: MySQL system and panel accounts, and for PostgreSQL the
+// superuser "postgres" and the built-in pg_* roles.
+func isReservedDBUser(dbType, name string) bool {
+	if isReservedMySQLUser(name) {
+		return true
+	}
+	if dbType == "postgres" {
+		n := strings.ToLower(strings.TrimSpace(name))
+		return n == "postgres" || n == "public" || strings.HasPrefix(n, "pg_")
+	}
+	return false
+}
+
+// refuseExistingDBAccount answers 409 when an account with this name already
+// exists on the database's server (asked through the site's agent).
+func (h *dbHandler) refuseExistingDBAccount(ctx context.Context, site *store.Site, database *store.Database, username, host string) error {
+	sh := &siteHandler{store: h.store}
+	code, out, err := sh.siteAgentCall(ctx, site, http.MethodPost, "/tasks/db/account",
+		map[string]any{"type": database.Type, "username": username, "host_pattern": host, "database": database.Name}, 20*time.Second)
+	if code == http.StatusNotFound && (out == nil || agentMessage(out, "Not Found") == "Not Found") {
+		if database.Type == "postgres" {
+			return echo.NewHTTPError(http.StatusConflict, "update the agent on this server before adding PostgreSQL users")
+		}
+		return nil // old agent: the MySQL check above (panel host) still applies
+	}
+	if err != nil && code == 0 {
+		// Agent unreachable now: the job checks again on the server and the
+		// worker drops this record if the name belongs to another account.
+		return nil
+	}
+	if err != nil || code >= 400 {
+		return echo.NewHTTPError(http.StatusBadGateway, "could not check the database server's accounts: "+agentMessage(out, fmt.Sprint(err)))
+	}
+	acc, _ := out["account"].(map[string]any)
+	if exists, _ := acc["exists"].(bool); exists {
+		return echo.NewHTTPError(http.StatusConflict, "an account with this name already exists on the database server; choose another name")
+	}
+	return nil
 }
 
 // isReservedMySQLUser reports system and panel-internal MySQL accounts that

@@ -103,3 +103,17 @@ func TestReadOnlySQLGuard(t *testing.T) {
 		}
 	}
 }
+
+func TestReservedDBAccount(t *testing.T) {
+	for _, c := range []struct {
+		typ, name string
+		want      bool
+	}{
+		{"postgres", "postgres", true}, {"postgres", "pg_monitor", true}, {"postgres", "site_user", false},
+		{"mysql", "root", true}, {"mysql", "debian-sys-maint", true}, {"mysql", "mysql.session", true}, {"mysql", "site_user", false},
+	} {
+		if got := isReservedDBAccount(c.typ, c.name); got != c.want {
+			t.Errorf("isReservedDBAccount(%q, %q) = %v, want %v", c.typ, c.name, got, c.want)
+		}
+	}
+}

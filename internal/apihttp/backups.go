@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/labstack/echo/v5"
 	"sigardapanel/internal/audit"
@@ -634,6 +637,12 @@ func (h *backupHandler) download(c *echo.Context) error {
 		})
 	}
 
+	// A backup in the site's folder lives on the site's server (and the API
+	// process cannot see /home on the panel host either): the agent streams it.
+	if rel, ok := siteBackupRel(path, site); ok {
+		return h.streamSiteBackup(c, site, rel)
+	}
+
 	// Local path — serve file. The backup directory sits in the site root,
 	// which the site's Linux user owns: the file (or a directory on the way)
 	// may have been replaced by a symlink to the panel's own database or key.
@@ -654,6 +663,60 @@ func (h *backupHandler) download(c *echo.Context) error {
 	c.Response().Header().Set("Content-Type", "application/octet-stream")
 	c.Response().Header().Set("Content-Length", strconv.FormatInt(finfo.Size(), 10))
 	return c.Stream(http.StatusOK, "application/octet-stream", f)
+}
+
+// siteBackupRel: path relative to the site root when the backup is in the
+// site's backup/ or backups/ folder.
+func siteBackupRel(path string, site *store.Site) (string, bool) {
+	if site == nil || site.RootPath == "" {
+		return "", false
+	}
+	clean := filepath.Clean(path)
+	root := filepath.Clean(site.RootPath)
+	if clean != path || !strings.HasPrefix(clean, root+"/") {
+		return "", false
+	}
+	rel := strings.TrimPrefix(clean, root+"/")
+	if !strings.HasPrefix(rel, "backup/") && !strings.HasPrefix(rel, "backups/") {
+		return "", false
+	}
+	return rel, true
+}
+
+func (h *backupHandler) streamSiteBackup(c *echo.Context, site *store.Site, rel string) error {
+	fm := &fileManagerHandler{store: h.store}
+	base, token, err := fm.siteAgent(c.Request().Context(), site)
+	if err != nil {
+		return err
+	}
+	q := url.Values{"root_path": {site.RootPath}, "path": {rel}}
+	req, err := http.NewRequestWithContext(c.Request().Context(), http.MethodGet, base+"/tasks/backups/download?"+q.Encode(), nil)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to prepare download")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := agentClient(2 * time.Hour).Do(req)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadGateway, "the site's server could not be reached")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		var out map[string]any
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out)
+		if out == nil {
+			out = map[string]any{}
+		}
+		if resp.StatusCode == http.StatusNotFound && agentMessage(out, "Not Found") == "Not Found" {
+			return echo.NewHTTPError(http.StatusBadGateway, "the agent on this server is too old to download backups; update the agent")
+		}
+		return agentHTTPError(resp.StatusCode, out)
+	}
+	name := filepath.Base(rel)
+	c.Response().Header().Set("Content-Disposition", `attachment; filename="`+strings.ReplaceAll(name, `"`, "")+`"`)
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		c.Response().Header().Set("Content-Length", cl)
+	}
+	return c.Stream(http.StatusOK, "application/octet-stream", resp.Body)
 }
 
 // ─── Delete handler ────────────────────────────────────────

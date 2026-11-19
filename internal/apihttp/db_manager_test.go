@@ -18,3 +18,18 @@ func TestAuditSQLHidesLiterals(t *testing.T) {
 		t.Fatalf("not truncated cleanly: %d", len(long))
 	}
 }
+
+func TestReservedDBUserNames(t *testing.T) {
+	for _, c := range []struct {
+		typ, name string
+		want      bool
+	}{
+		{"postgres", "postgres", true}, {"postgres", "Postgres", true}, {"postgres", "pg_read_all_data", true},
+		{"postgres", "public", true}, {"postgres", "root", true}, {"postgres", "app_user", false},
+		{"mysql", "root", true}, {"mysql", "mysql.sys", true}, {"mysql", "postgres", false}, {"mysql", "app_user", false},
+	} {
+		if got := isReservedDBUser(c.typ, c.name); got != c.want {
+			t.Errorf("isReservedDBUser(%q, %q) = %v, want %v", c.typ, c.name, got, c.want)
+		}
+	}
+}
