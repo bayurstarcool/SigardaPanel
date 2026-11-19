@@ -4,7 +4,7 @@
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import ConfirmDialog from '$components/ConfirmDialog.svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { onMount } from 'svelte';
   import {
     Globe, Code2, FileCode, Box, Lock, Database, Zap, HardDrive,
@@ -16,7 +16,7 @@
   import OpProgress from './OpProgress.svelte';
   import { runStackAction, pollStackOp, statusBadge, describeAction, type StackActionBody, type StackOp } from './stackOps';
 
-  const serverId = $derived($page.params.id ?? '');
+  const serverId = $derived(page.params.id ?? '');
   const isAdmin = $derived(hasPermission('server.stack'));
   const isSuper = $derived(hasPermission('server.panel_host'));
 

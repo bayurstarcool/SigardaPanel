@@ -1,14 +1,14 @@
 <script lang="ts">
   import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import { RefreshCw, Loader2, Save, Activity, FileWarning, Network, Clock, Globe, Ban, CircleCheck, TriangleAlert, Check } from 'lucide-svelte';
 
-  const serverId = $page.params.id;
+  const serverId = page.params.id;
   let data = $state<any>(null);
   let baseline = $state<any>(null);
   let loading = $state(true);

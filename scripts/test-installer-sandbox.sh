@@ -5,7 +5,7 @@
 set -uo pipefail
 SRC="${1:-$(dirname "$0")/../installer/install.sh}"; T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/usr/local/bin" "$T/opt" "$T/etc" "$T/data" "$T/backups" "$T/assets/web"
-sed -e "s|^INSTALL_BIN=.*|INSTALL_BIN=\"$T/usr/local/bin/sigardapanel\"|" \
+sed -e "s|^INSTALL_BIN=.*|INSTALL_BIN=\"$T/usr/local/bin/sigardapanel\"|" -e "s|^AGENT_UNIT=.*|AGENT_UNIT=\"$T/etc/sigardapanel-agent.service\"|" -e "s|^NODE_BIN=.*|NODE_BIN=\"$T/bin/node\"|" \
     -e "s|^WEB_DIR=.*|WEB_DIR=\"$T/opt/web\"|" -e "s|^CONF_DIR=.*|CONF_DIR=\"$T/etc\"|" \
     -e "s|^DATA_DIR=.*|DATA_DIR=\"$T/data\"|" -e "s|^UPDATE_BACKUPS=.*|UPDATE_BACKUPS=\"$T/backups\"|" "$SRC" > "$T/install.sh"
 export T
@@ -30,6 +30,9 @@ cat > "$T/bin/id" <<'S'
 [ "$*" = "-u" ] && { echo 0; exit 0; }
 exec /usr/bin/id "$@"
 S
+# Node.js at the version the web panel needs; apt-get must not be reached.
+printf '#!/bin/sh\necho v22.20.0\n' > "$T/bin/node"
+printf '#!/bin/sh\necho "apt-get $*" >> "$T/apt.log"\nexit 1\n' > "$T/bin/apt-get"
 for f in chown sleep minisign; do printf '#!/bin/sh\nexit 0\n' > "$T/bin/$f"; done
 chmod +x "$T/bin/"*
 export PATH="$T/bin:$PATH"
@@ -42,6 +45,16 @@ check() { local name="$1"; shift; if "$@"; then echo "PASS  $name"; else echo "F
 echo "SIGARDAPANEL_DB_PATH=$T/data/sigardapanel.db" > "$T/etc/panel.env"; echo x > "$T/etc/agent.env"
 mkbin 1.6.0 "" "$T/usr/local/bin/sigardapanel"; mkdir -p "$T/opt/web"; echo old > "$T/opt/web/index.js"; echo db-1.6.0 > "$T/data/sigardapanel.db"
 touch "$T/healthy"
+cat > "$T/etc/sigardapanel-agent.service" <<'UNIT'
+[Unit]
+Description=SigardaPanel Agent
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/sigardapanel/agent.env
+NoNewPrivileges=true
+UNIT
 
 echo "--- update 1.6.0 -> 1.8.0"
 case "$(uname -m)" in aarch64|arm64) A=arm64;; *) A=amd64;; esac
@@ -57,6 +70,8 @@ check "binary is 1.8.0" test "$(ver)" = 1.8.0
 check "web is 1.8.0" grep -q v18 "$T/opt/web/index.js"
 check "web files are world-readable, directories traversable" \
   sh -c "[ -z \"\$(find '$T/opt/web' \\( -type f ! -perm -o=r \\) -o \\( -type d ! -perm -o=rx \\))\" ]"
+check "agent unit: User=root replaced by HOME=/root" sh -c "! grep -qx 'User=root' '$T/etc/sigardapanel-agent.service' && grep -qx 'Environment=HOME=/root' '$T/etc/sigardapanel-agent.service' && grep -qx 'NoNewPrivileges=true' '$T/etc/sigardapanel-agent.service'"
+check "daemon-reload before the agent restart" sh -c "grep -n 'daemon-reload\\|restart sigardapanel-agent' '$T/systemctl.log' | head -1 | grep -q daemon-reload"
 upbk="$(ls "$T/backups" | head -1)"
 check "update backup records VERSION/TARGET/KIND" sh -c "grep -q 1.6.0 '$T/backups/$upbk/VERSION' && grep -q v1.8.0 '$T/backups/$upbk/TARGET' && grep -q '^update$' '$T/backups/$upbk/KIND'"
 echo db-1.8.0 > "$T/data/sigardapanel.db"; touch "$T/data/sigardapanel.db-wal"
@@ -93,6 +108,17 @@ check "unhealthy rollback exits non-zero" test "$rc" != 0
 check "1.6.0 binary is back" test "$(ver)" = 1.6.0
 check "1.6.0 db is back" grep -q db-1.6.0 "$T/data/sigardapanel.db"
 check "error explains the restore" grep -q 'restored 1.6.0 and the panel is healthy again' "$T/err"
+
+echo "--- update with a too old Node.js stops before changing anything"
+printf '#!/bin/sh\necho v18.19.1\n' > "$T/bin/node"
+mkbin 2.0.0 "" "$T/assets/sigardapanel-linux-$A"
+( cd "$T/assets" && sha256sum "sigardapanel-linux-$A" sigardapanel-web.tar.gz > SHA256SUMS )
+before="$(ver)"; nbk="$(ls "$T/backups" | wc -l)"
+SIGARDA_VERSION=v2.0.0 SIGARDA_ASSET_BASE=file:///x bash "$T/install.sh" update >/dev/null 2>"$T/err"; rc=$?
+check "old Node.js: update exits non-zero" test "$rc" != 0
+check "old Node.js: Node.js install attempted and reported" sh -c "grep -q 'apt-get install' '$T/apt.log' && grep -q 'for Node.js' '$T/err'"
+check "old Node.js: binary unchanged and no backup made" sh -c "[ \"\$('$T/usr/local/bin/sigardapanel')\" = '$before' ] && [ \$(ls '$T/backups' | wc -l) = $nbk ]"
+printf '#!/bin/sh\necho v22.20.0\n' > "$T/bin/node"
 
 echo "--- invalid names"
 bash "$T/install.sh" rollback '../../etc' >/dev/null 2>&1; check "path traversal refused" test $? != 0

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -270,10 +271,18 @@ func (m *stackManager) operation(req StackRequest) (func(ctx context.Context, w 
 			return func(ctx context.Context, w io.Writer) (string, error) { return m.phpUpdate(ctx, w, v) }, nil
 		}
 	case "node":
+		// The panel's web process runs on the system Node.js of the panel
+		// host: it must not be removed or replaced by an older line there.
+		panelHost := m.sys.Exists(panelHostMarker)
 		switch a {
 		case "install", "update":
 			if v != "" && !nodeMajorRe.MatchString(v) {
 				return nil, badRequest("Node.js version must be a major version such as %s", nodeDefaultMajor)
+			}
+			if panelHost && v != "" {
+				if major, _ := strconv.Atoi(v); major < panelNodeMinMajor {
+					return nil, conflict("this is the panel host: SigardaPanel's web interface needs Node.js %d or newer, so Node.js %s cannot be installed here", panelNodeMinMajor, v)
+				}
 			}
 			if a == "update" && v == "" {
 				return func(ctx context.Context, w io.Writer) (string, error) {
@@ -286,6 +295,9 @@ func (m *stackManager) operation(req StackRequest) (func(ctx context.Context, w 
 			}
 			return func(ctx context.Context, w io.Writer) (string, error) { return m.nodeInstall(ctx, w, v) }, nil
 		case "uninstall":
+			if panelHost {
+				return nil, conflict("this is the panel host: SigardaPanel's web interface runs on this Node.js, so it cannot be removed here")
+			}
 			return func(ctx context.Context, w io.Writer) (string, error) { return m.aptComponentUninstall(ctx, w, "node") }, nil
 		}
 	case "go":

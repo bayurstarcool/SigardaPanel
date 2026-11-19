@@ -1,14 +1,14 @@
 <script lang="ts">
   import { fmtDateTime } from '$lib/format';
   import { auth, bearerHeaders } from '$lib/auth.svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
   import EmptyState from '$components/EmptyState.svelte';
   import { Cpu, HardDrive, MemoryStick, Wifi, Globe, Server, Zap, RefreshCw, Clock, Cloud, CircuitBoard, Loader2 } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
-  const serverId = $page.params.id;
+  const serverId = page.params.id;
 
   let specs = $state<any>(null);
   let benchmark = $state<any>(null);

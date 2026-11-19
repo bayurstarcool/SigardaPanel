@@ -1,7 +1,7 @@
 <script lang="ts">
   import LoadError from '$components/LoadError.svelte';
   import { fmtDate } from '$lib/format';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -13,7 +13,7 @@
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
-  const userId = $derived(Number($page.params.id));
+  const userId = $derived(Number(page.params.id));
 
   // User data
   let user = $state<any>(null);

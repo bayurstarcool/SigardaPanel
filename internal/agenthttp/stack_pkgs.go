@@ -72,6 +72,14 @@ var nodeMajors = []string{"24", "22", "20"}
 
 const nodeDefaultMajor = "22"
 
+// panelHostMarker exists only on the panel host (the installer writes it);
+// panelNodeMinMajor is the oldest Node.js line the panel's web process
+// (SvelteKit 3: >= 22.17) runs on, see NODE_MIN in installer/install.sh.
+const (
+	panelHostMarker   = "/etc/sigardapanel/panel.env"
+	panelNodeMinMajor = 22
+)
+
 // ─── detection ──────────────────────────────────────────────────────────────
 
 // StackInfo represents detected software on the server.

@@ -2,7 +2,7 @@
   // Global file manager: pick a site, then browse it with the per-site file
   // manager (`/api/v1/sites/:id/files…`). The selected site lives in `?site=<id>`
   // so the view can be linked and survives reloads/back navigation.
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
@@ -19,7 +19,7 @@
   let pickerOpen = $state(false);
   let pickerInput = $state<HTMLInputElement | null>(null);
 
-  const siteId = $derived(Number($page.url.searchParams.get('site')) || 0);
+  const siteId = $derived(Number(page.url.searchParams.get('site')) || 0);
   const selected = $derived(siteId ? sites.find((s) => s.id === siteId) ?? null : null);
   const matches = $derived(
     query ? sites.filter((s) => s.domain?.toLowerCase().includes(query.toLowerCase()) || s.name?.toLowerCase().includes(query.toLowerCase())) : sites,
@@ -47,12 +47,12 @@
     pickerOpen = false;
     query = '';
     if (id === siteId) return;
-    goto(`?site=${id}`, { keepFocus: true, noScroll: true });
+    goto(`?site=${id}`, { reset: false });
   }
 
   function clearSite() {
     pickerOpen = false;
-    goto($page.url.pathname, { keepFocus: true, noScroll: true });
+    goto(page.url.pathname, { reset: false });
   }
 
   async function openPicker() {

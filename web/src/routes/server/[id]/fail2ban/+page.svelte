@@ -1,7 +1,7 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { onMount } from 'svelte';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import PageHeader from '$components/PageHeader.svelte';
@@ -9,7 +9,7 @@
   import EmptyState from '$components/EmptyState.svelte';
   import { Shield, ShieldCheck, Ban, Unlock, RefreshCw, Loader2, TriangleAlert, Check, X, ChevronRight, SquareTerminal } from 'lucide-svelte';
 
-  const serverId = $page.params.id;
+  const serverId = page.params.id;
   let status = $state<any>(null);
   let jails = $state<any[]>([]);
   let selectedJail = $state<string>('');

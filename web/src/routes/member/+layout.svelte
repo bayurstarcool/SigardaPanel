@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { auth } from '$lib/auth.svelte';
   import { LayoutDashboard, Key } from 'lucide-svelte';
   import Logo from '$components/Logo.svelte';
@@ -12,7 +12,7 @@
   ];
 
   function isActive(href: string) {
-    return $page.url.pathname === href;
+    return page.url.pathname === href;
   }
 </script>
 

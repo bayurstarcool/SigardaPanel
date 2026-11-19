@@ -746,3 +746,27 @@ func TestStackUnknownPackageAndAction(t *testing.T) {
 		t.Errorf("unknown op: %d", code)
 	}
 }
+
+func TestNodeOnPanelHostKeepsPanelRuntime(t *testing.T) {
+	sys := newFakeStack()
+	sys.setFile(panelHostMarker, "SIGARDAPANEL_API_ADDR=127.0.0.1:7700\n")
+	e, _ := newStackRouter(t, sys)
+	for _, body := range []map[string]any{
+		{"package": "node", "action": "install", "version": "20"},
+		{"package": "node", "action": "update", "version": "20"},
+		{"package": "node", "action": "uninstall"},
+	} {
+		code, out := stackPost(t, e, body)
+		if code != http.StatusConflict {
+			t.Fatalf("%v on the panel host: got %d %v, want 409", body, code, out)
+		}
+	}
+	// Newer lines are fine on the panel host; any line on other servers.
+	if code, out := stackPost(t, e, map[string]any{"package": "node", "action": "install", "version": "24"}); code == http.StatusConflict {
+		t.Fatalf("Node 24 refused on the panel host: %v", out)
+	}
+	e2, _ := newStackRouter(t, newFakeStack())
+	if code, out := stackPost(t, e2, map[string]any{"package": "node", "action": "install", "version": "20"}); code == http.StatusConflict {
+		t.Fatalf("Node 20 refused on a server without the panel: %v", out)
+	}
+}
