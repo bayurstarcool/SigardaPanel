@@ -42,7 +42,7 @@ jobs:
     permissions:
       contents: write # create the GitHub release (and, for manual runs, its tag)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
