@@ -78,23 +78,57 @@ check_os() {
   command -v apt-get >/dev/null || die "apt-get is required"
 }
 
+# Node.js for the web process (SvelteKit 3 needs >= NODE_MIN). The unit runs
+# NODE_BIN; when it is missing or older, Node.js 22 comes from NodeSource with
+# the same keyring, source and pin files the Stack page uses (a different
+# signed-by for the same repository would break apt). A newer Node.js that is
+# already installed (e.g. 24 from the Stack page) is kept.
+NODE_BIN="/usr/bin/node"
+NODE_MIN="22.17"
+NODE_MAJOR="22"
+
+node_version() { [ -x "$NODE_BIN" ] && "$NODE_BIN" -v 2>/dev/null | sed 's/^v//' || true; }
+node_ok() { # node_ok [version]: version >= NODE_MIN
+  local v="${1:-$(node_version)}" major minor want_major want_minor
+  [[ "$v" =~ ^[0-9]+\.[0-9]+ ]] || return 1
+  major="${v%%.*}"; minor="${v#*.}"; minor="${minor%%.*}"
+  want_major="${NODE_MIN%%.*}"; want_minor="${NODE_MIN#*.}"
+  [ "$major" -gt "$want_major" ] || { [ "$major" -eq "$want_major" ] && [ "$minor" -ge "$want_minor" ]; }
+}
+
+ensure_node() {
+  if node_ok; then return 0; fi
+  local before; before="$(node_version)"
+  log "Installing Node.js ${NODE_MAJOR} from NodeSource (the web panel needs >= ${NODE_MIN}; found ${before:-none})..."
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y -qq --no-install-recommends ca-certificates curl gnupg >/dev/null || die "could not install curl/gnupg for Node.js"
+  local keyring=/etc/apt/keyrings/nodesource.gpg
+  if [ ! -s "$keyring" ]; then
+    install -d -m 755 /etc/apt/keyrings
+    curl -fsSL --retry 3 https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor --batch --yes -o "$keyring" \
+      || die "could not download the NodeSource signing key"
+    chmod 644 "$keyring"
+  fi
+  echo "deb [signed-by=${keyring}] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+  printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n' > /etc/apt/preferences.d/nodesource
+  apt-get update -qq || die "apt-get update failed after adding NodeSource"
+  apt-get install -y -qq --allow-downgrades nodejs >/dev/null || die "installing Node.js ${NODE_MAJOR} failed"
+  node_ok || die "Node.js $(node_version) is installed at ${NODE_BIN}, but the web panel needs >= ${NODE_MIN}"
+  ok "Node.js $(node_version) installed${before:+ (was ${before})}"
+}
+
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   log "Installing system packages..."
   apt-get update -qq
   apt-get install -y -qq --no-install-recommends \
-    curl ca-certificates openssl nginx nodejs sqlite3 minisign tar >/dev/null
+    curl ca-certificates openssl nginx sqlite3 minisign tar >/dev/null
   # certbot: the panel certificate (DOMAIN + LETSENCRYPT_EMAIL) and the
   # Let's Encrypt certificates the panel requests for every new site.
   apt-get install -y -qq --no-install-recommends certbot python3-certbot-nginx >/dev/null \
     || warn "certbot install failed: sites will not get Let's Encrypt certificates until it is installed"
-  command -v node >/dev/null || die "nodejs did not install"
-  local v major minor
-  v="$(node -v | sed 's/^v//')"; major="${v%%.*}"; minor="${v#*.}"; minor="${minor%%.*}"
-  if [ "$major" -lt 18 ] || { [ "$major" -eq 18 ] && [ "$minor" -lt 13 ]; }; then
-    die "Node.js $v is too old (need >= 18.13). Install a newer Node.js and re-run."
-  fi
-  ok "Packages ready (node $v, minisign $(minisign -v 2>&1 | awk '{print $2}'))"
+  ensure_node
+  ok "Packages ready (node $(node_version), minisign $(minisign -v 2>&1 | awk '{print $2}'))"
 }
 
 # update_token: the token for a private release repository, if any. It is
@@ -621,7 +655,7 @@ restore_backup() {
   return "$rc"
 }
 
-# migrate_agent_unit: units written before v1.15.1 set User=root. With
+# migrate_agent_unit: units written before v1.16.0 set User=root. With
 # systemd 255, an explicit User=root plus NoNewPrivileges and a seccomp option
 # starts the agent without CAP_SETUID, so tasks that run as another account
 # (psql as postgres, deploys, the site terminal, restores) fail. Root is the
@@ -651,6 +685,8 @@ do_update() {
   TMP="$(mktemp -d)"
   download_release "$TMP"
   unpack_web "$TMP/sigardapanel-web.tar.gz" "$TMP/web"
+  # Before anything is replaced: a failure here leaves the panel as it was.
+  ensure_node
 
   local ts bk; ts="$(date -u +%Y%m%dT%H%M%SZ)"; bk="${UPDATE_BACKUPS}/${ts}"
   make_backup "$bk" update "$TAG"

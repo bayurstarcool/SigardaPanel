@@ -1,6 +1,6 @@
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
-import { env } from "$env/dynamic/private";
+import * as env from "$app/env/private";
 
 const API_URL = env.SIGARDAPANEL_API_URL || "http://localhost:7700";
 

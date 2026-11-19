@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import DashboardLayout from '$components/DashboardLayout.svelte';
   import { AlertTriangle, Home, ArrowLeft } from 'lucide-svelte';
 
@@ -18,12 +18,12 @@
     <div class="mb-5 flex size-11 items-center justify-center rounded-xl bg-danger/10 text-danger">
       <AlertTriangle size={20} />
     </div>
-    <p class="font-mono text-sm text-subtle tabular-nums">{$page.status}</p>
+    <p class="font-mono text-sm text-subtle tabular-nums">{page.status}</p>
     <h1 class="mt-1 text-xl font-semibold tracking-tight text-fg">
-      {statusMessages[$page.status] || 'Something went wrong'}
+      {statusMessages[page.status] || 'Something went wrong'}
     </h1>
     <p class="mt-2 max-w-md text-sm text-muted">
-      {$page.error?.message || 'An unexpected error occurred. Please try again.'}
+      {page.error?.message || 'An unexpected error occurred. Please try again.'}
     </p>
     <div class="mt-6 flex flex-wrap items-center justify-center gap-2">
       <button onclick={() => history.back()} class="btn btn-secondary btn-sm">

@@ -102,7 +102,7 @@ ok "Backup saved to ${bk}"
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20*T*Z' -printf '%f\n' | sort -r | tail -n +$((KEEP_BACKUPS + 1)) \
   | while read -r old; do rm -rf "${BACKUP_DIR:?}/${old}"; done
 
-# migrate_agent_unit: units written before v1.15.1 set User=root. With
+# migrate_agent_unit: units written before v1.16.0 set User=root. With
 # systemd 255, an explicit User=root plus NoNewPrivileges and a seccomp option
 # starts the agent without CAP_SETUID, so tasks that run as another account
 # (psql as postgres, deploys, the site terminal, restores) fail. Root is the

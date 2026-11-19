@@ -46,10 +46,16 @@ ports 80/443 and removes `/etc/nginx/sites-enabled/default`, so it is not meant
 for a machine that already serves other sites through nginx.
 
 The installer installs these packages from the distribution:
-`nginx`, `nodejs` (>= 18.13, runs the prebuilt web bundle), `sqlite3`,
-`minisign`, `openssl`, `curl`, `ca-certificates`, `tar`, `certbot` and
-`python3-certbot-nginx` (Let's Encrypt certificates for the panel and for every
-site you create); plus `ufw` with `INSTALL_FIREWALL=yes`.
+`nginx`, `sqlite3`, `minisign`, `openssl`, `curl`, `ca-certificates`, `tar`,
+`certbot` and `python3-certbot-nginx` (Let's Encrypt certificates for the panel
+and for every site you create); plus `ufw` with `INSTALL_FIREWALL=yes`.
+
+The web interface needs **Node.js 22.17 or newer** (`/usr/bin/node`). When the
+installed one is missing or older (Ubuntu 24.04 ships 18), the installer and
+`install.sh update` install Node.js 22 from NodeSource (`nodejs`, signed apt
+repository, the same files the Stack page uses) before anything else changes. A
+newer Node.js that is already installed (e.g. 24) is kept. On the panel host the
+Stack page refuses to remove Node.js or install a line older than 22.
 
 ## Install
 

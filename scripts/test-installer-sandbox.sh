@@ -5,7 +5,7 @@
 set -uo pipefail
 SRC="${1:-$(dirname "$0")/../installer/install.sh}"; T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/usr/local/bin" "$T/opt" "$T/etc" "$T/data" "$T/backups" "$T/assets/web"
-sed -e "s|^INSTALL_BIN=.*|INSTALL_BIN=\"$T/usr/local/bin/sigardapanel\"|" -e "s|^AGENT_UNIT=.*|AGENT_UNIT=\"$T/etc/sigardapanel-agent.service\"|" \
+sed -e "s|^INSTALL_BIN=.*|INSTALL_BIN=\"$T/usr/local/bin/sigardapanel\"|" -e "s|^AGENT_UNIT=.*|AGENT_UNIT=\"$T/etc/sigardapanel-agent.service\"|" -e "s|^NODE_BIN=.*|NODE_BIN=\"$T/bin/node\"|" \
     -e "s|^WEB_DIR=.*|WEB_DIR=\"$T/opt/web\"|" -e "s|^CONF_DIR=.*|CONF_DIR=\"$T/etc\"|" \
     -e "s|^DATA_DIR=.*|DATA_DIR=\"$T/data\"|" -e "s|^UPDATE_BACKUPS=.*|UPDATE_BACKUPS=\"$T/backups\"|" "$SRC" > "$T/install.sh"
 export T
@@ -30,6 +30,9 @@ cat > "$T/bin/id" <<'S'
 [ "$*" = "-u" ] && { echo 0; exit 0; }
 exec /usr/bin/id "$@"
 S
+# Node.js at the version the web panel needs; apt-get must not be reached.
+printf '#!/bin/sh\necho v22.20.0\n' > "$T/bin/node"
+printf '#!/bin/sh\necho "apt-get $*" >> "$T/apt.log"\nexit 1\n' > "$T/bin/apt-get"
 for f in chown sleep minisign; do printf '#!/bin/sh\nexit 0\n' > "$T/bin/$f"; done
 chmod +x "$T/bin/"*
 export PATH="$T/bin:$PATH"
@@ -105,6 +108,17 @@ check "unhealthy rollback exits non-zero" test "$rc" != 0
 check "1.6.0 binary is back" test "$(ver)" = 1.6.0
 check "1.6.0 db is back" grep -q db-1.6.0 "$T/data/sigardapanel.db"
 check "error explains the restore" grep -q 'restored 1.6.0 and the panel is healthy again' "$T/err"
+
+echo "--- update with a too old Node.js stops before changing anything"
+printf '#!/bin/sh\necho v18.19.1\n' > "$T/bin/node"
+mkbin 2.0.0 "" "$T/assets/sigardapanel-linux-$A"
+( cd "$T/assets" && sha256sum "sigardapanel-linux-$A" sigardapanel-web.tar.gz > SHA256SUMS )
+before="$(ver)"; nbk="$(ls "$T/backups" | wc -l)"
+SIGARDA_VERSION=v2.0.0 SIGARDA_ASSET_BASE=file:///x bash "$T/install.sh" update >/dev/null 2>"$T/err"; rc=$?
+check "old Node.js: update exits non-zero" test "$rc" != 0
+check "old Node.js: Node.js install attempted and reported" sh -c "grep -q 'apt-get install' '$T/apt.log' && grep -q 'for Node.js' '$T/err'"
+check "old Node.js: binary unchanged and no backup made" sh -c "[ \"\$('$T/usr/local/bin/sigardapanel')\" = '$before' ] && [ \$(ls '$T/backups' | wc -l) = $nbk ]"
+printf '#!/bin/sh\necho v22.20.0\n' > "$T/bin/node"
 
 echo "--- invalid names"
 bash "$T/install.sh" rollback '../../etc' >/dev/null 2>&1; check "path traversal refused" test $? != 0

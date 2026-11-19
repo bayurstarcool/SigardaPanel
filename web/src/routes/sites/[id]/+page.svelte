@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { auth, hasRole, hasPermission } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
@@ -33,7 +33,7 @@
   import DatabaseTab from '$components/sites/DatabaseTab.svelte';
   import SettingsTab from '$components/sites/SettingsTab.svelte';
 
-  const siteId = $derived(Number($page.params.id));
+  const siteId = $derived(Number(page.params.id));
   let site = $state<any>(null);
   let loading = $state(true);
   let activeTab = $state<string>('info');

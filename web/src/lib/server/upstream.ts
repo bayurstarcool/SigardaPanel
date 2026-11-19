@@ -1,4 +1,4 @@
-import { env } from "$env/dynamic/private";
+import * as env from "$app/env/private";
 
 /** Base URL of the Go API (override with SIGARDAPANEL_API_URL). */
 export const API_URL = env.SIGARDAPANEL_API_URL || "http://127.0.0.1:7700";

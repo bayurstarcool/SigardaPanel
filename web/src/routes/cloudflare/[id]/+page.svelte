@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fmtDate } from '$lib/format';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -13,7 +13,7 @@
   import { onMount } from 'svelte';
   import { toasts } from '$lib/toast.svelte';
 
-  const zoneId = $derived($page.params.id);
+  const zoneId = $derived(page.params.id);
   const RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'NS', 'CAA'];
 
   let zone = $state<any>(null);

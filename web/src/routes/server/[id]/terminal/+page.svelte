@@ -1,11 +1,11 @@
 <script lang="ts">
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { onMount, onDestroy } from 'svelte';
   import { theme } from '$lib/theme.svelte';
   import { ChevronLeft, SquareTerminal, Eraser, X, ArrowUp, ArrowDown, Delete } from 'lucide-svelte';
-  const serverId = $page.params.id;
+  const serverId = page.params.id;
 
   // ANSI palettes per app theme; chrome colors come from the design tokens.
   const ansiDark = {

@@ -6,7 +6,7 @@
 // (never silently the first server). The choice is remembered in
 // localStorage and can come from the URL (?server=<id>) for shared links.
 // This is a view filter only: the API decides what the user may do.
-import { browser } from '$app/environment';
+import { browser } from '$app/env';
 import { apiFetch } from './api';
 import { auth } from './auth.svelte';
 

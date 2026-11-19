@@ -1,5 +1,5 @@
 import type { RequestHandler } from "./$types";
-import { env } from "$env/dynamic/private";
+import * as env from "$app/env/private";
 import { randomBytes, createCipheriv, createHash } from "crypto";
 import { createPmaRedemption } from "$lib/server/pma-redemptions";
 import { authHeaders, sameOrigin } from "$lib/server/upstream";

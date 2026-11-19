@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { auth } from '$lib/auth.svelte';
   import { apiFetch } from '$lib/api';
   import DashboardLayout from '$components/DashboardLayout.svelte';
@@ -18,7 +18,7 @@
   import ImportExport from './ImportExport.svelte';
   import { isPartial, toColumns, type Column, type Result, type TableInfo } from './types';
 
-  const dbId = $derived(Number($page.params.id));
+  const dbId = $derived(Number(page.params.id));
 
   let info = $state<{ name: string; type: string; account: string; site_id?: number; domain?: string; pma?: boolean; external?: boolean } | null>(null);
   let tables = $state<TableInfo[]>([]);
