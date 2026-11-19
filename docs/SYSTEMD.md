@@ -130,6 +130,10 @@ another account fails with "operation not permitted" (PostgreSQL through the
 `postgres` account, git deploys as the site owner, the site terminal,
 database restores). `Environment=HOME=/root` keeps what `User=root` set:
 the MySQL client reads root's `~/.my.cnf`.
+Units written before v1.15.1 still had the line: updating the panel
+(`install.sh update`, or the one-click update) and updating a remote agent
+replace it with `Environment=HOME=/root` and run `systemctl daemon-reload`
+before the agent restarts.
 
 ### `agent.env`
 

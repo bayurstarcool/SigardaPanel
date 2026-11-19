@@ -5,7 +5,7 @@
 set -uo pipefail
 SRC="${1:-$(dirname "$0")/../installer/install.sh}"; T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/usr/local/bin" "$T/opt" "$T/etc" "$T/data" "$T/backups" "$T/assets/web"
-sed -e "s|^INSTALL_BIN=.*|INSTALL_BIN=\"$T/usr/local/bin/sigardapanel\"|" \
+sed -e "s|^INSTALL_BIN=.*|INSTALL_BIN=\"$T/usr/local/bin/sigardapanel\"|" -e "s|^AGENT_UNIT=.*|AGENT_UNIT=\"$T/etc/sigardapanel-agent.service\"|" \
     -e "s|^WEB_DIR=.*|WEB_DIR=\"$T/opt/web\"|" -e "s|^CONF_DIR=.*|CONF_DIR=\"$T/etc\"|" \
     -e "s|^DATA_DIR=.*|DATA_DIR=\"$T/data\"|" -e "s|^UPDATE_BACKUPS=.*|UPDATE_BACKUPS=\"$T/backups\"|" "$SRC" > "$T/install.sh"
 export T
@@ -42,6 +42,16 @@ check() { local name="$1"; shift; if "$@"; then echo "PASS  $name"; else echo "F
 echo "SIGARDAPANEL_DB_PATH=$T/data/sigardapanel.db" > "$T/etc/panel.env"; echo x > "$T/etc/agent.env"
 mkbin 1.6.0 "" "$T/usr/local/bin/sigardapanel"; mkdir -p "$T/opt/web"; echo old > "$T/opt/web/index.js"; echo db-1.6.0 > "$T/data/sigardapanel.db"
 touch "$T/healthy"
+cat > "$T/etc/sigardapanel-agent.service" <<'UNIT'
+[Unit]
+Description=SigardaPanel Agent
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/sigardapanel/agent.env
+NoNewPrivileges=true
+UNIT
 
 echo "--- update 1.6.0 -> 1.8.0"
 case "$(uname -m)" in aarch64|arm64) A=arm64;; *) A=amd64;; esac
@@ -57,6 +67,8 @@ check "binary is 1.8.0" test "$(ver)" = 1.8.0
 check "web is 1.8.0" grep -q v18 "$T/opt/web/index.js"
 check "web files are world-readable, directories traversable" \
   sh -c "[ -z \"\$(find '$T/opt/web' \\( -type f ! -perm -o=r \\) -o \\( -type d ! -perm -o=rx \\))\" ]"
+check "agent unit: User=root replaced by HOME=/root" sh -c "! grep -qx 'User=root' '$T/etc/sigardapanel-agent.service' && grep -qx 'Environment=HOME=/root' '$T/etc/sigardapanel-agent.service' && grep -qx 'NoNewPrivileges=true' '$T/etc/sigardapanel-agent.service'"
+check "daemon-reload before the agent restart" sh -c "grep -n 'daemon-reload\\|restart sigardapanel-agent' '$T/systemctl.log' | head -1 | grep -q daemon-reload"
 upbk="$(ls "$T/backups" | head -1)"
 check "update backup records VERSION/TARGET/KIND" sh -c "grep -q 1.6.0 '$T/backups/$upbk/VERSION' && grep -q v1.8.0 '$T/backups/$upbk/TARGET' && grep -q '^update$' '$T/backups/$upbk/KIND'"
 echo db-1.8.0 > "$T/data/sigardapanel.db"; touch "$T/data/sigardapanel.db-wal"

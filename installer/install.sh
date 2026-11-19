@@ -39,6 +39,7 @@ REPO="${SIGARDA_REPO:-bayurstarcool/SigardaPanel}"
 PUBKEY="RWRuJBU1HM8C+XuaO7KjjPf1Bzwjara6ujA7FnHpqlbVIT6J/QGMC6BM"
 
 INSTALL_BIN="/usr/local/bin/sigardapanel"
+AGENT_UNIT="/etc/systemd/system/sigardapanel-agent.service"
 WEB_DIR="/opt/sigardapanel/web"
 CONF_DIR="/etc/sigardapanel"
 DATA_DIR="/var/lib/sigardapanel"
@@ -620,6 +621,23 @@ restore_backup() {
   return "$rc"
 }
 
+# migrate_agent_unit: units written before v1.15.1 set User=root. With
+# systemd 255, an explicit User=root plus NoNewPrivileges and a seccomp option
+# starts the agent without CAP_SETUID, so tasks that run as another account
+# (psql as postgres, deploys, the site terminal, restores) fail. Root is the
+# default user of a system service, so the line is replaced by HOME=/root.
+migrate_agent_unit() {
+  local unit="$AGENT_UNIT"
+  [ -f "$unit" ] && grep -qx 'User=root' "$unit" || return 0
+  if grep -qx 'Environment=HOME=/root' "$unit"; then
+    sed -i '/^User=root$/d' "$unit"
+  else
+    sed -i 's|^User=root$|Environment=HOME=/root|' "$unit"
+  fi
+  systemctl daemon-reload || true
+  log "Agent unit: removed the explicit User=root (systemd 255 + NoNewPrivileges drops CAP_SETUID)"
+}
+
 do_update() {
   require_root; check_os; detect_arch
   [ -x "$INSTALL_BIN" ] && [ -f "$CONF_DIR/panel.env" ] || die "SigardaPanel is not installed here. Run: bash install.sh"
@@ -655,6 +673,7 @@ do_update() {
       && rm -rf "$WEB_DIR" && mv "${WEB_DIR}.new" "$WEB_DIR"; }; then
     rollback
   fi
+  migrate_agent_unit
   systemctl restart sigardapanel-agent || true; sleep 2
   systemctl restart sigardapanel-api || true; sleep 2
   systemctl restart sigardapanel-web || true

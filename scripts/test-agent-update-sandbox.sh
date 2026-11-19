@@ -3,7 +3,7 @@
 set -uo pipefail
 SRC="${1:-$(dirname "$0")/../installer/agent-update.sh}"; T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; export T
 mkdir -p "$T/bin" "$T/usr/local/bin" "$T/etc" "$T/backups" "$T/assets"
-sed -e "s|^INSTALL_BIN=.*|INSTALL_BIN=\"$T/usr/local/bin/sigardapanel\"|" -e "s|^ENV_FILE=.*|ENV_FILE=\"$T/etc/agent.env\"|" \
+sed -e "s|^INSTALL_BIN=.*|INSTALL_BIN=\"$T/usr/local/bin/sigardapanel\"|" -e "s|^AGENT_UNIT=.*|AGENT_UNIT=\"$T/etc/sigardapanel-agent.service\"|" -e "s|^ENV_FILE=.*|ENV_FILE=\"$T/etc/agent.env\"|" \
     -e "s|^BACKUP_DIR=.*|BACKUP_DIR=\"$T/backups\"|" "$SRC" > "$T/agent-update.sh"
 cat > "$T/bin/systemctl" <<'S'
 #!/bin/sh
@@ -33,12 +33,25 @@ ver() { "$T/usr/local/bin/sigardapanel"; }
 fail=0; check() { local n="$1"; shift; if "$@"; then echo "PASS  $n"; else echo "FAIL  $n"; fail=1; fi; }
 echo "SIGARDAPANEL_AGENT_ADDR=:7711" > "$T/etc/agent.env"
 mkbin 1.6.0 "" "$T/usr/local/bin/sigardapanel"
+cat > "$T/etc/sigardapanel-agent.service" <<'UNIT'
+[Unit]
+Description=SigardaPanel Agent
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/sigardapanel/agent.env
+Environment=HOME=/root
+NoNewPrivileges=true
+UNIT
 
 release 1.7.0
 SIGARDA_ASSET_BASE=file:///x bash "$T/agent-update.sh" v1.7.0 >"$T/out" 2>&1; rc=$?
 check "update exits 0" test "$rc" = 0; [ "$rc" = 0 ] || cat "$T/out"
 check "agent binary is 1.7.0" test "$(ver)" = 1.7.0
 check "agent restarted" grep -q "restart sigardapanel-agent" "$T/systemctl.log"
+check "agent unit: User=root removed, one HOME line kept" sh -c "! grep -qx 'User=root' '$T/etc/sigardapanel-agent.service' && [ \$(grep -cx 'Environment=HOME=/root' '$T/etc/sigardapanel-agent.service') = 1 ]"
+check "daemon-reload ran" grep -q "daemon-reload" "$T/systemctl.log"
 check "health uses the port from agent.env" grep -q "http://127.0.0.1:7711/health" "$T/health-url"
 check "backup of 1.6.0 kept" sh -c "grep -q 1.6.0 $T/backups/*/VERSION"
 
