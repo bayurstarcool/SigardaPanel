@@ -130,7 +130,7 @@ func (h *licenseHandler) getLicense(c *echo.Context) error {
 			"features":     features.TierFeatures(eff.Tier),
 			"limits": map[string]any{
 				"servers": map[string]any{"current": len(servers), "max": eff.MaxServers},
-				"sites":   map[string]any{"current": 0, "max": limits.MaxSites},
+				"sites":   map[string]any{"current": siteCount(ctx, h.store), "max": limits.MaxSites},
 			},
 		},
 		RequestID: rid,

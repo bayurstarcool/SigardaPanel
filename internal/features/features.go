@@ -13,15 +13,15 @@ const (
 // Feature constants
 const (
 	// Free features
-	FeatSingleServer     = "single_server"
-	FeatStaticSites      = "static_sites"
-	FeatPHP              = "php"
-	FeatSSLCertificates  = "ssl_certificates"
-	FeatBasicMonitoring  = "basic_monitoring"
-	FeatFileManager      = "file_manager"
-	FeatTerminal         = "terminal"
-	FeatJobHistory       = "job_history"
-	FeatSSL              = "ssl"
+	FeatSingleServer    = "single_server"
+	FeatStaticSites     = "static_sites"
+	FeatPHP             = "php"
+	FeatSSLCertificates = "ssl_certificates"
+	FeatBasicMonitoring = "basic_monitoring"
+	FeatFileManager     = "file_manager"
+	FeatTerminal        = "terminal"
+	FeatJobHistory      = "job_history"
+	FeatSSL             = "ssl"
 
 	// Basic features
 	FeatNodeJS        = "nodejs"
@@ -77,48 +77,46 @@ var TierDescriptions = map[string]string{
 
 // FeatureTierMap maps each feature to its minimum required tier.
 var FeatureTierMap = map[string]string{
-	// Free
-	FeatSingleServer:      TierFree,
-	FeatStaticSites:       TierFree,
-	FeatPHP:               TierFree,
-	FeatSSLCertificates:   TierFree,
-	FeatBasicMonitoring:   TierFree,
-	FeatFileManager:       TierFree,
-	FeatTerminal:          TierFree,
-	FeatJobHistory:        TierFree,
-	FeatSSL:               TierFree,
-	FeatAPIAccess:         TierFree,
-	FeatBackups:           TierFree,
-	FeatBackupRestore:     TierFree,
-	FeatCloudBackups:      TierFree,
+	// Free: every feature on one server (the panel host).
+	FeatSingleServer:       TierFree,
+	FeatStaticSites:        TierFree,
+	FeatPHP:                TierFree,
+	FeatSSLCertificates:    TierFree,
+	FeatBasicMonitoring:    TierFree,
+	FeatFileManager:        TierFree,
+	FeatTerminal:           TierFree,
+	FeatJobHistory:         TierFree,
+	FeatSSL:                TierFree,
+	FeatAPIAccess:          TierFree,
+	FeatBackups:            TierFree,
+	FeatBackupRestore:      TierFree,
+	FeatCloudBackups:       TierFree,
+	FeatNodeJS:             TierFree,
+	FeatPython:             TierFree,
+	FeatDatabase:           TierFree,
+	FeatCronJobs:           TierFree,
+	FeatAdvancedRuntimes:   TierFree,
+	FeatDatabaseManagement: TierFree,
+	FeatUserManagement:     TierFree,
+	FeatAlerting:           TierFree,
+	FeatScheduledBackups:   TierFree,
+	FeatCustomDomains:      TierFree,
+	FeatDocker:             TierFree,
+	FeatGitDeploy:          TierFree,
+	FeatAdvancedVhost:      TierFree,
+	FeatSSLManager:         TierFree,
+	FeatMonitoring:         TierFree,
+	FeatServiceTokens:      TierFree,
+	FeatAuditLog:           TierFree,
+	FeatCloudflare:         TierFree,
 
-	// Basic
-	FeatNodeJS:   TierBasic,
-	FeatPython:   TierBasic,
-	FeatDatabase: TierBasic,
-	FeatCronJobs: TierBasic,
-
-	// Pro
-	FeatMultiServer:        TierPro,
-	FeatAdvancedRuntimes:   TierPro,
-	FeatDatabaseManagement: TierPro,
-	FeatUserManagement:     TierPro,
-	FeatAlerting:           TierPro,
-	FeatScheduledBackups:   TierPro,
-	FeatAgentManagement:    TierPro,
-	FeatCustomDomains:      TierPro,
-	FeatDocker:             TierPro,
-	FeatGitDeploy:          TierPro,
-	FeatAdvancedVhost:      TierPro,
-	FeatSSLManager:         TierPro,
-	FeatMonitoring:         TierPro,
-	FeatServiceTokens:      TierPro,
+	// Paid: more servers (remote agents), the server count is in TierLimits.
+	FeatMultiServer:     TierBasic,
+	FeatAgentManagement: TierBasic,
 
 	// Enterprise
 	FeatWhiteLabel:      TierEnterprise,
-	FeatAuditLog:        TierEnterprise,
 	FeatPrioritySupport: TierEnterprise,
-	FeatCloudflare:      TierMax,
 }
 
 // FeatureLimits defines resource limits per tier.
@@ -129,8 +127,8 @@ type FeatureLimits struct {
 
 // TierLimits maps tier to resource limits.
 var TierLimits = map[string]FeatureLimits{
-	TierFree:       {MaxServers: 1, MaxSites: 5},
-	TierBasic:      {MaxServers: 3, MaxSites: 20},
+	TierFree:       {MaxServers: 1, MaxSites: -1},
+	TierBasic:      {MaxServers: 3, MaxSites: -1},
 	TierPro:        {MaxServers: 10, MaxSites: -1},
 	TierEnterprise: {MaxServers: 50, MaxSites: -1},
 	TierMax:        {MaxServers: -1, MaxSites: -1}, // -1 = unlimited

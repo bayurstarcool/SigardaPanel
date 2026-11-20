@@ -301,6 +301,7 @@ func newRouter(opts *RouterOptions) *echo.Echo {
 	tasks.POST("/dbuser/create", r.dbUserCreateTask)
 	tasks.POST("/dbuser/delete", r.dbUserDeleteTask)
 	tasks.POST("/db/account", r.dbAccountTask)
+	tasks.POST("/precheck", r.precheckTask)
 	tasks.POST("/app/start", r.appStartTask)
 	tasks.POST("/app/stop", r.appStopTask)
 	tasks.POST("/app/restart", r.appRestartTask)
@@ -2256,7 +2257,11 @@ func (r *Router) databaseCreateTask(c *echo.Context) error {
 			if strings.Contains(output, "database exists") || strings.Contains(output, "1007") {
 				return echo.NewHTTPError(http.StatusConflict, "database already exists on the server")
 			}
-			return echo.NewHTTPError(http.StatusFailedDependency, "mysql create database failed: "+strings.TrimSpace(output))
+			detail := strings.TrimSpace(output)
+			if detail == "" {
+				detail = err.Error()
+			}
+			return echo.NewHTTPError(http.StatusFailedDependency, "mysql create database failed: "+detail)
 		}
 	case "postgres":
 		sql := fmt.Sprintf("CREATE DATABASE %s;\n", payload.Name)

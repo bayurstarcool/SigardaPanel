@@ -150,6 +150,14 @@ func (h *dbHandler) createDatabase(c *echo.Context) error {
 		}
 	}
 
+	// The agent creates it: say now when the engine is not installed there,
+	// instead of a record whose job fails.
+	if (!mysqlOK && body.Type == "mysql") || body.Type == "postgres" {
+		if err := agentPrecheck(c.Request().Context(), h.store, site.ServerID, body.Type, ""); err != nil {
+			return err
+		}
+	}
+
 	// Record in SigardaPanel metadata
 	if err := h.store.Databases.Create(c.Request().Context(), database); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal error")

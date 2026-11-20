@@ -91,7 +91,7 @@ func (r *Router) checkPHPFPM(version string) error {
 	if fileExists(clp) {
 		return nil
 	}
-	return fmt.Errorf("PHP-FPM is not installed on this server (no %s for %s, no %s). %s "+
+	return fmt.Errorf("PHP is not installed on this server (no PHP-FPM socket in %s for %s, no %s). %s "+
 		"Install PHP on the server (Servers -> Stack) or choose an installed PHP version, then create the site again",
-		r.phpSocket("<version>"), strings.Join(nginx.PHPFPMDefaultVersions, "/"), clp, have)
+		r.phpRunDir, strings.Join(nginx.PHPFPMDefaultVersions, "/"), clp, have)
 }

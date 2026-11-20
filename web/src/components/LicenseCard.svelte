@@ -76,12 +76,15 @@
     {:else if lic}
       <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-[13px]">
         <div><dt class="text-subtle">Tier</dt><dd class="font-medium text-fg">{lic.tier_name || lic.tier}</dd></div>
-        <div><dt class="text-subtle">Servers</dt><dd class="font-medium text-fg tabular-nums">{lic.limits?.servers?.current ?? 0} / {lic.limits?.servers?.max ?? '—'}</dd></div>
+        <div><dt class="text-subtle">Servers</dt><dd class="font-medium text-fg tabular-nums">{lic.limits?.servers?.current ?? 0} / {(lic.limits?.servers?.max ?? 0) < 0 ? 'Unlimited' : (lic.limits?.servers?.max ?? '—')}</dd></div>
         {#if lic.licensee}<div><dt class="text-subtle">Licensed to</dt><dd class="truncate font-medium text-fg">{lic.licensee}</dd></div>{/if}
         {#if lic.license_id}<div><dt class="text-subtle">License ID</dt><dd class="truncate font-mono text-xs text-fg">{lic.license_id}</dd></div>{/if}
         {#if lic.status !== 'none'}<div><dt class="text-subtle">Expires</dt><dd class="text-fg">{lic.expires_at ? fmtDateTime(lic.expires_at) : 'Never'}</dd></div>{/if}
         {#if lic.key}<div><dt class="text-subtle">Key</dt><dd class="truncate font-mono text-xs text-muted">{lic.key}</dd></div>{/if}
       </dl>
+      <p class="text-[12px] text-subtle">
+        Every feature is included on every plan. {lic.tier === 'free' ? 'Free covers one server (this one); upgrade to manage more servers from this panel.' : 'Your plan sets how many servers this panel manages.'}
+      </p>
       <div class="space-y-2 rounded-lg border border-line px-3 py-2.5 text-[13px]">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="min-w-0">

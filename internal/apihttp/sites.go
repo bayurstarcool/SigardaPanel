@@ -384,6 +384,14 @@ func (h *siteHandler) create(c *echo.Context) error {
 	}
 
 	// ── App process management ──
+	// A PHP site the panel manages needs PHP-FPM on its server: say so now
+	// rather than creating a site whose job fails.
+	if body.Runtime == "php" && body.ManagedBy == "sigardapanel" {
+		if err := agentPrecheck(c.Request().Context(), h.store, body.ServerID, "php", body.PHPVersion); err != nil {
+			return err
+		}
+	}
+
 	appPort := int64(0)
 	appCmd := ""
 	// The port is picked and stored under one lock, unique in the panel and
