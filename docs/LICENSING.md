@@ -6,6 +6,25 @@ verifies them offline, so no license server is contacted and a key cannot be
 made up or edited. Selling licenses (plans, orders, payments) lives in the
 master panel, not in this repository.
 
+## Plans
+
+Every feature works on every plan. A plan sets how many **servers** the panel
+manages (the panel host counts as one); sites are not limited.
+
+| Tier | Servers (default) | Also |
+|---|---|---|
+| `free` | 1 (the panel host) | |
+| `basic` | 3 | |
+| `pro` | 10 | |
+| `enterprise` | 50 | white label, priority support |
+| `max` | unlimited | white label, priority support |
+
+A key's `max_servers` overrides the tier default. The limit is checked when a
+server is added (Servers → Add server, or the agent install command
+registering a new server); a re-install of an agent that is already
+registered is not counted, and servers that exist are never disabled. When
+the limit is reached the panel says so and links to the upgrade page.
+
 ## Key format
 
 ```

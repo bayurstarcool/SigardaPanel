@@ -161,6 +161,10 @@ func (h *serverHandler) create(c *echo.Context) error {
 		userID = sess.UserID
 	}
 
+	if err := serverLimitError(c.Request().Context(), h.store); err != nil {
+		return err
+	}
+
 	var body struct {
 		Name        string `json:"name"`
 		Hostname    string `json:"hostname"`

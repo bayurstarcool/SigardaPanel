@@ -1,6 +1,7 @@
 package apihttp
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	_ "embed"
@@ -183,6 +184,13 @@ func (h *agentHandler) registerAgent(c *echo.Context) error {
 		server.IPAddress = sql.NullString{String: req.IPAddress, Valid: true}
 	}
 
+	// A re-install at an address already registered updates that server;
+	// only a new server counts against the license.
+	if !h.serverRegisteredAt(c.Request().Context(), agentHost) {
+		if err := serverLimitError(c.Request().Context(), h.store); err != nil {
+			return err
+		}
+	}
 	if err := h.store.ConsumeRegistrationTokenAndCreateServer(c.Request().Context(), rt.ID, server); err != nil {
 		if errors.Is(err, store.ErrServerAlreadyRegistered) {
 			return echo.NewHTTPError(http.StatusConflict, "a server is already registered at this address; re-run the installer on that server (it proves the current agent token) or remove the server in the panel first")
@@ -630,4 +638,21 @@ func generateRandomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// serverRegisteredAt: a server's agent already answers at host (http or https).
+func (h *agentHandler) serverRegisteredAt(ctx context.Context, host string) bool {
+	servers, err := h.store.Servers.List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, sv := range servers {
+		if !sv.AgentURL.Valid {
+			continue
+		}
+		if u, err := url.Parse(sv.AgentURL.String); err == nil && u.Hostname() == host {
+			return true
+		}
+	}
+	return false
 }
